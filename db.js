@@ -426,4 +426,40 @@ const sql = {
   `),
 };
 
+// Auto-seed companies from local JSON files if the database is completely empty.
+// This is extremely helpful on a fresh Railway Persistent Volume deployment.
+try {
+  const count = db.prepare('SELECT COUNT(*) AS n FROM companies').get().n;
+  if (count === 0) {
+    const fs = require('fs');
+    const path = require('path');
+    const dir = path.join(__dirname, 'companies');
+    if (fs.existsSync(dir)) {
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+      console.log(`[Auto-Seed] Empty database detected. Seeding from ${files.length} company files...`);
+      for (const f of files) {
+        const cfg = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+        const kbPath = path.join(dir, `${cfg.id}.kb.md`);
+        const kb = fs.existsSync(kbPath) ? fs.readFileSync(kbPath, 'utf8') : null;
+        db.prepare(`
+          INSERT INTO companies (id, name, language, voice_id, phone_number, assistant_id, system_prompt, kb_text)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          cfg.id,
+          cfg.name,
+          cfg.language || 'ar-SA',
+          cfg.voice_id || process.env.ELEVENLABS_VOICE_ID || null,
+          cfg.phone_number || null,
+          null,
+          cfg.systemPrompt,
+          kb
+        );
+        console.log(`[Auto-Seed] Created company: ${cfg.id} (${cfg.name})`);
+      }
+    }
+  }
+} catch (e) {
+  console.error('[Auto-Seed] Failed to auto-seed database:', e.message);
+}
+
 module.exports = { db, sql };

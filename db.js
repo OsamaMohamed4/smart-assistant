@@ -1,7 +1,12 @@
 const Database = require('better-sqlite3');
+const fs = require('fs');
 const path = require('path');
 
+// In production we mount the file from a persistent volume (Railway etc.) at a
+// path like /data/data.db. Create the parent dir on boot so first-deploy on an
+// empty volume doesn't crash with ENOENT.
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data.db');
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');

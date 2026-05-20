@@ -47,9 +47,17 @@ export function CustomerPage({ companyId }) {
   if (!company || !authChecked) return <Loading />;
 
   // /c/<id> is strictly the client experience.
-  // Any other session (anonymous, owner, superadmin, or a client of a different
-  // company) sees only the client login form — no leakage about the active session.
   const isAllowed = user && user.role === 'client' && user.companyId === companyId;
+
+  // Block admins from overwriting their session by accidentally signing in as a
+  // client from the same browser tab. The cookie is shared, so a client login
+  // here invalidates their admin session everywhere. Show a preview-mode notice
+  // instead of the login form — they can open an incognito window to genuinely
+  // test the client experience without losing admin access.
+  if (!isAllowed && user && user.role !== 'client') {
+    return <AdminPreviewNotice company={company} companyId={companyId} onLogout={onLogout} />;
+  }
+
   if (!isAllowed) {
     return <ClientLogin company={company} companyId={companyId} onAuthed={setUser} />;
   }
@@ -220,6 +228,65 @@ function ClientLogin({ company, companyId, onAuthed }) {
 
           <div className="mt-5 pt-5 border-t border-ink-100 text-center text-[12px] text-ink-500">
             ما عندكش حساب؟ تواصل مع <strong className="text-ink-700">{company.name}</strong> ليُنشئ لك حساب.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminPreviewNotice({ company, companyId, onLogout }) {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-ink-50 via-white to-brand-50/40 flex items-center justify-center p-6" dir="rtl">
+      <div className="w-full max-w-md">
+        <div className="text-center mb-8">
+          <div className="inline-block relative mb-4">
+            <Avatar name={company.name} size={72} />
+            <span className="absolute -bottom-1 -left-1 w-5 h-5 rounded-full bg-amber-500 ring-4 ring-white" />
+          </div>
+          <h1 className="text-[22px] font-bold text-ink-900 tracking-tight">
+            صفحة عملاء {company.name}
+          </h1>
+        </div>
+
+        <div className="bg-white rounded-3xl shadow-pop border border-ink-100 p-7">
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-5">
+            <div className="flex items-start gap-3">
+              <div className="shrink-0 w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center">
+                <Shield className="w-4 h-4" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-[14px] font-semibold text-amber-900 mb-1">إنت دلوقتي مسجّل دخول كمدير</h3>
+                <p className="text-[12.5px] text-amber-800 leading-relaxed">
+                  لو سجّلت دخول هنا بحساب عميل، جلسة الإدارة بتاعتك هتنتهي وهتترجع للوحة التحكم بدور عميل.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2.5 text-[13px] text-ink-700 mb-5">
+            <p className="font-semibold text-ink-900">عشان تجرّب تجربة العميل بدون ما تخرج:</p>
+            <ol className="list-decimal list-inside space-y-1.5 text-ink-600 pr-1">
+              <li>افتح نافذة <strong className="text-ink-900">incognito / private</strong> في المتصفح</li>
+              <li>الصق نفس الرابط: <code className="bg-ink-100 px-1.5 py-0.5 rounded text-[11.5px] font-mono" dir="ltr">/c/{companyId}</code></li>
+              <li>سجّل دخول هناك بحساب العميل بدون ما تأثر على جلستك دي</li>
+            </ol>
+          </div>
+
+          <div className="flex flex-col gap-2 pt-4 border-t border-ink-100">
+            <a
+              href="/admin/"
+              className="w-full h-11 rounded-xl bg-ink-900 hover:bg-ink-800 text-white text-[13.5px] font-semibold flex items-center justify-center transition-colors"
+            >
+              الرجوع للوحة التحكم
+            </a>
+            <button
+              onClick={onLogout}
+              className="w-full h-11 rounded-xl border border-ink-200 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 text-ink-700 text-[13.5px] font-medium flex items-center justify-center gap-2 transition-colors"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              تسجيل خروج وتسجيل دخول بحساب عميل
+            </button>
           </div>
         </div>
       </div>

@@ -69,7 +69,11 @@ export function VoicePanel({ company }) {
     try {
       const res = await fetch('/chat-voice', {
         method : 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: {
+          'Content-Type'    : 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
         body   : JSON.stringify({ companyId: company.id, message: text, sessionId,
           history: conversation.map((m) => ({ role: m.role, content: m.content })) }),
       });

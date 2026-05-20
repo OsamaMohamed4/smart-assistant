@@ -7,7 +7,7 @@
     "node": ">=20.0.0 <23.0.0"
   },
   "scripts": {
-    "start": "node --use-system-ca server.js",
+    "start": "node server.js",
     "dev": "node --use-system-ca --watch server.js",
     "dev:ui": "vite",
     "build:ui": "vite build",

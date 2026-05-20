@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Design tokens (CSS vars for runtime theming) ─────────── */
+:root {
+  --bg-app       : #f7f7f9;
+  --bg-surface   : #ffffff;
+  --bg-elevated  : #ffffff;
+  --bg-sidebar   : #0e0f12;
+  --bg-sidebar-2 : #16171c;
+  --border       : #e8e9ed;
+  --border-strong: #d8d9dd;
+  --text-1       : #0e0f12;
+  --text-2       : #43444b;
+  --text-3       : #6c6e78;
+  --text-4       : #8b8d96;
+  --ring         : rgba(91,91,214,0.18);
+}
+
+/* ─── Base ────────────────────────────────────────────────── */
+html, body {
+  background: var(--bg-app);
+  color: var(--text-1);
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: 'Cairo', 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ─── Custom scrollbar (subtle) ───────────────────────────── */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d8d9dd; border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #b3b4bb; background-clip: padding-box; border: 2px solid transparent; }
+
+.scrollbar-dark::-webkit-scrollbar-thumb { background: #2d2e34; background-clip: padding-box; }
+
+/* ─── Focus ring (unified across components) ──────────────── */
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px var(--ring);
+}
+
+/* ─── Glass surface for sticky areas ──────────────────────── */
+.glass {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: saturate(180%) blur(14px);
+  -webkit-backdrop-filter: saturate(180%) blur(14px);
+}
+
+/* ─── Loading shimmer ─────────────────────────────────────── */
+.shimmer {
+  background: linear-gradient(90deg, #eeeef0 0%, #f7f7f9 50%, #eeeef0 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+/* ─── Custom selection ────────────────────────────────────── */
+::selection {
+  background: rgba(91,91,214,0.20);
+  color: #1c1d21;
+}
+
+/* ─── Dialog (radix-free, native <dialog>) ────────────────── */
+dialog { padding: 0; border: none; background: transparent; }
+dialog::backdrop { background: rgba(14,15,18,0.45); backdrop-filter: blur(2px); }
+
+/* ─── Number font feature for tabular numerals ────────────── */
+.tabular-nums { font-variant-numeric: tabular-nums; }
+
+/* ─── Decorative dot grid bg (sidebar header) ─────────────── */
+.dot-grid {
+  background-image: radial-gradient(rgba(255,255,255,0.08) 1px, transparent 1px);
+  background-size: 14px 14px;
+}

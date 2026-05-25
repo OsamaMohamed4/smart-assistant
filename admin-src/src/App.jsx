@@ -66,33 +66,31 @@ export default function App() {
     );
   }
 
-  // Clients shouldn't see the admin dashboard — redirect to their company page.
-  if (user.role === 'client') {
-    if (user.companyId) {
-      window.location.replace(`/c/${user.companyId}`);
-    }
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-ink-50" dir="rtl">
-        <div className="text-ink-400 text-sm">جارٍ التحويل…</div>
-      </div>
-    );
-  }
-
   const onLogout = async () => {
     try { await api.logout(); } catch {}
     setUser(null);
   };
 
+  // Tabs visible to the current role. Superadmin sees everything; a workspace
+  // client (the business owner) only manages their own company so the
+  // Companies and Clients tabs are hidden — they don't pick which company,
+  // they ARE the company.
+  const isSuper = user.role === 'superadmin';
+  const allowedTabs = isSuper
+    ? new Set(['dashboard', 'companies', 'clients', 'sessions', 'playground'])
+    : new Set(['dashboard', 'sessions', 'playground']);
+  const activeTab = allowedTabs.has(tab) ? tab : 'dashboard';
+
   return (
     <ToastProvider>
       <div className="flex min-h-screen flex-row-reverse">
-        <Sidebar active={tab} onChange={setTab} user={user} onLogout={onLogout} />
+        <Sidebar active={activeTab} onChange={setTab} user={user} onLogout={onLogout} />
         <main className="flex-1 min-w-0">
-          {tab === 'dashboard'  && <DashboardPage />}
-          {tab === 'companies'  && <CompaniesPage />}
-          {tab === 'clients'    && user.role === 'superadmin' && <ClientsPage />}
-          {tab === 'sessions'   && <SessionsPage />}
-          {tab === 'playground' && <PlaygroundPage />}
+          {activeTab === 'dashboard'  && <DashboardPage user={user} />}
+          {activeTab === 'companies'  && isSuper && <CompaniesPage />}
+          {activeTab === 'clients'    && isSuper && <ClientsPage />}
+          {activeTab === 'sessions'   && <SessionsPage user={user} />}
+          {activeTab === 'playground' && <PlaygroundPage user={user} />}
         </main>
       </div>
     </ToastProvider>

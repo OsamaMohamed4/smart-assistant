@@ -15,7 +15,7 @@ const { summarize, chatToTranscript } = require('./summarize');
 const { ingestDocument, retrieve } = require('./lib/rag');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
-const { requireAuth, requireCompanyAccess, canChatWithCompany, startSessionCleanup } = require('./lib/auth');
+const { requireAuth, requireCompanyAccess, requireCompanyAdmin, canChatWithCompany, startSessionCleanup } = require('./lib/auth');
 const { logger } = require('./lib/logger');
 
 // Allow only the document types our RAG pipeline can actually parse.
@@ -466,8 +466,12 @@ app.post('/webhook/vapi', async (req, res) => {
 });
 
 // ─── Admin API ───────────────────────────────────────────────────
-app.get('/api/companies', (_req, res) => {
-  const list = listCompaniesFull();
+app.get('/api/companies', (req, res) => {
+  // Clients see only their own workspace; superadmins see everything.
+  const all = listCompaniesFull();
+  const list = req.user.role === 'superadmin'
+    ? all
+    : all.filter((c) => c.id === req.user.companyId);
   // Per-company stats in a single query.
   const statsRows = db.prepare(`
     SELECT
@@ -544,7 +548,7 @@ app.patch('/api/companies/:id', requireCompanyAccess, (req, res) => {
   res.json(loadCompany(existing.id));
 });
 
-app.delete('/api/companies/:id', requireCompanyAccess, (req, res) => {
+app.delete('/api/companies/:id', requireCompanyAdmin, (req, res) => {
   const r = sql.deleteCompany.run(req.params.id);
   invalidateCache(req.params.id);
   audit(req, 'company.delete', `companies/${req.params.id}`);
@@ -665,7 +669,7 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
 // new assistant transfers ownership. We commit the DB change ONLY after Vapi
 // confirms success, and we only clear the previous owner of THIS specific
 // phone number (not every company in the table).
-app.post('/api/companies/:id/bind-phone', requireCompanyAccess, async (req, res) => {
+app.post('/api/companies/:id/bind-phone', requireCompanyAdmin, async (req, res) => {
   const c = loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
   if (!c.assistantId) return res.status(400).json({ error: 'sync to Vapi first' });
@@ -769,7 +773,16 @@ app.get('/api/dashboard', (req, res) => {
   if (companyIdRaw && !COMPANY_ID_RE.test(companyIdRaw)) {
     return res.status(400).json({ error: 'invalid companyId' });
   }
-  const company_id = companyIdRaw;
+  // Workspace clients are pinned to their own company — they can't peek at
+  // platform-wide stats or another company's numbers via the query string.
+  let company_id = companyIdRaw;
+  if (req.user.role !== 'superadmin') {
+    if (!req.user.companyId) return res.status(403).json({ error: 'no company associated' });
+    if (company_id && company_id !== req.user.companyId) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+    company_id = req.user.companyId;
+  }
 
   const cur  = periodRange(period, fromStr, toStr);
   const prev = shiftedPrev(cur);

@@ -18,21 +18,25 @@ const PERIODS = [
   { id: 'quarter', label: 'هذا الربع' },
 ];
 
-export function DashboardPage() {
+export function DashboardPage({ user }) {
   const { push } = useToast();
+  const isSuper = user?.role === 'superadmin';
   const [period, setPeriod]       = useState('today');
   const [companies, setCompanies] = useState([]);
-  const [companyId, setCompanyId] = useState('all');
+  // A workspace client is locked to their own company. The dropdown only
+  // shows up when there's actually a choice to make (superadmin only).
+  const [companyId, setCompanyId] = useState(isSuper ? 'all' : (user?.companyId || 'all'));
   const [data, setData]           = useState(null);
   const [loading, setLoading]     = useState(true);
 
-  // Load companies once for the filter dropdown. We tolerate failure here —
-  // the dashboard still works without the dropdown, just defaults to all.
+  // Superadmin gets the company filter dropdown. Clients never see it because
+  // there's nothing for them to pick.
   useEffect(() => {
+    if (!isSuper) return;
     api.listCompanies()
       .then((cs) => setCompanies(cs || []))
       .catch(() => {});
-  }, []);
+  }, [isSuper]);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,7 +67,7 @@ export function DashboardPage() {
         subtitle="نظرة شاملة على نشاط المساعد الذكي"
         right={(
           <div className="flex items-center gap-2">
-            {companies.length > 1 && (
+            {isSuper && companies.length > 1 && (
               <select
                 value={companyId}
                 onChange={(e) => setCompanyId(e.target.value)}

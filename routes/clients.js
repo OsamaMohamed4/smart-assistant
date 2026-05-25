@@ -1,11 +1,13 @@
 const express = require('express');
 const crypto = require('crypto');
 const { sql } = require('../db');
-const { requireAuth, requireCompanyAccess, hashPassword } = require('../lib/auth');
+const { requireAuth, requireCompanyAdmin, hashPassword } = require('../lib/auth');
 
 const router = express.Router({ mergeParams: true });
 
-router.use(requireAuth, requireCompanyAccess);
+// Adding / removing workspace clients stays superadmin-only — a client
+// can't grant access to themselves or others into their own company.
+router.use(requireAuth, requireCompanyAdmin);
 
 // Generate a friendly 12-char password: 3 groups of 4, alphanumeric.
 function generatePassword() {

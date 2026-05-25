@@ -429,6 +429,62 @@ const sql = {
     SELECT id, chunk_index, text, token_count
     FROM kb_chunks WHERE document_id = ? ORDER BY chunk_index ASC
   `),
+
+  // ─── Dashboard analytics ─────────────────────────────────
+  // All aggregations accept @from/@to (ISO timestamps) and optional @company_id
+  // (pass NULL for platform-wide stats). Keeping them as raw COUNT/AVG so the
+  // dashboard doesn't have to scan whole tables in JS.
+  countCallsInRange    : db.prepare(`
+    SELECT COUNT(*) AS n FROM calls
+     WHERE created_at BETWEEN @from AND @to
+       AND (@company_id IS NULL OR company_id = @company_id)
+  `),
+  avgCallDurationInRange: db.prepare(`
+    SELECT AVG(duration_sec) AS avg_dur FROM calls
+     WHERE created_at BETWEEN @from AND @to
+       AND duration_sec IS NOT NULL AND duration_sec > 0
+       AND (@company_id IS NULL OR company_id = @company_id)
+  `),
+  // "Successful" call = lasted ≥10s and didn't end with an error reason.
+  // Crude proxy until we add an explicit outcome column.
+  callSuccessRateInRange: db.prepare(`
+    SELECT
+      SUM(CASE
+            WHEN duration_sec >= 10
+             AND COALESCE(ended_reason,'') NOT IN ('error','failed','no-answer','silence-timed-out','customer-did-not-give-microphone-permission')
+          THEN 1 ELSE 0 END) AS ok,
+      COUNT(*) AS total
+    FROM calls
+    WHERE created_at BETWEEN @from AND @to
+      AND (@company_id IS NULL OR company_id = @company_id)
+  `),
+  countChatSessionsInRange: db.prepare(`
+    SELECT COUNT(DISTINCT session_id) AS n FROM chats
+     WHERE created_at BETWEEN @from AND @to
+       AND (@company_id IS NULL OR company_id = @company_id)
+  `),
+  countActiveCompanies: db.prepare(`
+    SELECT COUNT(DISTINCT id) AS n FROM companies
+     WHERE assistant_id IS NOT NULL
+       AND (@company_id IS NULL OR id = @company_id)
+  `),
+  // Hourly bucket — used for the inbound/outbound chart. SQLite uses substr
+  // because strftime against TEXT created_at with trailing fractional seconds
+  // sometimes returns NULL on Windows builds.
+  callsPerHourInRange : db.prepare(`
+    SELECT substr(created_at, 12, 2) AS hour, COUNT(*) AS n
+      FROM calls
+     WHERE created_at BETWEEN @from AND @to
+       AND (@company_id IS NULL OR company_id = @company_id)
+     GROUP BY hour
+  `),
+  chatsPerHourInRange : db.prepare(`
+    SELECT substr(created_at, 12, 2) AS hour, COUNT(*) AS n
+      FROM chats
+     WHERE created_at BETWEEN @from AND @to
+       AND (@company_id IS NULL OR company_id = @company_id)
+     GROUP BY hour
+  `),
 };
 
 // Auto-seed companies from local JSON files if the database is completely empty.

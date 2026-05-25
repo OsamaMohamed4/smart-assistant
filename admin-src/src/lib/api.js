@@ -41,6 +41,15 @@ export const api = {
   createClient      : (companyId, body) => request(`/api/companies/${companyId}/clients`, { method: 'POST', body: JSON.stringify(body) }),
   deleteClient      : (companyId, userId) => request(`/api/companies/${companyId}/clients/${userId}`, { method: 'DELETE' }),
 
+  // dashboard
+  dashboard         : ({ period = 'today', companyId, from, to } = {}) => {
+    const params = new URLSearchParams({ period });
+    if (companyId) params.set('companyId', companyId);
+    if (from)      params.set('from', from);
+    if (to)        params.set('to', to);
+    return request(`/api/dashboard?${params.toString()}`);
+  },
+
   // companies
   listCompanies     : () => request('/api/companies'),
   getCompany        : (id) => request(`/api/companies/${id}`),

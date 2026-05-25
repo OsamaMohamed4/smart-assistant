@@ -1,11 +1,25 @@
-import { Building2, MessageSquare, Sparkles, ChevronsLeft, LogOut, Users } from 'lucide-react';
+import { Building2, MessageSquare, Sparkles, ChevronsLeft, LogOut, Users, LayoutDashboard } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
-const NAV = [
-  { id: 'companies',  label: 'الشركات',  icon: Building2,     hint: 'إدارة' },
-  { id: 'clients',    label: 'العملاء',  icon: Users,         hint: 'حسابات الزبائن' },
-  { id: 'sessions',   label: 'السجلات',  icon: MessageSquare, hint: 'مكالمات + شات' },
-  { id: 'playground', label: 'التجربة',  icon: Sparkles,      hint: 'دردشة حية' },
+// Two-tier nav: "Build" is where you author the assistant; "Monitor" is where
+// you watch it run. Mirrors the structure of larger voice-agent dashboards
+// so the demo reads as a proper SaaS product, not a single-page admin tool.
+const NAV_GROUPS = [
+  {
+    title: 'BUILD',
+    items: [
+      { id: 'playground', label: 'التجربة',  icon: Sparkles,  hint: 'دردشة حية' },
+      { id: 'companies',  label: 'الشركات',  icon: Building2, hint: 'إدارة' },
+      { id: 'clients',    label: 'العملاء',  icon: Users,     hint: 'حسابات الزبائن' },
+    ],
+  },
+  {
+    title: 'MONITOR',
+    items: [
+      { id: 'dashboard',  label: 'لوحة التحكم', icon: LayoutDashboard, hint: 'تحليلات' },
+      { id: 'sessions',   label: 'السجلات',     icon: MessageSquare,   hint: 'مكالمات + شات' },
+    ],
+  },
 ];
 
 function initials(label) {
@@ -37,34 +51,40 @@ export function Sidebar({ active, onChange, user, onLogout }) {
       </div>
 
       {/* ─── Nav ─── */}
-      <nav className="flex-1 px-3 py-4 space-y-0.5">
-        <div className="px-2 pb-2 text-[10px] uppercase tracking-wider text-ink-500 font-semibold">القوائم</div>
-        {NAV.map((item) => {
-          const Icon = item.icon;
-          const isActive = active === item.id;
-          return (
-            <button
-              key={item.id}
-              onClick={() => onChange(item.id)}
-              className={cn(
-                'group w-full flex items-center gap-3 px-3 h-10 rounded-xl text-[13.5px] transition-all',
-                isActive
-                  ? 'bg-white/[0.08] text-white shadow-inner-1'
-                  : 'text-ink-400 hover:bg-white/[0.04] hover:text-ink-200',
-              )}
-            >
-              <Icon className={cn(
-                'w-4 h-4 shrink-0',
-                isActive ? 'text-brand-300' : 'text-ink-500 group-hover:text-ink-300',
-              )} strokeWidth={1.8} />
-              <span className="flex-1 text-right font-medium">{item.label}</span>
-              <span className={cn(
-                'text-[10.5px] px-1.5 py-0.5 rounded transition-colors',
-                isActive ? 'bg-brand-500/15 text-brand-300' : 'text-ink-600 group-hover:text-ink-500'
-              )}>{item.hint}</span>
-            </button>
-          );
-        })}
+      <nav className="flex-1 px-3 py-4 space-y-4">
+        {NAV_GROUPS.map((group) => (
+          <div key={group.title} className="space-y-0.5">
+            <div className="px-2 pb-2 text-[10px] uppercase tracking-wider text-ink-500 font-semibold">
+              {group.title}
+            </div>
+            {group.items.map((item) => {
+              const Icon = item.icon;
+              const isActive = active === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => onChange(item.id)}
+                  className={cn(
+                    'group w-full flex items-center gap-3 px-3 h-10 rounded-xl text-[13.5px] transition-all',
+                    isActive
+                      ? 'bg-white/[0.08] text-white shadow-inner-1'
+                      : 'text-ink-400 hover:bg-white/[0.04] hover:text-ink-200',
+                  )}
+                >
+                  <Icon className={cn(
+                    'w-4 h-4 shrink-0',
+                    isActive ? 'text-brand-300' : 'text-ink-500 group-hover:text-ink-300',
+                  )} strokeWidth={1.8} />
+                  <span className="flex-1 text-right font-medium">{item.label}</span>
+                  <span className={cn(
+                    'text-[10.5px] px-1.5 py-0.5 rounded transition-colors',
+                    isActive ? 'bg-brand-500/15 text-brand-300' : 'text-ink-600 group-hover:text-ink-500'
+                  )}>{item.hint}</span>
+                </button>
+              );
+            })}
+          </div>
+        ))}
       </nav>
 
       {/* ─── Footer ─── */}

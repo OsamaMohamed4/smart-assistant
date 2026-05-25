@@ -735,6 +735,95 @@ app.delete('/api/companies/:id/documents/:docId', requireCompanyAccess, (req, re
   res.json({ deleted: 1 });
 });
 
+// ─── Dashboard analytics ─────────────────────────────────────────
+// Returns aggregated metrics + a 24-hour breakdown for the requested period.
+// `period`: today | week | month | quarter | custom. `from`/`to` only used
+// for custom. `companyId` optional; without it the stats span all companies.
+// The previous period of equal length is returned alongside so the UI can
+// show "vs yesterday / vs last week" deltas without a second roundtrip.
+function periodRange(period, fromStr, toStr) {
+  const now = new Date();
+  if (period === 'custom' && fromStr && toStr) {
+    return { from: new Date(fromStr), to: new Date(toStr) };
+  }
+  const to = new Date(now);
+  to.setHours(23, 59, 59, 999);
+  const from = new Date(now);
+  from.setHours(0, 0, 0, 0);
+  if (period === 'week')    from.setDate(from.getDate() - 6);
+  if (period === 'month')   from.setDate(from.getDate() - 29);
+  if (period === 'quarter') from.setDate(from.getDate() - 89);
+  return { from, to };
+}
+function shiftedPrev({ from, to }) {
+  const span = to.getTime() - from.getTime();
+  return { from: new Date(from.getTime() - span - 1), to: new Date(from.getTime() - 1) };
+}
+function isoUtc(d) { return d.toISOString().replace('T', ' ').slice(0, 19); }
+
+app.get('/api/dashboard', (req, res) => {
+  const period   = String(req.query.period || 'today');
+  const fromStr  = req.query.from || null;
+  const toStr    = req.query.to   || null;
+  const companyIdRaw = req.query.companyId ? String(req.query.companyId) : null;
+  if (companyIdRaw && !COMPANY_ID_RE.test(companyIdRaw)) {
+    return res.status(400).json({ error: 'invalid companyId' });
+  }
+  const company_id = companyIdRaw;
+
+  const cur  = periodRange(period, fromStr, toStr);
+  const prev = shiftedPrev(cur);
+  const args = (range) => ({ from: isoUtc(range.from), to: isoUtc(range.to), company_id });
+
+  // Stats card metrics for current + previous periods.
+  const stat = (range) => {
+    const a = args(range);
+    const calls    = sql.countCallsInRange.get(a).n || 0;
+    const avgRow   = sql.avgCallDurationInRange.get(a);
+    const avgDur   = Math.round(avgRow?.avg_dur || 0);
+    const okRow    = sql.callSuccessRateInRange.get(a);
+    const ok       = okRow?.ok || 0;
+    const total    = okRow?.total || 0;
+    const success  = total ? ok / total : 0;
+    const chats    = sql.countChatSessionsInRange.get(a).n || 0;
+    return { calls, avgDur, success, chats };
+  };
+  const current  = stat(cur);
+  const previous = stat(prev);
+
+  // 24-hour chart for the current period. We bucket on hour-of-day (00..23),
+  // not on calendar date — for a "Today" window that maps to a real timeline,
+  // for "This Week/Month" it shows when in the day activity tends to land.
+  const a = args(cur);
+  const callsByHour = new Map(sql.callsPerHourInRange.all(a).map((r) => [r.hour, r.n]));
+  const chatsByHour = new Map(sql.chatsPerHourInRange.all(a).map((r) => [r.hour, r.n]));
+  const chart = [];
+  for (let h = 0; h < 24; h++) {
+    const key = String(h).padStart(2, '0');
+    chart.push({
+      hour    : key,
+      inbound : callsByHour.get(key) || 0,
+      // No outbound-call infrastructure yet — slot reserved so the chart UX
+      // stays stable when batch-calls ships.
+      outbound: 0,
+      chats   : chatsByHour.get(key) || 0,
+    });
+  }
+
+  const scenarios = sql.countActiveCompanies.get({ company_id }).n || 0;
+
+  res.json({
+    period,
+    range  : { from: cur.from.toISOString(),  to: cur.to.toISOString()  },
+    prev   : { from: prev.from.toISOString(), to: prev.to.toISOString() },
+    companyId: company_id,
+    current,
+    previous,
+    scenarios,
+    chart,
+  });
+});
+
 app.post('/api/companies/:id/rag-test', requireCompanyAccess, async (req, res) => {
   const c = loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });

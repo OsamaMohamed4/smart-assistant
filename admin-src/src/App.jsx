@@ -6,6 +6,7 @@ import { PlaygroundPage } from './pages/PlaygroundPage';
 import { CustomerPage } from './pages/CustomerPage';
 import { AuthPage } from './pages/AuthPage';
 import { ClientsPage } from './pages/ClientsPage';
+import { DashboardPage } from './pages/DashboardPage';
 import { ToastProvider } from './components/ui/Toast';
 import { api, setUnauthenticatedHandler } from './lib/api';
 
@@ -17,7 +18,9 @@ function getRoute() {
 
 export default function App() {
   const [route, setRoute] = useState(getRoute());
-  const [tab, setTab]     = useState('companies');
+  // Default to the dashboard — it's the "front door" of the product and gives
+  // a stronger first impression than the bare companies list.
+  const [tab, setTab]     = useState('dashboard');
   const [user, setUser]   = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
 
@@ -85,6 +88,7 @@ export default function App() {
       <div className="flex min-h-screen flex-row-reverse">
         <Sidebar active={tab} onChange={setTab} user={user} onLogout={onLogout} />
         <main className="flex-1 min-w-0">
+          {tab === 'dashboard'  && <DashboardPage />}
           {tab === 'companies'  && <CompaniesPage />}
           {tab === 'clients'    && user.role === 'superadmin' && <ClientsPage />}
           {tab === 'sessions'   && <SessionsPage />}

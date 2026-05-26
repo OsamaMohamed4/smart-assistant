@@ -50,6 +50,20 @@ export const api = {
     return request(`/api/dashboard?${params.toString()}`);
   },
 
+  // conversations (chats + calls, unified)
+  conversations     : ({
+    period = 'all', type = 'all', status = 'all', outcome = 'all',
+    search = '', companyId, page = 1, limit = 10,
+  } = {}) => {
+    const params = new URLSearchParams({
+      period, type, status, outcome,
+      page: String(page), limit: String(limit),
+    });
+    if (companyId) params.set('companyId', companyId);
+    if (search)    params.set('search', search);
+    return request(`/api/conversations?${params.toString()}`);
+  },
+
   // companies
   listCompanies     : () => request('/api/companies'),
   getCompany        : (id) => request(`/api/companies/${id}`),

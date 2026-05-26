@@ -1,95 +1,69 @@
-import { useEffect, useMemo, useState } from 'react';
-import { MessageSquare, PhoneCall, RefreshCw, Filter, Type, Mic, Inbox } from 'lucide-react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
+import {
+  MessageSquare, PhoneCall, RefreshCw, Mic, ArrowDownLeft, ArrowUpRight, Download,
+  Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown,
+  CheckCircle2, XCircle, Hourglass, Inbox,
+} from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Avatar } from '../components/ui/Avatar';
-import { RowSkeleton } from '../components/ui/Skeleton';
 import { EmptyState } from '../components/ui/EmptyState';
 import { SessionDetail } from '../components/sessions/SessionDetail';
 import { useToast } from '../components/ui/Toast';
 import { api } from '../lib/api';
-import { cn, fmtDate, fmtDuration, relTime, fmtNumber } from '../lib/utils';
+import { cn, fmtDate, fmtDuration } from '../lib/utils';
 
-export function SessionsPage({ pinnedCompanyId }) {
+// Sarj-style Conversations table. Every row is one chat session or one call,
+// enriched with derived Status / Outcome / Direction columns the backend
+// computes on the fly. Stays scoped to the workspace for client users via
+// the pinnedCompanyId prop.
+export function SessionsPage({ user, pinnedCompanyId }) {
   const { push } = useToast();
-  const [companies, setCompanies] = useState([]);
-  const [kind, setKind]           = useState('all');     // all | chat | call
-  const [companyFilter, setCompanyFilter] = useState(pinnedCompanyId || '');
-  const [search, setSearch]       = useState('');
-  const [items, setItems]         = useState(null);
-  const [selected, setSelected]   = useState(null);
-  const [detail, setDetail]       = useState(null);
+  const [filters, setFilters] = useState({
+    period : 'all',
+    type   : 'all',
+    status : 'all',
+    outcome: 'all',
+    search : '',
+  });
+  const [page, setPage]     = useState(1);
+  const [limit, setLimit]   = useState(10);
+  const [data, setData]     = useState({ items: [], total: 0 });
+  const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [selected, setSelected]     = useState(null);
+  const [detail, setDetail]         = useState(null);
 
-  const loadCompanies = async () => {
-    try { setCompanies(await api.listCompanies()); } catch (e) { push(e.message, 'error'); }
-  };
+  const setFilter = (k) => (v) => { setFilters((f) => ({ ...f, [k]: v })); setPage(1); };
 
-  const load = async () => {
-    setItems(null);
-    try {
-      const list = await api.listCompanies();
-      // Workspace mode (`/c/<id>`) pins the filter to one company even for
-      // superadmin, so they can't accidentally pull in other companies' data.
-      const effectiveFilter = pinnedCompanyId || companyFilter;
-      const targets = effectiveFilter ? list.filter((c) => c.id === effectiveFilter) : list;
-      const all = [];
-      await Promise.all(targets.map(async (c) => {
-        if (kind !== 'call') {
-          const s = await api.listSessions(c.id, 100);
-          s.forEach((row) => all.push({
-            kind: 'chat', companyId: c.id, companyName: c.name,
-            id: row.session_id, ts: row.last_at,
-            messages: row.messages, summary: row.summary,
-          }));
-        }
-        if (kind !== 'chat') {
-          const cl = await api.listCalls(c.id, 100);
-          cl.forEach((row) => all.push({
-            kind: 'call', companyId: c.id, companyName: c.name,
-            id: row.id, ts: row.created_at,
-            caller: row.caller_number, duration: row.duration_sec,
-            endedReason: row.ended_reason, summary: row.summary,
-          }));
-        }
-      }));
-      all.sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
-      setItems(all);
-    } catch (e) { push(e.message, 'error'); setItems([]); }
-  };
+  // Server returns paginated data; we keep client logic minimal and rely on
+  // the backend filter pipeline.
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api.conversations({
+      ...filters,
+      companyId: pinnedCompanyId,
+      page,
+      limit,
+    })
+      .then((r) => { if (!cancelled) setData(r); })
+      .catch((e) => { if (!cancelled) push(e.message, 'error'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [filters, page, limit, pinnedCompanyId, refreshKey]);
 
-  useEffect(() => { loadCompanies(); }, []);
-  useEffect(() => { load(); }, [kind, companyFilter]);
-
-  const filtered = useMemo(() => {
-    if (!items) return null;
-    const q = search.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter((it) =>
-      (it.summary || '').toLowerCase().includes(q) ||
-      (it.companyName || '').toLowerCase().includes(q) ||
-      (it.id || '').toLowerCase().includes(q) ||
-      (it.caller || '').toLowerCase().includes(q),
-    );
-  }, [items, search]);
-
-  const stats = useMemo(() => {
-    if (!items) return null;
-    return {
-      total: items.length,
-      chats: items.filter((i) => i.kind === 'chat').length,
-      calls: items.filter((i) => i.kind === 'call').length,
-    };
-  }, [items]);
+  const totalPages = Math.max(1, Math.ceil(data.total / limit));
 
   const onOpen = async (it) => {
     setSelected(it);
     try {
-      if (it.kind === 'chat') {
-        const msgs = await api.getSession(it.id);
+      if (it.type === 'chat') {
+        const msgs = await api.getSession(it.sessionId);
         setDetail({ messages: msgs });
       } else {
-        const call = await api.getCall(it.id);
+        const call = await api.getCall(it.callId);
         setDetail(call);
       }
     } catch (e) {
@@ -101,109 +75,163 @@ export function SessionsPage({ pinnedCompanyId }) {
   const onResummarize = async () => {
     if (!selected) return;
     try {
-      if (selected.kind === 'chat') {
-        const r = await api.summarizeSession(selected.id);
-        setDetail((d) => ({ ...d, summary: r.summary, messages: d.messages?.map((m) => ({ ...m, summary: r.summary })) }));
+      if (selected.type === 'chat') {
+        const r = await api.summarizeSession(selected.sessionId);
+        setDetail((d) => ({ ...d, summary: r.summary }));
       } else {
-        const r = await api.summarizeCall(selected.id);
+        const r = await api.summarizeCall(selected.callId);
         setDetail((d) => ({ ...d, summary: r.summary }));
       }
       push('تم توليد الملخص', 'success');
-      load();
+      setRefreshKey((k) => k + 1);
     } catch (e) { push(e.message, 'error'); }
   };
+
+  // Download the *currently filtered* view as CSV. We page through the API in
+  // chunks of 100 so a large filter still exports correctly without blowing
+  // up memory on the server side.
+  const exportCsv = useCallback(async () => {
+    try {
+      const all = [];
+      let p = 1;
+      const PAGE = 100;
+      while (true) {
+        const r = await api.conversations({ ...filters, companyId: pinnedCompanyId, page: p, limit: PAGE });
+        all.push(...r.items);
+        if (all.length >= r.total || r.items.length < PAGE) break;
+        p += 1;
+        if (p > 50) break; // hard ceiling: 5000 rows
+      }
+      const csv = toCsv(all);
+      const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `conversations-${new Date().toISOString().slice(0,10)}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      push(`تم تصدير ${all.length} محادثة`, 'success');
+    } catch (e) { push(e.message, 'error'); }
+  }, [filters, pinnedCompanyId, push]);
 
   return (
     <div>
       <TopBar
-        title="السجلات"
-        subtitle={stats ? `${fmtNumber(stats.total)} تفاعل (${fmtNumber(stats.chats)} شات + ${fmtNumber(stats.calls)} مكالمة)` : 'جاري التحميل...'}
-        search={search}
-        onSearch={setSearch}
-        searchPlaceholder="ابحث في الملخصات أو الجلسات..."
+        title="المحادثات"
+        subtitle={loading
+          ? 'جاري التحميل...'
+          : `${data.total} ${data.total === 1 ? 'محادثة' : 'محادثة'} ${pinnedCompanyId ? '(workspace)' : ''}`}
         right={
-          <Button variant="secondary" onClick={load} className="gap-1.5">
-            <RefreshCw className="w-3.5 h-3.5" strokeWidth={2} /> تحديث
+          <Button variant="secondary" onClick={exportCsv} className="gap-1.5" disabled={loading || !data.total}>
+            <Download className="w-3.5 h-3.5" strokeWidth={2} />
+            تصدير
           </Button>
         }
       />
 
-      <div className="px-8 py-7">
-        {/* ─── Filters strip ─── */}
-        <div className="flex items-center gap-3 mb-5">
-          <div className="flex items-center gap-1 bg-white border border-ink-200 rounded-xl p-0.5">
-            {[
-              { id: 'all',  label: 'الكل',     icon: Inbox },
-              { id: 'chat', label: 'الشات',    icon: MessageSquare },
-              { id: 'call', label: 'المكالمات', icon: PhoneCall },
-            ].map((t) => {
-              const Icon = t.icon;
-              const active = kind === t.id;
-              return (
-                <button
-                  key={t.id}
-                  onClick={() => setKind(t.id)}
-                  className={cn(
-                    'h-8 px-3 rounded-lg text-[12.5px] font-medium flex items-center gap-1.5 transition-colors',
-                    active ? 'bg-ink-900 text-white shadow-soft' : 'text-ink-600 hover:bg-ink-100',
-                  )}
-                >
-                  <Icon className="w-3.5 h-3.5" strokeWidth={2} />
-                  {t.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {!pinnedCompanyId && companies.length > 1 && (
-            <div className="relative">
-              <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-400 pointer-events-none" />
-              <select
-                value={companyFilter}
-                onChange={(e) => setCompanyFilter(e.target.value)}
-                className="h-9 pr-9 pl-3 text-[13px] bg-white border border-ink-200 rounded-xl appearance-none focus-ring focus:border-ink-300 font-arabic"
-              >
-                <option value="">كل الشركات</option>
-                {companies.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
-              </select>
-            </div>
-          )}
-
+      <div className="px-8 py-6">
+        {/* ─── Filter row ─── */}
+        <div className="flex items-center gap-2 flex-wrap mb-4">
+          <SearchBox value={filters.search} onChange={setFilter('search')} placeholder="بحث برقم تليفون أو إيميل..." />
+          <FilterSelect
+            value={filters.status} onChange={setFilter('status')}
+            options={[
+              { v: 'all',       l: 'كل الحالات' },
+              { v: 'completed', l: 'مكتملة' },
+              { v: 'failed',    l: 'فاشلة' },
+            ]}
+          />
+          <FilterSelect
+            value={filters.outcome} onChange={setFilter('outcome')}
+            options={[
+              { v: 'all',           l: 'كل النتائج' },
+              { v: 'success',       l: 'نجاح' },
+              { v: 'not_available', l: 'غير متاحة' },
+            ]}
+          />
+          <FilterSelect
+            value={filters.period} onChange={setFilter('period')}
+            options={[
+              { v: 'all',     l: 'كل الفترات' },
+              { v: 'today',   l: 'اليوم' },
+              { v: 'week',    l: 'هذا الأسبوع' },
+              { v: 'month',   l: 'هذا الشهر' },
+              { v: 'quarter', l: 'هذا الربع' },
+            ]}
+          />
+          <FilterSelect
+            value={filters.type} onChange={setFilter('type')}
+            options={[
+              { v: 'all',   l: 'كل الأنواع' },
+              { v: 'chat',  l: 'شات' },
+              { v: 'voice', l: 'صوت' },
+            ]}
+          />
           <div className="flex-1" />
+          <Button variant="secondary" onClick={() => setRefreshKey((k) => k + 1)} className="gap-1.5">
+            <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} strokeWidth={2} />
+            تحديث
+          </Button>
+        </div>
 
-          {stats && (
-            <div className="text-[12px] text-ink-500">
-              عرض <span className="font-semibold text-ink-700 tabular-nums">{filtered?.length || 0}</span> من <span className="tabular-nums">{stats.total}</span>
+        {/* ─── Table ─── */}
+        <div className="bg-white border border-ink-100 rounded-2xl overflow-hidden shadow-card">
+          {loading && !data.items.length ? (
+            <div className="p-12 text-center text-ink-400 text-[13px]">يحمّل المحادثات...</div>
+          ) : data.items.length === 0 ? (
+            <EmptyState
+              icon={Inbox}
+              title="ما فيه محادثات تطابق الفلتر"
+              description="جرّب تنظّف الفلاتر، أو غيّر الفترة الزمنية."
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-right" dir="rtl">
+                <thead>
+                  <tr className="border-b border-ink-100 bg-ink-50/60 text-[11px] uppercase font-semibold text-ink-500 tracking-wider">
+                    <Th>الوقت</Th>
+                    <Th>المستخدم</Th>
+                    <Th>النوع</Th>
+                    <Th>الاتجاه</Th>
+                    <Th>الرقم</Th>
+                    <Th>السيناريو</Th>
+                    <Th>الحالة</Th>
+                    <Th>النتيجة</Th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-ink-100">
+                  {data.items.map((it) => (
+                    <Row key={it.id} item={it} onOpen={onOpen} />
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
 
-        {/* ─── List ─── */}
-        {!items && (
-          <div className="space-y-2">
-            {[1,2,3,4].map((i) => <RowSkeleton key={i} />)}
-          </div>
-        )}
-        {items && filtered.length === 0 && (
-          <EmptyState
-            icon={Inbox}
-            title={search ? 'ما فيه نتايج للبحث' : 'ما فيه سجلات بعد'}
-            description={search ? 'جرّب كلمة بحث ثانية أو نظّف الفلاتر' : 'لما يبدأ العملاء يكلموا المساعد، الجلسات هتظهر هنا تلقائياً مع ملخّصاتها الذكية.'}
-          />
-        )}
-        {items && filtered.length > 0 && (
-          <div className="bg-white border border-ink-100 rounded-2xl overflow-hidden shadow-card">
-            <div className="grid grid-cols-[1fr_120px_140px_120px] gap-4 px-5 py-3 border-b border-ink-100 bg-ink-50/60 text-[11px] uppercase font-semibold text-ink-500 tracking-wider">
-              <div>الجلسة</div>
-              <div>الشركة</div>
-              <div>التفاصيل</div>
-              <div>الوقت</div>
+        {/* ─── Pagination ─── */}
+        {data.total > 0 && (
+          <div className="mt-4 flex items-center justify-between text-[12.5px] text-ink-600">
+            <div className="flex items-center gap-2">
+              <span>عرض:</span>
+              <select
+                value={limit}
+                onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}
+                className="h-8 px-2 pr-7 bg-white border border-ink-200 rounded-lg appearance-none focus-ring"
+              >
+                {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <span className="text-ink-500">في كل صفحة</span>
+              <span className="text-ink-400">·</span>
+              <span className="tabular-nums">
+                {((page - 1) * limit) + 1}–{Math.min(page * limit, data.total)} من {data.total}
+              </span>
             </div>
-            <div className="divide-y divide-ink-100">
-              {filtered.map((it) => (
-                <SessionRow key={`${it.kind}-${it.id}`} item={it} onOpen={onOpen} />
-              ))}
-            </div>
+            <PaginationControls
+              page={page}
+              totalPages={totalPages}
+              onChange={(p) => setPage(p)}
+            />
           </div>
         )}
       </div>
@@ -211,7 +239,7 @@ export function SessionsPage({ pinnedCompanyId }) {
       <SessionDetail
         open={!!selected}
         onClose={() => { setSelected(null); setDetail(null); }}
-        kind={selected?.kind}
+        kind={selected?.type === 'voice' ? 'call' : 'chat'}
         data={detail}
         companyName={selected?.companyName}
         onResummarize={onResummarize}
@@ -220,56 +248,212 @@ export function SessionsPage({ pinnedCompanyId }) {
   );
 }
 
-function SessionRow({ item, onOpen }) {
-  const isCall = item.kind === 'call';
+// ─── Subcomponents ────────────────────────────────────────────
+
+function Th({ children }) {
+  return <th className="px-4 py-3 text-right font-semibold whitespace-nowrap">{children}</th>;
+}
+
+function Row({ item, onOpen }) {
   return (
-    <button
+    <tr
       onClick={() => onOpen(item)}
-      className="w-full grid grid-cols-[1fr_120px_140px_120px] gap-4 px-5 py-4 text-right hover:bg-ink-50/40 transition-colors group items-center"
+      className="hover:bg-ink-50/50 cursor-pointer transition-colors"
     >
-      <div className="min-w-0 flex items-start gap-3">
-        <div className={cn(
-          'shrink-0 w-9 h-9 rounded-xl flex items-center justify-center',
-          isCall ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200/60' : 'bg-brand-50 text-brand-700 ring-1 ring-brand-200/60'
-        )}>
-          {isCall ? <PhoneCall className="w-4 h-4" strokeWidth={2} /> : <MessageSquare className="w-4 h-4" strokeWidth={2} />}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 mb-0.5">
-            <span className="text-[13.5px] font-semibold text-ink-900 truncate">
-              {isCall ? `مكالمة من ${item.caller || 'مجهول'}` : `شات #${item.id.slice(0, 8)}`}
-            </span>
-            {!isCall && <Badge tone="neutral" className="text-[10px] !py-0">{item.messages} رسالة</Badge>}
-          </div>
-          <p className="text-[12.5px] text-ink-500 truncate leading-relaxed">
-            {item.summary || (isCall ? '— لا يوجد ملخص بعد —' : '— اضغط لعرض التفاصيل وتوليد ملخص —')}
-          </p>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2 min-w-0">
-        <Avatar name={item.companyName} size={24} />
-        <span className="text-[12.5px] text-ink-700 truncate">{item.companyName}</span>
-      </div>
-
-      <div>
-        {isCall ? (
-          <div className="flex items-center gap-2 text-[12px] text-ink-600">
-            <span className="tabular-nums">{fmtDuration(item.duration)}</span>
-            <Badge tone={item.endedReason === 'customer-ended-call' ? 'success' : 'neutral'} dot>
-              {item.endedReason ? item.endedReason.replace(/-/g,' ').slice(0, 12) : 'انتهت'}
-            </Badge>
-          </div>
-        ) : (
-          <Badge tone={item.summary ? 'success' : 'warning'} dot>
-            {item.summary ? 'ملخّصة' : 'بدون ملخص'}
-          </Badge>
-        )}
-      </div>
-
-      <div className="text-[12px] text-ink-500 tabular-nums">
-        {relTime(item.ts)}
-      </div>
-    </button>
+      <td className="px-4 py-3 text-[12.5px] text-ink-700 tabular-nums whitespace-nowrap">
+        {fmtDate(item.timestamp)}
+      </td>
+      <td className="px-4 py-3 text-[12.5px] text-ink-700 truncate max-w-[180px]">
+        {item.user || <span className="text-ink-400">—</span>}
+      </td>
+      <td className="px-4 py-3">
+        <TypeBadge type={item.type} />
+      </td>
+      <td className="px-4 py-3">
+        <DirectionBadge direction={item.direction} />
+      </td>
+      <td className="px-4 py-3 text-[12.5px] font-mono text-ink-700" dir="ltr">
+        {item.phoneNumber || <span className="text-ink-400">—</span>}
+      </td>
+      <td className="px-4 py-3 max-w-[240px]">
+        <ScenarioPill name={item.scenario} />
+      </td>
+      <td className="px-4 py-3">
+        <StatusBadge status={item.status} />
+      </td>
+      <td className="px-4 py-3">
+        <OutcomeBadge outcome={item.outcome} />
+      </td>
+    </tr>
   );
+}
+
+function TypeBadge({ type }) {
+  const isVoice = type === 'voice';
+  return (
+    <span className={cn(
+      'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold',
+      isVoice ? 'bg-violet-50 text-violet-700' : 'bg-brand-50 text-brand-700',
+    )}>
+      {isVoice ? <Mic className="w-2.5 h-2.5" /> : <MessageSquare className="w-2.5 h-2.5" />}
+      {isVoice ? 'صوت' : 'شات'}
+    </span>
+  );
+}
+
+function DirectionBadge({ direction }) {
+  const isOut = direction === 'outbound';
+  return (
+    <span className={cn(
+      'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold',
+      isOut ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700',
+    )}>
+      {isOut ? <ArrowUpRight className="w-2.5 h-2.5" /> : <ArrowDownLeft className="w-2.5 h-2.5" />}
+      {isOut ? 'صادرة' : 'واردة'}
+    </span>
+  );
+}
+
+function StatusBadge({ status }) {
+  if (status === 'completed') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-50 text-emerald-700">
+        <CheckCircle2 className="w-2.5 h-2.5" />
+        مكتملة
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-rose-50 text-rose-700">
+      <XCircle className="w-2.5 h-2.5" />
+      فاشلة
+    </span>
+  );
+}
+
+function OutcomeBadge({ outcome }) {
+  if (outcome === 'success') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-50 text-emerald-700">
+        <CheckCircle2 className="w-2.5 h-2.5" />
+        نجاح
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-ink-100 text-ink-500">
+      <Hourglass className="w-2.5 h-2.5" />
+      غير متاحة
+    </span>
+  );
+}
+
+function ScenarioPill({ name }) {
+  if (!name) return <span className="text-ink-400">—</span>;
+  return (
+    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-50 text-sky-800 text-[11.5px] font-medium ring-1 ring-sky-200/60 max-w-full truncate">
+      <span className="truncate">{name}</span>
+    </span>
+  );
+}
+
+function SearchBox({ value, onChange, placeholder }) {
+  return (
+    <div className="relative w-[260px]">
+      <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-400" strokeWidth={2} />
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full h-9 pr-9 pl-3 text-[13px] bg-white border border-ink-200 rounded-xl placeholder:text-ink-400 focus-ring focus:border-ink-300"
+      />
+    </div>
+  );
+}
+
+function FilterSelect({ value, onChange, options }) {
+  return (
+    <div className="relative">
+      <ChevronDown className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-ink-400 pointer-events-none" />
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-9 pr-3 pl-7 text-[13px] bg-white border border-ink-200 rounded-xl appearance-none focus-ring focus:border-ink-300 font-arabic min-w-[120px]"
+      >
+        {options.map((o) => (
+          <option key={o.v} value={o.v}>{o.l}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function PaginationControls({ page, totalPages, onChange }) {
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        onClick={() => onChange(1)}
+        disabled={page === 1}
+        className="w-8 h-8 rounded-lg border border-ink-200 bg-white text-ink-600 disabled:opacity-40 hover:bg-ink-50 transition-colors flex items-center justify-center"
+      >
+        <ChevronsRight className="w-3.5 h-3.5" />
+      </button>
+      <button
+        onClick={() => onChange(Math.max(1, page - 1))}
+        disabled={page === 1}
+        className="w-8 h-8 rounded-lg border border-ink-200 bg-white text-ink-600 disabled:opacity-40 hover:bg-ink-50 transition-colors flex items-center justify-center"
+      >
+        <ChevronRight className="w-3.5 h-3.5" />
+      </button>
+      <span className="px-3 h-8 inline-flex items-center text-[12px] tabular-nums text-ink-600">
+        {page} / {totalPages}
+      </span>
+      <button
+        onClick={() => onChange(Math.min(totalPages, page + 1))}
+        disabled={page === totalPages}
+        className="w-8 h-8 rounded-lg border border-ink-200 bg-white text-ink-600 disabled:opacity-40 hover:bg-ink-50 transition-colors flex items-center justify-center"
+      >
+        <ChevronLeft className="w-3.5 h-3.5" />
+      </button>
+      <button
+        onClick={() => onChange(totalPages)}
+        disabled={page === totalPages}
+        className="w-8 h-8 rounded-lg border border-ink-200 bg-white text-ink-600 disabled:opacity-40 hover:bg-ink-50 transition-colors flex items-center justify-center"
+      >
+        <ChevronsLeft className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+}
+
+// ─── CSV helpers ──────────────────────────────────────────────
+
+function toCsv(rows) {
+  const header = ['Time','User','Type','Direction','Phone','Scenario','Status','Outcome','Duration(s)','Messages','Summary'];
+  const lines = [header.map(csvCell).join(',')];
+  for (const r of rows) {
+    lines.push([
+      r.timestamp || '',
+      r.user || '',
+      r.type || '',
+      r.direction || '',
+      r.phoneNumber || '',
+      r.scenario || '',
+      r.status || '',
+      r.outcome || '',
+      r.duration ?? '',
+      r.messages ?? '',
+      r.summary || '',
+    ].map(csvCell).join(','));
+  }
+  return lines.join('\n');
+}
+
+function csvCell(v) {
+  const s = String(v ?? '');
+  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
 }

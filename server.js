@@ -837,6 +837,152 @@ app.get('/api/dashboard', (req, res) => {
   });
 });
 
+// ─── Conversations (chats + calls unified for the dashboard table) ──────
+// Status/outcome/direction columns are *derived* from existing data so the
+// frontend table can stay rich without a schema migration:
+//   - status   = completed / failed
+//   - outcome  = success / not_available  (proxy for "did the AI finish the job")
+//   - direction = inbound (everything for now; outbound arrives with batch calls)
+app.get('/api/conversations', (req, res) => {
+  const period       = String(req.query.period   || 'all');
+  const typeFilter   = String(req.query.type     || 'all');     // all | chat | voice
+  const statusFilter = String(req.query.status   || 'all');     // all | completed | failed
+  const outcomeFilter= String(req.query.outcome  || 'all');     // all | success | not_available
+  const search       = String(req.query.search   || '').trim().toLowerCase();
+  const requestedCompany = req.query.companyId ? String(req.query.companyId) : null;
+  if (requestedCompany && !COMPANY_ID_RE.test(requestedCompany)) {
+    return res.status(400).json({ error: 'invalid companyId' });
+  }
+  const page  = Math.max(1, parseInt(req.query.page, 10)  || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
+
+  // Workspace clients are pinned to their own company.
+  let scopedCompany = requestedCompany;
+  if (req.user.role !== 'superadmin') {
+    if (!req.user.companyId) return res.status(403).json({ error: 'no company associated' });
+    if (scopedCompany && scopedCompany !== req.user.companyId) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+    scopedCompany = req.user.companyId;
+  }
+
+  // Resolve target companies.
+  const companies = scopedCompany
+    ? db.prepare('SELECT id, name FROM companies WHERE id = ?').all(scopedCompany)
+    : db.prepare('SELECT id, name FROM companies').all();
+  if (!companies.length) return res.json({ items: [], total: 0, page: 1, limit });
+  const companyMap = new Map(companies.map((c) => [c.id, c.name]));
+  const ids = companies.map((c) => c.id);
+  const inPlaceholders = ids.map(() => '?').join(',');
+
+  // Build the time window (default: all time).
+  let timeClause = '';
+  const timeArgs = [];
+  if (period && period !== 'all') {
+    const { from, to } = periodRange(period);
+    timeClause = ' AND created_at BETWEEN ? AND ?';
+    timeArgs.push(isoUtc(from), isoUtc(to));
+  }
+
+  // Chats (grouped per session — one row per conversation).
+  const chats = typeFilter === 'voice' ? [] : db.prepare(`
+    SELECT
+      session_id        AS session_id,
+      company_id        AS company_id,
+      MAX(created_at)   AS ts,
+      MAX(user_id)      AS user_id,
+      COUNT(*)          AS messages,
+      MAX(summary)      AS summary,
+      SUM(CASE WHEN assistant_reply IS NULL OR assistant_reply = '' THEN 1 ELSE 0 END) AS missing_replies
+    FROM chats
+    WHERE company_id IN (${inPlaceholders}) ${timeClause}
+    GROUP BY session_id
+  `).all(...ids, ...timeArgs);
+
+  // Calls.
+  const calls = typeFilter === 'chat' ? [] : db.prepare(`
+    SELECT id, company_id, created_at AS ts, caller_number, duration_sec, ended_reason, summary
+    FROM calls
+    WHERE company_id IN (${inPlaceholders}) ${timeClause}
+  `).all(...ids, ...timeArgs);
+
+  // Hydrate user emails for chat rows in one round-trip.
+  const userIds = [...new Set(chats.map((c) => c.user_id).filter(Boolean))];
+  const userMap = new Map();
+  if (userIds.length) {
+    const ph = userIds.map(() => '?').join(',');
+    db.prepare(`SELECT id, email FROM users WHERE id IN (${ph})`).all(...userIds)
+      .forEach((u) => userMap.set(u.id, u.email));
+  }
+
+  const OK_REASONS = new Set(['customer-ended-call', 'assistant-ended-call']);
+
+  const chatItems = chats.map((c) => ({
+    id          : `chat-${c.session_id}`,
+    sessionId   : c.session_id,
+    type        : 'chat',
+    direction   : 'inbound',
+    timestamp   : c.ts,
+    user        : userMap.get(c.user_id) || null,
+    phoneNumber : null,
+    companyId   : c.company_id,
+    companyName : companyMap.get(c.company_id) || c.company_id,
+    // Placeholder until the Scenarios feature lands; for now every company has
+    // exactly one virtual scenario named after the company itself.
+    scenario    : companyMap.get(c.company_id) || c.company_id,
+    status      : c.missing_replies === 0 ? 'completed' : 'failed',
+    outcome     : (c.messages >= 3 && c.missing_replies === 0) ? 'success' : 'not_available',
+    messages    : c.messages,
+    duration    : null,
+    summary     : c.summary || null,
+  }));
+
+  const callItems = calls.map((c) => {
+    const ok = OK_REASONS.has(c.ended_reason || '');
+    return {
+      id          : `call-${c.id}`,
+      callId      : c.id,
+      type        : 'voice',
+      direction   : 'inbound',
+      timestamp   : c.ts,
+      user        : null,
+      phoneNumber : c.caller_number || null,
+      companyId   : c.company_id,
+      companyName : companyMap.get(c.company_id) || c.company_id,
+      scenario    : companyMap.get(c.company_id) || c.company_id,
+      status      : ok ? 'completed' : 'failed',
+      outcome     : (ok && (c.duration_sec || 0) >= 30) ? 'success' : 'not_available',
+      messages    : null,
+      duration    : c.duration_sec || 0,
+      endedReason : c.ended_reason || null,
+      summary     : c.summary || null,
+    };
+  });
+
+  let items = [...chatItems, ...callItems];
+
+  // Apply post-aggregation filters (status/outcome/search) — these can't run
+  // in SQL because they're derived fields.
+  if (statusFilter  !== 'all') items = items.filter((i) => i.status  === statusFilter);
+  if (outcomeFilter !== 'all') items = items.filter((i) => i.outcome === outcomeFilter);
+  if (search) {
+    items = items.filter((i) =>
+         (i.phoneNumber || '').toLowerCase().includes(search)
+      || (i.user        || '').toLowerCase().includes(search)
+      || (i.summary     || '').toLowerCase().includes(search)
+      || (i.companyName || '').toLowerCase().includes(search)
+    );
+  }
+
+  items.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+
+  const total = items.length;
+  const start = (page - 1) * limit;
+  const slice = items.slice(start, start + limit);
+
+  res.json({ items: slice, total, page, limit });
+});
+
 app.post('/api/companies/:id/rag-test', requireCompanyAccess, async (req, res) => {
   const c = loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });

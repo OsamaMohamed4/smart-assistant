@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Sidebar } from './components/layout/Sidebar';
 import { CompaniesPage } from './pages/CompaniesPage';
 import { SessionsPage } from './pages/SessionsPage';
+import { ScenariosPage } from './pages/ScenariosPage';
 import { WorkspaceGate } from './pages/WorkspaceGate';
 import { AuthPage } from './pages/AuthPage';
 import { ClientsPage } from './pages/ClientsPage';
@@ -109,10 +110,10 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
   // Workspace view hides the platform-wide management tabs even for
   // superadmin — you're inside ONE workspace, not the control plane.
   const allowedTabs = isWorkspace
-    ? new Set(['dashboard', 'sessions'])
+    ? new Set(['dashboard', 'scenarios', 'sessions'])
     : isSuper
-      ? new Set(['dashboard', 'companies', 'clients', 'sessions'])
-      : new Set(['dashboard', 'sessions']);
+      ? new Set(['dashboard', 'scenarios', 'companies', 'clients', 'sessions'])
+      : new Set(['dashboard', 'scenarios', 'sessions']);
   const activeTab = allowedTabs.has(tab) ? tab : 'dashboard';
 
   return (
@@ -126,6 +127,7 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
       />
       <main className="flex-1 min-w-0">
         {activeTab === 'dashboard' && <DashboardPage user={user} pinnedCompanyId={pinnedCompanyId} />}
+        {activeTab === 'scenarios' && <ScenariosPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'companies' && isSuper && !isWorkspace && <CompaniesPage />}
         {activeTab === 'clients'   && isSuper && !isWorkspace && <ClientsPage />}
         {activeTab === 'sessions'  && <SessionsPage user={user} pinnedCompanyId={pinnedCompanyId} />}

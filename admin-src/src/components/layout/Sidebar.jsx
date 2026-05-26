@@ -1,4 +1,4 @@
-import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard } from 'lucide-react';
+import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 // Two-tier nav: "Build" is where you author the assistant; "Monitor" is where
@@ -10,8 +10,9 @@ const NAV_GROUPS = [
   {
     title: 'BUILD',
     items: [
-      { id: 'companies',  label: 'الشركات',  icon: Building2, hint: 'إدارة',             roles: ['superadmin'] },
-      { id: 'clients',    label: 'العملاء',  icon: Users,     hint: 'حسابات الزبائن',    roles: ['superadmin'] },
+      { id: 'scenarios',  label: 'السيناريوهات', icon: FileText,  hint: 'AI agents',         roles: ['superadmin', 'client'] },
+      { id: 'companies',  label: 'الشركات',     icon: Building2, hint: 'إدارة',              roles: ['superadmin'] },
+      { id: 'clients',    label: 'العملاء',     icon: Users,     hint: 'حسابات الزبائن',     roles: ['superadmin'] },
     ],
   },
   {

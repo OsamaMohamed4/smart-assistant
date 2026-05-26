@@ -13,14 +13,26 @@ function buildBaseSystemPrompt(systemPrompt, kb) {
   return `${MASTER_PROMPT}${business}${kbBlock}`;
 }
 
-// Async version used at chat time. Appends RAG-retrieved chunks when documents exist.
+// Resolve the system prompt the chat handler should send to the model for a
+// given turn. Order of precedence:
+//   1. Latest *active* Scenario for the company (the new Scenarios feature)
+//   2. company.system_prompt + kb_text (legacy path before Scenarios)
+// Then we append RAG chunks retrieved from the user's query.
 async function buildSystemPromptWithRAG(company, userQuery) {
-  const base = company.systemPrompt;
-  if (!userQuery) return base;
+  const { MASTER_PROMPT } = require('./lib/master-prompt');
+  const scenario = sql.getActiveScenarioForCompany.get(company.id);
+  let base;
+  if (scenario && scenario.instruction_prompt) {
+    // Replace common globals so the assistant doesn't speak literal {{vars}}.
+    const filled = fillGlobals(scenario.instruction_prompt, company);
+    base = `${MASTER_PROMPT}${filled}`;
+  } else {
+    base = company.systemPrompt;  // legacy path
+  }
 
+  if (!userQuery) return base;
   const chunkCount = sql.countCompanyChunks.get(company.id)?.n || 0;
   if (!chunkCount) return base;
-
   try {
     const { retrieve, formatChunksForPrompt } = require('./lib/rag');
     const chunks = await retrieve(company.id, userQuery);
@@ -30,6 +42,22 @@ async function buildSystemPromptWithRAG(company, userQuery) {
     console.error('RAG retrieval error:', e.message);
     return base;
   }
+}
+
+// Replace global template variables (agent_name, date, time, etc) in a prompt
+// at chat time. Per-call variables (customer_name, account_number…) stay
+// untouched so the model recognises them as runtime placeholders.
+function fillGlobals(text, company) {
+  if (!text) return text;
+  const now = new Date();
+  const map = {
+    agent_name : company.name || 'المساعد',
+    date       : now.toISOString().slice(0, 10),
+    time       : now.toISOString().slice(11, 16),
+  };
+  return text.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (m, name) =>
+    Object.prototype.hasOwnProperty.call(map, name) ? map[name] : m
+  );
 }
 
 function toCompany(row) {

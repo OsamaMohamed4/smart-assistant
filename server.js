@@ -983,6 +983,267 @@ app.get('/api/conversations', (req, res) => {
   res.json({ items: slice, total, page, limit });
 });
 
+// ─── Scenarios: per-company AI agent configurations ─────────────
+// Each company can author multiple scenarios (Customer Service / Booking /
+// Sales / etc). The chat handler uses the latest *active* scenario for the
+// company when generating replies — see companies.buildSystemPromptWithRAG.
+
+// Parse the success criteria stored as JSON in DB into the array shape the
+// UI expects; tolerate legacy plain-text rows by treating them as a single
+// non-primary criterion.
+function parseCriteria(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  return [{ text: String(raw), primary: false }];
+}
+function parseVariables(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  return [];
+}
+function shapeScenario(row) {
+  if (!row) return null;
+  return {
+    id                : row.id,
+    companyId         : row.company_id,
+    name              : row.name,
+    description       : row.description || '',
+    firstMessage      : row.first_message || '',
+    instructionPrompt : row.instruction_prompt || '',
+    successCriteria   : parseCriteria(row.success_criteria),
+    variables         : parseVariables(row.variables),
+    isActive          : !!row.is_active,
+    language          : row.language || 'ar',
+    knowledgeBaseIds  : parseVariables(row.knowledge_base_ids),
+    createdAt         : row.created_at,
+    updatedAt         : row.updated_at,
+  };
+}
+
+// Auto-detect {{variable}} occurrences and merge with any previously-saved
+// configuration (preserving required / type fields).
+function detectVariables(prevConfig, ...texts) {
+  const prev = new Map((prevConfig || []).map((v) => [v.name, v]));
+  const seen = new Set();
+  const out  = [];
+  const re   = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
+  const GLOBAL = new Set([
+    'agent_name', 'agent_gender', 'date', 'time', 'user_phone_number',
+  ]);
+  for (const text of texts) {
+    if (!text) continue;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const name = m[1];
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const existing = prev.get(name);
+      out.push(existing || {
+        name,
+        type     : GLOBAL.has(name) ? 'global' : 'text',
+        required : !GLOBAL.has(name),
+      });
+    }
+  }
+  return out;
+}
+
+app.get('/api/companies/:id/scenarios', requireCompanyAccess, (req, res) => {
+  const tab = String(req.query.tab || 'active');
+  const rows = tab === 'deleted'
+    ? sql.listDeletedScenarios.all(req.params.id)
+    : sql.listScenarios.all(req.params.id);
+  res.json(rows.map((r) => ({
+    id              : r.id,
+    name            : r.name,
+    language        : r.language || 'ar',
+    isActive        : !!r.is_active,
+    createdAt       : r.created_at,
+    updatedAt       : r.updated_at,
+    deletedAt       : r.deleted_at || null,
+    successCriteria : parseCriteria(r.success_criteria),
+  })));
+});
+
+app.get('/api/scenarios/:id', requireAuth, (req, res) => {
+  const row = sql.getScenario.get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  if (req.user.role !== 'superadmin' && req.user.companyId !== row.company_id) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  res.json(shapeScenario(row));
+});
+
+app.post('/api/companies/:id/scenarios', requireCompanyAccess, (req, res) => {
+  const b = req.body || {};
+  const name = String(b.name || '').trim().slice(0, 200);
+  const instructionPrompt = String(b.instructionPrompt || '').trim();
+  if (!name || !instructionPrompt) {
+    return res.status(400).json({ error: 'name and instructionPrompt are required' });
+  }
+  const firstMessage = String(b.firstMessage || '').slice(0, 2000);
+  const criteria     = Array.isArray(b.successCriteria) ? b.successCriteria : [];
+  const variables    = detectVariables(b.variables, firstMessage, instructionPrompt);
+  const kbIds        = Array.isArray(b.knowledgeBaseIds) ? b.knowledgeBaseIds : [];
+  const r = sql.insertScenario.run({
+    company_id         : req.params.id,
+    name,
+    description        : String(b.description || '').slice(0, 4000),
+    first_message      : firstMessage,
+    instruction_prompt : instructionPrompt.slice(0, 30000),
+    success_criteria   : JSON.stringify(criteria),
+    variables          : JSON.stringify(variables),
+    is_active          : b.isActive === false ? 0 : 1,
+    language           : String(b.language || 'ar').slice(0, 8),
+    knowledge_base_ids : JSON.stringify(kbIds),
+  });
+  audit(req, 'scenario.create', `scenarios/${r.lastInsertRowid}`, { name });
+  res.status(201).json(shapeScenario(sql.getScenario.get(r.lastInsertRowid)));
+});
+
+app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
+  const existing = sql.getScenario.get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'not found' });
+  if (req.user.role !== 'superadmin' && req.user.companyId !== existing.company_id) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  const b = req.body || {};
+  const firstMessage      = b.firstMessage      !== undefined ? String(b.firstMessage).slice(0, 2000) : existing.first_message;
+  const instructionPrompt = b.instructionPrompt !== undefined ? String(b.instructionPrompt).slice(0, 30000) : existing.instruction_prompt;
+  const prevVars          = parseVariables(existing.variables);
+  const variables         = b.variables !== undefined
+    ? (Array.isArray(b.variables) ? b.variables : detectVariables(prevVars, firstMessage, instructionPrompt))
+    : detectVariables(prevVars, firstMessage, instructionPrompt);
+  sql.updateScenario.run({
+    id                 : existing.id,
+    name               : b.name             !== undefined ? String(b.name).trim().slice(0, 200) : existing.name,
+    description        : b.description      !== undefined ? String(b.description).slice(0, 4000) : (existing.description || ''),
+    first_message      : firstMessage,
+    instruction_prompt : instructionPrompt,
+    success_criteria   : b.successCriteria !== undefined ? JSON.stringify(b.successCriteria) : (existing.success_criteria || '[]'),
+    variables          : JSON.stringify(variables),
+    is_active          : b.isActive !== undefined ? (b.isActive ? 1 : 0) : existing.is_active,
+    language           : b.language         !== undefined ? String(b.language).slice(0, 8) : (existing.language || 'ar'),
+    knowledge_base_ids : b.knowledgeBaseIds !== undefined
+      ? JSON.stringify(b.knowledgeBaseIds)
+      : (existing.knowledge_base_ids || '[]'),
+  });
+  audit(req, 'scenario.update', `scenarios/${existing.id}`, Object.keys(b));
+  res.json(shapeScenario(sql.getScenario.get(existing.id)));
+});
+
+app.post('/api/scenarios/:id/activate', requireAuth, (req, res) => {
+  const existing = sql.getScenario.get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'not found' });
+  if (req.user.role !== 'superadmin' && req.user.companyId !== existing.company_id) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  const isActive = req.body?.isActive === false ? 0 : 1;
+  sql.setScenarioActive.run({ id: existing.id, is_active: isActive });
+  audit(req, isActive ? 'scenario.activate' : 'scenario.deactivate', `scenarios/${existing.id}`);
+  res.json({ id: existing.id, isActive: !!isActive });
+});
+
+app.delete('/api/scenarios/:id', requireAuth, (req, res) => {
+  const existing = sql.getScenario.get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'not found' });
+  if (req.user.role !== 'superadmin' && req.user.companyId !== existing.company_id) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  sql.softDeleteScenario.run(existing.id);
+  audit(req, 'scenario.delete', `scenarios/${existing.id}`, { name: existing.name });
+  res.json({ deleted: true });
+});
+
+// AI-assisted scenario generation. The user describes the agent in plain
+// language; gpt-4o-mini returns a fully-fleshed scenario as strict JSON
+// which the frontend then routes to the edit page for review.
+const SCENARIO_GEN_SYSTEM = `أنت مهندس سيناريوهات لمنصة Voice AI تخدم السوق السعودي. مهمتك إنّك تاخد وصف مختصر للوكيل اللي العميل عاوزه، وتولّد سيناريو كامل جاهز للاستخدام.
+
+السيناريو لازم يحتوي على:
+1. اسم واضح ومهني للسيناريو بالإنجليزية (مثل "Telecom Customer Service")
+2. رسالة افتتاحية بالعربية باستخدام المتغيرات {{customer_name}} و {{agent_name}}
+3. instruction prompt تفصيلي بالعربية يحتوي على الأقسام:
+   - AGENT IDENTITY & PURPOSE
+   - TONE & STYLE (Saudi Najdi Arabic dialect, lahjet اللهجة السعودية)
+   - CONVERSATION FLOW (خطوات الحوار بالترتيب)
+   - INFORMATION TO COLLECT
+   - ESCALATION & TRANSFER RULES
+   - END CALL CONDITIONS
+   - SAFETY & PRIVACY (مش يكشف معلومات داخلية، مش يخترع حقائق)
+4. ثلاث معايير نجاح بالعربية، كل معيار جملة واحدة واضحة وقابلة للقياس
+
+أخرج JSON صالح فقط، بدون أي شرح خارج JSON، بهذا الشكل بالظبط:
+{
+  "name": "...",
+  "first_message": "...",
+  "instruction_prompt": "...",
+  "success_criteria": ["...", "...", "..."]
+}`;
+
+app.post('/api/companies/:id/scenarios/generate', requireCompanyAccess, async (req, res) => {
+  const description = String(req.body?.description || '').trim();
+  if (description.length < 20) {
+    return res.status(400).json({ error: 'description must be at least 20 characters' });
+  }
+  if (description.length > 10000) {
+    return res.status(400).json({ error: 'description too long' });
+  }
+  const language = String(req.body?.language || 'ar').slice(0, 8);
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      temperature: 0.4,
+      max_tokens: 2500,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: SCENARIO_GEN_SYSTEM },
+        { role: 'user',   content: description },
+      ],
+    });
+    const raw = completion.choices?.[0]?.message?.content || '{}';
+    let parsed = {};
+    try { parsed = JSON.parse(raw); } catch (e) {
+      req.log.error('scenario gen: invalid JSON', { raw: raw.slice(0, 400) });
+      return res.status(502).json({ error: 'AI returned invalid JSON; try again or rephrase' });
+    }
+    const name              = String(parsed.name              || 'Generated Scenario').slice(0, 200);
+    const firstMessage      = String(parsed.first_message     || '').slice(0, 2000);
+    const instructionPrompt = String(parsed.instruction_prompt|| '').slice(0, 30000);
+    const criteriaArr       = Array.isArray(parsed.success_criteria) ? parsed.success_criteria : [];
+    const successCriteria   = criteriaArr.slice(0, 6).map((t, i) => ({
+      text: String(t).slice(0, 500),
+      primary: i === 0,
+    }));
+    const variables = detectVariables([], firstMessage, instructionPrompt);
+
+    const r = sql.insertScenario.run({
+      company_id         : req.params.id,
+      name,
+      description,
+      first_message      : firstMessage,
+      instruction_prompt : instructionPrompt,
+      success_criteria   : JSON.stringify(successCriteria),
+      variables          : JSON.stringify(variables),
+      is_active          : 1,
+      language,
+      knowledge_base_ids : '[]',
+    });
+    audit(req, 'scenario.generate', `scenarios/${r.lastInsertRowid}`, { name });
+    res.status(201).json(shapeScenario(sql.getScenario.get(r.lastInsertRowid)));
+  } catch (e) {
+    req.log.error('scenario gen error', { err: e.message });
+    res.status(502).json({ error: e.message || 'AI generation failed' });
+  }
+});
+
 app.post('/api/companies/:id/rag-test', requireCompanyAccess, async (req, res) => {
   const c = loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });

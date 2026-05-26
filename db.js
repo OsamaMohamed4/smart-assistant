@@ -235,6 +235,30 @@ runMigration(6, 'webhook_events_full_unique', `
   CREATE INDEX idx_webhook_events_status ON webhook_events(status);
 `);
 
+// Migration 7: scenarios — each company can author multiple AI agent scenarios
+// (Customer Service / Booking / Sales / etc). At chat time the *active*
+// scenario for the company replaces the legacy company.system_prompt.
+runMigration(7, 'create_scenarios', `
+  CREATE TABLE IF NOT EXISTS scenarios (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id          TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    name                TEXT NOT NULL,
+    description         TEXT,
+    first_message       TEXT,
+    instruction_prompt  TEXT NOT NULL,
+    success_criteria    TEXT,
+    variables           TEXT,
+    is_active           INTEGER NOT NULL DEFAULT 1,
+    language            TEXT DEFAULT 'ar',
+    knowledge_base_ids  TEXT,
+    created_at          TEXT DEFAULT (datetime('now')),
+    updated_at          TEXT DEFAULT (datetime('now')),
+    deleted_at          TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_scenarios_company ON scenarios(company_id);
+  CREATE INDEX IF NOT EXISTS idx_scenarios_active  ON scenarios(company_id, is_active, deleted_at);
+`);
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users
@@ -428,6 +452,68 @@ const sql = {
   listChunksForDoc   : db.prepare(`
     SELECT id, chunk_index, text, token_count
     FROM kb_chunks WHERE document_id = ? ORDER BY chunk_index ASC
+  `),
+
+  // ─── Scenarios (per-company AI agent configurations) ─────
+  // Soft-deletes via deleted_at so we can show a "Recently Deleted" tab
+  // without losing history. listScenarios excludes deleted rows by default.
+  insertScenario     : db.prepare(`
+    INSERT INTO scenarios (
+      company_id, name, description, first_message, instruction_prompt,
+      success_criteria, variables, is_active, language, knowledge_base_ids
+    ) VALUES (
+      @company_id, @name, @description, @first_message, @instruction_prompt,
+      @success_criteria, @variables, @is_active, @language, @knowledge_base_ids
+    )
+  `),
+  updateScenario     : db.prepare(`
+    UPDATE scenarios SET
+      name               = @name,
+      description        = @description,
+      first_message      = @first_message,
+      instruction_prompt = @instruction_prompt,
+      success_criteria   = @success_criteria,
+      variables          = @variables,
+      is_active          = @is_active,
+      language           = @language,
+      knowledge_base_ids = @knowledge_base_ids,
+      updated_at         = datetime('now')
+    WHERE id = @id AND deleted_at IS NULL
+  `),
+  listScenarios      : db.prepare(`
+    SELECT id, company_id, name, description, language, is_active,
+           created_at, updated_at,
+           success_criteria
+      FROM scenarios
+     WHERE company_id = ? AND deleted_at IS NULL
+     ORDER BY updated_at DESC
+  `),
+  listDeletedScenarios: db.prepare(`
+    SELECT id, name, language, deleted_at
+      FROM scenarios
+     WHERE company_id = ? AND deleted_at IS NOT NULL
+     ORDER BY deleted_at DESC
+  `),
+  getScenario        : db.prepare(`
+    SELECT * FROM scenarios WHERE id = ? AND deleted_at IS NULL
+  `),
+  // Pick the scenario the chat handler will use. Latest active wins; if none
+  // is active the platform falls back to company.system_prompt.
+  getActiveScenarioForCompany: db.prepare(`
+    SELECT * FROM scenarios
+     WHERE company_id = ? AND is_active = 1 AND deleted_at IS NULL
+     ORDER BY updated_at DESC LIMIT 1
+  `),
+  setScenarioActive  : db.prepare(`
+    UPDATE scenarios SET is_active = @is_active, updated_at = datetime('now')
+     WHERE id = @id AND deleted_at IS NULL
+  `),
+  softDeleteScenario : db.prepare(`
+    UPDATE scenarios SET deleted_at = datetime('now'), is_active = 0
+     WHERE id = ? AND deleted_at IS NULL
+  `),
+  restoreScenario    : db.prepare(`
+    UPDATE scenarios SET deleted_at = NULL WHERE id = ?
   `),
 
   // ─── Dashboard analytics ─────────────────────────────────

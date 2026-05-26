@@ -86,6 +86,23 @@ export const api = {
   // chat (playground)
   chat              : (body) => request('/chat', { method: 'POST', body: JSON.stringify(body) }),
 
+  // scenarios (per-company AI agents)
+  listScenarios     : (companyId, tab = 'active') => request(`/api/companies/${companyId}/scenarios?tab=${tab}`),
+  getScenario       : (id) => request(`/api/scenarios/${id}`),
+  createScenario    : (companyId, body) => request(`/api/companies/${companyId}/scenarios`, {
+    method: 'POST', body: JSON.stringify(body),
+  }),
+  updateScenario    : (id, body) => request(`/api/scenarios/${id}`, {
+    method: 'PATCH', body: JSON.stringify(body),
+  }),
+  activateScenario  : (id, isActive) => request(`/api/scenarios/${id}/activate`, {
+    method: 'POST', body: JSON.stringify({ isActive }),
+  }),
+  deleteScenario    : (id) => request(`/api/scenarios/${id}`, { method: 'DELETE' }),
+  generateScenario  : (companyId, body) => request(`/api/companies/${companyId}/scenarios/generate`, {
+    method: 'POST', body: JSON.stringify(body),
+  }),
+
   // RAG: documents
   listDocuments     : (companyId) => request(`/api/companies/${companyId}/documents`),
   uploadDocument    : async (companyId, file) => {

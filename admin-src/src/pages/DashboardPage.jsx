@@ -18,25 +18,28 @@ const PERIODS = [
   { id: 'quarter', label: 'هذا الربع' },
 ];
 
-export function DashboardPage({ user }) {
+export function DashboardPage({ user, pinnedCompanyId }) {
   const { push } = useToast();
   const isSuper = user?.role === 'superadmin';
+  // When pinnedCompanyId is set (workspace URL `/c/<id>`), the dashboard is
+  // locked to that company regardless of role — the dropdown stays hidden.
+  const locked = !!pinnedCompanyId;
   const [period, setPeriod]       = useState('today');
   const [companies, setCompanies] = useState([]);
-  // A workspace client is locked to their own company. The dropdown only
-  // shows up when there's actually a choice to make (superadmin only).
-  const [companyId, setCompanyId] = useState(isSuper ? 'all' : (user?.companyId || 'all'));
+  const [companyId, setCompanyId] = useState(
+    pinnedCompanyId || (isSuper ? 'all' : (user?.companyId || 'all'))
+  );
   const [data, setData]           = useState(null);
   const [loading, setLoading]     = useState(true);
 
   // Superadmin gets the company filter dropdown. Clients never see it because
-  // there's nothing for them to pick.
+  // there's nothing for them to pick. Workspace mode also hides it.
   useEffect(() => {
-    if (!isSuper) return;
+    if (!isSuper || locked) return;
     api.listCompanies()
       .then((cs) => setCompanies(cs || []))
       .catch(() => {});
-  }, [isSuper]);
+  }, [isSuper, locked]);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,7 +70,7 @@ export function DashboardPage({ user }) {
         subtitle="نظرة شاملة على نشاط المساعد الذكي"
         right={(
           <div className="flex items-center gap-2">
-            {isSuper && companies.length > 1 && (
+            {isSuper && !locked && companies.length > 1 && (
               <select
                 value={companyId}
                 onChange={(e) => setCompanyId(e.target.value)}

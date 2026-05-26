@@ -11,11 +11,11 @@ import { useToast } from '../components/ui/Toast';
 import { api } from '../lib/api';
 import { cn, fmtDate, fmtDuration, relTime, fmtNumber } from '../lib/utils';
 
-export function SessionsPage() {
+export function SessionsPage({ pinnedCompanyId }) {
   const { push } = useToast();
   const [companies, setCompanies] = useState([]);
   const [kind, setKind]           = useState('all');     // all | chat | call
-  const [companyFilter, setCompanyFilter] = useState('');
+  const [companyFilter, setCompanyFilter] = useState(pinnedCompanyId || '');
   const [search, setSearch]       = useState('');
   const [items, setItems]         = useState(null);
   const [selected, setSelected]   = useState(null);
@@ -29,7 +29,10 @@ export function SessionsPage() {
     setItems(null);
     try {
       const list = await api.listCompanies();
-      const targets = companyFilter ? list.filter((c) => c.id === companyFilter) : list;
+      // Workspace mode (`/c/<id>`) pins the filter to one company even for
+      // superadmin, so they can't accidentally pull in other companies' data.
+      const effectiveFilter = pinnedCompanyId || companyFilter;
+      const targets = effectiveFilter ? list.filter((c) => c.id === effectiveFilter) : list;
       const all = [];
       await Promise.all(targets.map(async (c) => {
         if (kind !== 'call') {
@@ -152,17 +155,19 @@ export function SessionsPage() {
             })}
           </div>
 
-          <div className="relative">
-            <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-400 pointer-events-none" />
-            <select
-              value={companyFilter}
-              onChange={(e) => setCompanyFilter(e.target.value)}
-              className="h-9 pr-9 pl-3 text-[13px] bg-white border border-ink-200 rounded-xl appearance-none focus-ring focus:border-ink-300 font-arabic"
-            >
-              <option value="">كل الشركات</option>
-              {companies.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
-            </select>
-          </div>
+          {!pinnedCompanyId && companies.length > 1 && (
+            <div className="relative">
+              <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-400 pointer-events-none" />
+              <select
+                value={companyFilter}
+                onChange={(e) => setCompanyFilter(e.target.value)}
+                className="h-9 pr-9 pl-3 text-[13px] bg-white border border-ink-200 rounded-xl appearance-none focus-ring focus:border-ink-300 font-arabic"
+              >
+                <option value="">كل الشركات</option>
+                {companies.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
+              </select>
+            </div>
+          )}
 
           <div className="flex-1" />
 

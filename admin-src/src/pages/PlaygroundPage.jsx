@@ -9,7 +9,7 @@ import { useToast } from '../components/ui/Toast';
 import { api } from '../lib/api';
 import { cn, relTime, fmtNumber } from '../lib/utils';
 
-export function PlaygroundPage() {
+export function PlaygroundPage({ pinnedCompanyId }) {
   const { push } = useToast();
   const [companies, setCompanies] = useState([]);
   const [activeCompany, setActiveCompany] = useState(null);
@@ -21,12 +21,17 @@ export function PlaygroundPage() {
   const scroller = useRef(null);
   const inputRef = useRef(null);
 
+  // Workspace mode pins the playground to the URL's company even if the
+  // logged-in superadmin would otherwise see several.
   useEffect(() => {
     api.listCompanies().then((list) => {
-      setCompanies(list);
-      if (list[0]) setActiveCompany(list[0]);
+      const scoped = pinnedCompanyId
+        ? list.filter((c) => c.id === pinnedCompanyId)
+        : list;
+      setCompanies(scoped);
+      if (scoped[0]) setActiveCompany(scoped[0]);
     }).catch((e) => push(e.message, 'error'));
-  }, []);
+  }, [pinnedCompanyId]);
 
   useEffect(() => {
     if (!activeCompany) return;

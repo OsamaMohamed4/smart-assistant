@@ -31,7 +31,10 @@ function initials(label) {
   return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || s[0].toUpperCase();
 }
 
-export function Sidebar({ active, onChange, user, onLogout }) {
+export function Sidebar({ active, onChange, user, onLogout, workspaceMode = false }) {
+  // Management items only make sense outside workspace mode — inside a single
+  // company's URL there's no "list of companies" to surf to.
+  const WORKSPACE_HIDDEN = new Set(['companies', 'clients']);
   return (
     <aside className="w-[260px] shrink-0 bg-ink-950 text-ink-300 flex flex-col h-screen sticky top-0 border-l border-ink-800/60">
       {/* ─── Brand ─── */}
@@ -55,7 +58,11 @@ export function Sidebar({ active, onChange, user, onLogout }) {
       {/* ─── Nav ─── */}
       <nav className="flex-1 px-3 py-4 space-y-4">
         {NAV_GROUPS.map((group) => {
-          const visible = group.items.filter((it) => !it.roles || it.roles.includes(user?.role));
+          const visible = group.items.filter((it) => {
+            if (it.roles && !it.roles.includes(user?.role)) return false;
+            if (workspaceMode && WORKSPACE_HIDDEN.has(it.id)) return false;
+            return true;
+          });
           if (!visible.length) return null;
           return (
             <div key={group.title} className="space-y-0.5">

@@ -235,6 +235,13 @@ runMigration(6, 'webhook_events_full_unique', `
   CREATE INDEX idx_webhook_events_status ON webhook_events(status);
 `);
 
+// Migration 8: track the last successful Vapi sync so the UI can show an
+// "unpublished changes" badge when the active scenario was edited after sync.
+if (!hasColumn('companies', 'last_synced_at')) {
+  runMigration(8, 'companies_add_last_synced_at',
+    `ALTER TABLE companies ADD COLUMN last_synced_at TEXT`);
+}
+
 // Migration 7: scenarios — each company can author multiple AI agent scenarios
 // (Customer Service / Booking / Sales / etc). At chat time the *active*
 // scenario for the company replaces the legacy company.system_prompt.

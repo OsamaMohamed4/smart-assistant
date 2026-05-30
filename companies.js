@@ -18,17 +18,30 @@ function buildBaseSystemPrompt(systemPrompt, kb) {
 //   1. Latest *active* Scenario for the company (the new Scenarios feature)
 //   2. company.system_prompt + kb_text (legacy path before Scenarios)
 // Then we append RAG chunks retrieved from the user's query.
-async function buildSystemPromptWithRAG(company, userQuery) {
+// Active Scenario is now the SOLE source of truth. There's no more fallback
+// to company.system_prompt — that field is legacy and was removed from the UI.
+// If a company has no active scenario, callers see a clear error instead of
+// a silently-different prompt.
+class NoActiveScenarioError extends Error {
+  constructor(companyId) {
+    super(`Company "${companyId}" has no active scenario. Activate one from the Scenarios tab first.`);
+    this.code = 'NO_ACTIVE_SCENARIO';
+    this.status = 409;
+  }
+}
+
+async function buildSystemPromptWithRAG(company, userQuery, vars) {
   const { MASTER_PROMPT } = require('./lib/master-prompt');
   const scenario = sql.getActiveScenarioForCompany.get(company.id);
-  let base;
-  if (scenario && scenario.instruction_prompt) {
-    // Replace common globals so the assistant doesn't speak literal {{vars}}.
-    const filled = fillGlobals(scenario.instruction_prompt, company);
-    base = `${MASTER_PROMPT}${filled}`;
-  } else {
-    base = company.systemPrompt;  // legacy path
+  if (!scenario || !scenario.instruction_prompt) {
+    throw new NoActiveScenarioError(company.id);
   }
+  // Runtime vars first (per-call values like agent_name from selected voice),
+  // then globals as fallback (date/time, and agent_name ← company.name if
+  // the caller didn't supply one).
+  let filled = fillRuntimeVars(scenario.instruction_prompt, vars);
+  filled = fillGlobals(filled, company);
+  const base = `${MASTER_PROMPT}${filled}`;
 
   if (!userQuery) return base;
   const chunkCount = sql.countCompanyChunks.get(company.id)?.n || 0;
@@ -60,19 +73,31 @@ function fillGlobals(text, company) {
   );
 }
 
+// Apply per-call variables (customer_name, account_number, ...) supplied by
+// the caller (Playground form, Vapi context). Unknown placeholders stay
+// untouched so a bad payload can't silently delete part of the prompt.
+function fillRuntimeVars(text, vars) {
+  if (!text || !vars || typeof vars !== 'object') return text;
+  return text.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (m, name) => {
+    const v = vars[name];
+    return (v !== undefined && v !== null && v !== '') ? String(v) : m;
+  });
+}
+
 function toCompany(row) {
   if (!row) return null;
   return {
-    id           : row.id,
-    userId       : row.user_id || null,
-    name         : row.name,
-    language     : row.language,
-    voiceId      : row.voice_id,
-    phoneNumber  : row.phone_number,
-    assistantId  : row.assistant_id,
-    hasKB        : !!row.kb_text,
-    systemPrompt : buildBaseSystemPrompt(row.system_prompt, row.kb_text),
-    raw          : { systemPrompt: row.system_prompt, kbText: row.kb_text },
+    id            : row.id,
+    userId        : row.user_id || null,
+    name          : row.name,
+    language      : row.language,
+    voiceId       : row.voice_id,
+    phoneNumber   : row.phone_number,
+    assistantId   : row.assistant_id,
+    lastSyncedAt  : row.last_synced_at || null,
+    hasKB         : !!row.kb_text,
+    systemPrompt  : buildBaseSystemPrompt(row.system_prompt, row.kb_text),
+    raw           : { systemPrompt: row.system_prompt, kbText: row.kb_text },
   };
 }
 
@@ -98,5 +123,6 @@ function invalidateCache(id) {
 
 module.exports = {
   loadCompany, listCompanies, listCompaniesFull, invalidateCache,
-  buildSystemPromptWithRAG,
+  buildSystemPromptWithRAG, fillGlobals, fillRuntimeVars,
+  NoActiveScenarioError,
 };

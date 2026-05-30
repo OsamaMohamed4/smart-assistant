@@ -10,7 +10,7 @@ const rateLimit = require('express-rate-limit');
 
 const multer = require('multer');
 const { db, sql } = require('./db');
-const { loadCompany, listCompaniesFull, invalidateCache, buildSystemPromptWithRAG } = require('./companies');
+const { loadCompany, listCompaniesFull, invalidateCache, buildSystemPromptWithRAG, fillGlobals } = require('./companies');
 const { summarize, chatToTranscript } = require('./summarize');
 const { ingestDocument, retrieve } = require('./lib/rag');
 const authRoutes = require('./routes/auth');
@@ -32,6 +32,19 @@ const upload = multer({
   fileFilter: (_req, file, cb) => {
     if (!ALLOWED_DOC_MIMES.has(file.mimetype)) {
       return cb(new Error('Unsupported file type. Allowed: PDF, DOCX, TXT, MD.'));
+    }
+    cb(null, true);
+  },
+});
+
+// Separate multer instance for audio (Playground mic upload). Capped lower
+// than docs (4MB ≈ 60s of opus webm) and limited to webm/ogg/wav/mp4 audio.
+const uploadAudio = multer({
+  storage: multer.memoryStorage(),
+  limits : { fileSize: 4 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    if (!/^audio\/(webm|ogg|wav|mpeg|mp4|x-m4a)/.test(file.mimetype)) {
+      return cb(new Error('Unsupported audio type'));
     }
     cb(null, true);
   },
@@ -65,19 +78,32 @@ app.set('trust proxy', TRUST_PROXY);
 
 // Strict CSP for the SPA. `unsafe-inline` on style is required by Tailwind's
 // runtime styles + lucide-react inline SVG styling. All script must be served
-// from same origin (no inline JS, no eval). `connect-src` covers fetch/XHR.
+// from same origin (no inline JS, no eval). `connect-src` covers fetch/XHR;
+// the Vapi Web SDK calls api.vapi.ai (REST), wss://*.vapi.ai (signaling),
+// and *.daily.co (WebRTC media servers Vapi uses under the hood).
 app.use(helmet({
   contentSecurityPolicy: {
     useDefaults: true,
     directives: {
       defaultSrc:     ["'self'"],
-      scriptSrc:      ["'self'"],
+      // Daily.co's WebRTC bundle (Vapi loads it dynamically) is evaluated via
+      // `eval` of a remote script. We have to allow both 'unsafe-eval' and
+      // c.daily.co in script-src for the SDK to start a call.
+      scriptSrc:      ["'self'", "'unsafe-eval'", 'https://*.daily.co'],
       scriptSrcAttr:  ["'none'"],
-      styleSrc:       ["'self'", "'unsafe-inline'"],
+      styleSrc:       ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
       imgSrc:         ["'self'", "data:", "blob:"],
-      fontSrc:        ["'self'", "data:"],
-      connectSrc:     ["'self'"],
-      mediaSrc:       ["'self'", "blob:"],
+      fontSrc:        ["'self'", "data:", 'https://fonts.gstatic.com'],
+      // Vapi SDK's own error telemetry routes through sentry.io.
+      connectSrc:     [
+        "'self'",
+        'https://api.vapi.ai', 'https://*.vapi.ai',
+        'wss://api.vapi.ai',   'wss://*.vapi.ai',
+        'https://*.daily.co',  'wss://*.daily.co',
+        'https://*.ingest.sentry.io',
+      ],
+      mediaSrc:       ["'self'", "blob:", 'https://*.vapi.ai', 'https://*.daily.co'],
+      workerSrc:      ["'self'", 'blob:'],
       objectSrc:      ["'none'"],
       frameAncestors: ["'none'"],
       baseUri:        ["'self'"],
@@ -203,7 +229,18 @@ function resolveCompany(req, res) {
     res.status(404).json({ error: `Unknown companyId: ${companyId}` });
     return null;
   }
-  return { company, message, history };
+  // Per-call template variables. Keys are simple identifiers; values are
+  // strings (truncated to avoid prompt bloat). Untrusted, so capped.
+  const rawVars = req.body?.variables;
+  const vars = {};
+  if (rawVars && typeof rawVars === 'object' && !Array.isArray(rawVars)) {
+    for (const [k, v] of Object.entries(rawVars)) {
+      if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k) && (typeof v === 'string' || typeof v === 'number')) {
+        vars[k] = String(v).slice(0, 200);
+      }
+    }
+  }
+  return { company, message, history, vars };
 }
 
 // Today's date in YYYY-MM-DD (UTC) — used as the bucket key for usage counters.
@@ -227,8 +264,8 @@ function audit(req, action, resource, metadata) {
   }
 }
 
-async function askGPT(company, message, history) {
-  const systemContent = await buildSystemPromptWithRAG(company, message);
+async function askGPT(company, message, history, vars) {
+  const systemContent = await buildSystemPromptWithRAG(company, message, vars);
   const messages = [
     { role: 'system', content: systemContent },
     ...history,
@@ -272,7 +309,7 @@ app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
   }
   const sessionId = getOrMakeSessionId(req);
   try {
-    const r = await askGPT(ctx.company, ctx.message, ctx.history);
+    const r = await askGPT(ctx.company, ctx.message, ctx.history, ctx.vars);
     sql.insertChat.run({
       company_id: ctx.company.id, session_id: sessionId,
       user_message: ctx.message, assistant_reply: r.reply,
@@ -282,72 +319,129 @@ app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
     res.setHeader('X-Session-Id', sessionId);
     res.json({ company: ctx.company.name, sessionId, reply: r.reply, ms: r.ms, usage: r.usage });
   } catch (err) {
+    if (err.code === 'NO_ACTIVE_SCENARIO') {
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
     req.log.error('GPT error', { err: err.message, companyId: ctx.company.id });
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/chat-voice', chatLimiter, requireAuth, async (req, res) => {
-  const ctx = resolveCompany(req, res);
-  if (!ctx) return;
-  if (!canChatWithCompany(req.user, ctx.company.id)) {
-    return res.status(403).json({ error: 'لا تملك صلاحية محادثة هذه الشركة' });
+// Playground voice catalog. Whitelist — only these IDs can be requested from
+// /chat-voice, so a tampered client can't bill an arbitrary ElevenLabs voice.
+// All three are Saudi-Arabic male voices already on the account.
+const PLAYGROUND_VOICES = [
+  { id: 'cFUFIbKkO2iZFwS8cRnY', name: 'Nasser',   label: 'ناصر',  description: 'سعودي محترف — صوت رسمي ومتزن', gender: 'male', accent: 'saudi' },
+  { id: 'usjDi9nBY6UHvtKrL4ba', name: 'Abdullah', label: 'عبدالله', description: 'سعودي راوي — هادئ ومُقنع',     gender: 'male', accent: 'saudi' },
+  { id: '2bnoa3wtrtcUW41TrSJM', name: 'Hisham',   label: 'هشام',   description: 'سعودي ودود — أدفأ وأكثر شعبية', gender: 'male', accent: 'saudi' },
+];
+const PLAYGROUND_VOICE_IDS = new Set(PLAYGROUND_VOICES.map((v) => v.id));
+
+app.get('/api/voices', requireAuth, (_req, res) => {
+  res.json(PLAYGROUND_VOICES);
+});
+
+// Outbound call: Vapi rings the user's phone using the company's synced
+// assistant. No WebRTC needed in the browser — Vapi handles the full PSTN
+// pipeline. Same assistant as a real customer call → same prompt, same voice,
+// same transcriber, real production behaviour.
+app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, res) => {
+  const c = loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'company not found' });
+  if (!c.assistantId) {
+    return res.status(409).json({ error: 'انشر الشركة على Vapi أولاً.', code: 'NOT_PUBLISHED' });
   }
-  const sessionId = getOrMakeSessionId(req);
-  const voiceId = ctx.company.voiceId || process.env.ELEVENLABS_VOICE_ID;
-  if (!voiceId) return res.status(500).json({ error: 'No voiceId configured' });
+  if (!process.env.VAPI_PHONE_NUMBER_ID) {
+    return res.status(503).json({ error: 'VAPI_PHONE_NUMBER_ID مش متضبط في .env' });
+  }
+  const phoneNumber = String(req.body?.phoneNumber || '').trim();
+  // E.164 format: +<country><number>, total 8–15 digits after the plus.
+  if (!/^\+[1-9]\d{7,14}$/.test(phoneNumber)) {
+    return res.status(400).json({ error: 'رقم تليفون غير صالح. الصيغة: +966XXXXXXXXX' });
+  }
+  const rawVars = req.body?.variableValues;
+  const vars = {};
+  if (rawVars && typeof rawVars === 'object' && !Array.isArray(rawVars)) {
+    for (const [k, v] of Object.entries(rawVars)) {
+      if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k) && (typeof v === 'string' || typeof v === 'number')) {
+        vars[k] = String(v).slice(0, 200);
+      }
+    }
+  }
 
   try {
-    // Enforce per-company per-day TTS character budget BEFORE we call ElevenLabs.
-    const today = todayUtc();
-    const used = sql.getUsage.get(ctx.company.id, today, 'tts_chars')?.amount || 0;
-    if (used >= TTS_DAILY_CAP_CHARS) {
-      return res.status(429).json({ error: 'تم استنفاد حصة الصوت اليومية لهذه الشركة' });
-    }
-
-    const gpt = await askGPT(ctx.company, ctx.message, ctx.history);
-    sql.insertChat.run({
-      company_id: ctx.company.id, session_id: sessionId,
-      user_message: ctx.message, assistant_reply: gpt.reply,
-      channel: 'voice', latency_ms: gpt.ms,
-      user_id: req.user.id,
-    });
-
-    // Record the TTS spend optimistically (idempotent on hash collision = no-op).
-    sql.bumpUsage.run({
-      company_id: ctx.company.id, day: today, kind: 'tts_chars',
-      amount    : (gpt.reply || '').length,
-    });
-
-    const tts = await ttsStream(gpt.reply, voiceId);
-    // Bound the reply that travels via response header. Replies are already
-    // capped by max_tokens=300 (≈1200 chars), so base64 stays well under 8KB,
-    // but we hard-cap defensively against future limit changes.
-    const replyB64 = Buffer.from(String(gpt.reply || '').slice(0, 4000), 'utf8').toString('base64');
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('X-Company', encodeURIComponent(ctx.company.name));
-    res.setHeader('X-Reply-Text', replyB64);
-    res.setHeader('X-Gpt-Ms', String(gpt.ms));
-    res.setHeader('X-Session-Id', sessionId);
-
-    const t1 = Date.now();
-    let firstChunkMs = null;
-    tts.data.on('data', () => {
-      if (!firstChunkMs) {
-        firstChunkMs = Date.now() - t1;
-        res.setHeader('X-Tts-First-Chunk-Ms', String(firstChunkMs));
-      }
-    });
-    tts.data.on('error', (err) => {
-      req.log.error('TTS stream error', { err: err.message });
-      if (!res.headersSent) res.status(502).json({ error: 'TTS stream failed' });
-    });
-    tts.data.pipe(res);
-  } catch (err) {
-    req.log.error('chat-voice error', { err: err.response?.data || err.message });
-    if (!res.headersSent) res.status(500).json({ error: err.message });
+    const r = await axios.post(
+      'https://api.vapi.ai/call',
+      {
+        assistantId       : c.assistantId,
+        phoneNumberId     : process.env.VAPI_PHONE_NUMBER_ID,
+        customer          : { number: phoneNumber },
+        assistantOverrides: { variableValues: vars },
+      },
+      {
+        headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' },
+        timeout: VAPI_TIMEOUT_MS,
+      },
+    );
+    audit(req, 'playground.outbound', `calls/${r.data.id}`, { phoneNumber, companyId: c.id });
+    res.json({ callId: r.data.id, status: r.data.status });
+  } catch (e) {
+    const detail = e.response?.data?.message || e.response?.data?.error || e.message;
+    req.log.error('outbound-call error', { err: detail, companyId: c.id });
+    res.status(502).json({ error: String(detail).slice(0, 300) });
   }
 });
+
+// Text chat with the same Vapi assistant (no audio). Useful when the user
+// wants to test the scenario without a phone call. Vapi's /chat endpoint
+// runs the EXACT same prompt + variables but skips STT/TTS entirely.
+app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, res) => {
+  const c = loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'company not found' });
+  if (!c.assistantId) {
+    return res.status(409).json({ error: 'انشر الشركة على Vapi أولاً.', code: 'NOT_PUBLISHED' });
+  }
+  const message = String(req.body?.message || '').trim();
+  if (!message) return res.status(400).json({ error: 'message required' });
+  if (message.length > MAX_USER_MSG_CHARS) return res.status(413).json({ error: 'message too long' });
+  const previousChatId = String(req.body?.previousChatId || '').slice(0, 80) || undefined;
+  const rawVars = req.body?.variableValues;
+  const vars = {};
+  if (rawVars && typeof rawVars === 'object' && !Array.isArray(rawVars)) {
+    for (const [k, v] of Object.entries(rawVars)) {
+      if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k) && (typeof v === 'string' || typeof v === 'number')) {
+        vars[k] = String(v).slice(0, 200);
+      }
+    }
+  }
+
+  try {
+    const r = await axios.post(
+      'https://api.vapi.ai/chat',
+      {
+        assistantId       : c.assistantId,
+        input             : message,
+        previousChatId,
+        assistantOverrides: { variableValues: vars },
+      },
+      {
+        headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' },
+        timeout: VAPI_TIMEOUT_MS,
+      },
+    );
+    // Vapi returns output as an array of message objects.
+    const reply = (r.data.output || []).map((m) => m.content).filter(Boolean).join('\n').trim();
+    res.json({ chatId: r.data.id, reply });
+  } catch (e) {
+    const detail = e.response?.data?.message || e.response?.data?.error || e.message;
+    req.log.error('assistant-chat error', { err: detail, companyId: c.id });
+    res.status(502).json({ error: String(detail).slice(0, 300) });
+  }
+});
+
+// /chat-voice, /stt, /tts were the old browser-only voice pipeline. Vapi
+// Web SDK now handles audio in the Playground, so these routes are gone.
+// The /chat (text) endpoint above stays for non-voice scenarios + tests.
 
 // ─── Vapi webhook ────────────────────────────────────────────────
 // Verify the request was sent by Vapi using HMAC-SHA256 over the raw body.
@@ -506,8 +600,10 @@ app.get('/api/companies/:id', requireCompanyAccess, (req, res) => {
 
 app.post('/api/companies', (req, res) => {
   const b = req.body || {};
-  if (!b.id || !b.name || !b.systemPrompt) {
-    return res.status(400).json({ error: 'id, name, systemPrompt are required' });
+  // systemPrompt + kbText are legacy — Scenarios replaced them. Kept for old
+  // companies that still have them set; we don't require them at creation.
+  if (!b.id || !b.name) {
+    return res.status(400).json({ error: 'id and name are required' });
   }
   if (!COMPANY_ID_RE.test(b.id)) {
     return res.status(400).json({ error: 'id must be lowercase letters/digits/hyphens (max 40)' });
@@ -521,7 +617,7 @@ app.post('/api/companies', (req, res) => {
     voice_id      : b.voiceId || process.env.ELEVENLABS_VOICE_ID || null,
     phone_number  : b.phoneNumber || null,
     assistant_id  : null,
-    system_prompt : b.systemPrompt,
+    system_prompt : b.systemPrompt || '',
     kb_text       : b.kbText || null,
   });
   invalidateCache(b.id);
@@ -610,31 +706,57 @@ app.post('/api/calls/:id/summarize', ensureCallOwned, async (req, res) => {
   res.json({ summary });
 });
 
-// Vapi sync: create or patch the assistant from the company's current DB state.
+// Vapi sync: rebuild the Vapi assistant from the company's ACTIVE SCENARIO.
+// Everything that matters — system prompt, first message, success criteria,
+// variable list — comes from the scenario row. Pressing this button is the
+// only thing that should change what callers hear on the phone, so the
+// /admin Scenarios page is the only source of truth.
 app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) => {
   const c = loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
 
+  const scenarioRow = sql.getActiveScenarioForCompany.get(c.id);
+  if (!scenarioRow || !scenarioRow.instruction_prompt) {
+    return res.status(409).json({
+      error: 'فعّل سيناريو أولاً قبل النشر — الـ Vapi assistant بيتبني من السيناريو النشط.',
+      code : 'NO_ACTIVE_SCENARIO',
+    });
+  }
+  const scenario = shapeScenario(scenarioRow);
+
+  // Apply globals to the instruction prompt so {{date}}/{{time}}/{{agent_name}}
+  // get sensible defaults baked in. Per-call vars (customer_name, etc) stay
+  // as placeholders — Vapi interpolates them from variableValues at call time.
+  const { MASTER_PROMPT } = require('./lib/master-prompt');
+  const systemContent = MASTER_PROMPT + fillGlobals(scenario.instructionPrompt, c);
+
   const cfg = {
     name: `smart-assistant:${c.id}`,
     model: {
-      provider: 'openai', model: 'gpt-4o-mini', temperature: 0.7, maxTokens: 250,
-      messages: [{ role: 'system', content: c.systemPrompt }],
+      provider   : 'openai', model: 'gpt-4o-mini', temperature: 0.7, maxTokens: 300,
+      // endCall tool lets the model actually hang up by calling a function —
+      // without this, writing "end call" in the prompt does nothing because
+      // there's no tool to invoke. The scenario prompt instructs the agent
+      // to use this tool when the conversation is done.
+      tools      : [{ type: 'endCall' }],
+      messages   : [{ role: 'system', content: systemContent }],
     },
     voice: {
       provider: '11labs', voiceId: c.voiceId || process.env.ELEVENLABS_VOICE_ID,
       model: 'eleven_flash_v2_5', stability: 0.55, similarityBoost: 0.8,
       useSpeakerBoost: true, optimizeStreamingLatency: 4,
     },
+    // Azure ar-SA is specifically tuned for Saudi Arabic — better word
+    // accuracy on Saudi vocab (شقق/مكتب/إيجار) than the multilingual model.
     transcriber: { provider: 'azure', language: 'ar-SA' },
-    firstMessage: `حياك الله في ${c.name}، أنا المساعد الذكي. كيف أقدر أخدمك؟`,
-    firstMessageMode: 'assistant-speaks-first',
+    firstMessage     : scenario.firstMessage || `حياك الله في ${c.name}، كيف يقدر أساعدك؟`,
+    firstMessageMode : 'assistant-speaks-first',
     backgroundDenoisingEnabled: true,
-    silenceTimeoutSeconds: 30,
+    silenceTimeoutSeconds: 90,
     maxDurationSeconds: 600,
-    endCallPhrases: ['شكراً مع السلامة', 'باي باي', 'goodbye'],
+    endCallPhrases   : ['شكراً مع السلامة', 'باي باي', 'goodbye'],
     startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingEnabled: 'livekit' },
-    stopSpeakingPlan: { numWords: 2, voiceSeconds: 0.2, backoffSeconds: 1.0 },
+    stopSpeakingPlan : { numWords: 2, voiceSeconds: 0.2, backoffSeconds: 1.0 },
   };
 
   const headers = { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' };
@@ -642,7 +764,6 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   try {
     let assistantId = c.assistantId;
     if (!assistantId) {
-      // No saved id — look up by name in Vapi.
       const list = (await axios.get('https://api.vapi.ai/assistant', vapiOpts)).data || [];
       const found = list.find((a) => a.name === cfg.name);
       assistantId = found?.id || null;
@@ -653,11 +774,17 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
       const r = await axios.post('https://api.vapi.ai/assistant', cfg, vapiOpts);
       assistantId = r.data.id;
     }
-    if (assistantId !== c.assistantId) {
-      db.prepare('UPDATE companies SET assistant_id = ?, updated_at = datetime(\'now\') WHERE id = ?').run(assistantId, c.id);
-      invalidateCache(c.id);
-    }
-    res.json({ assistantId });
+    // Stamp last_synced_at so the UI can show "unpublished changes" when
+    // the active scenario gets edited after a sync.
+    db.prepare(`
+      UPDATE companies
+         SET assistant_id    = ?,
+             last_synced_at  = datetime('now'),
+             updated_at      = datetime('now')
+       WHERE id = ?
+    `).run(assistantId, c.id);
+    invalidateCache(c.id);
+    res.json({ assistantId, scenarioId: scenario.id, scenarioName: scenario.name });
   } catch (e) {
     req.log.error('vapi sync error', { err: e.response?.data || e.message, companyId: c.id });
     res.status(500).json({ error: e.response?.data?.message || e.message });
@@ -1054,6 +1181,14 @@ function detectVariables(prevConfig, ...texts) {
   return out;
 }
 
+// Returns the currently-active scenario for a company (or null). The
+// Playground uses this to render input-data fields, prefill the greeting,
+// and know whether to surface an "Activate a scenario first" empty state.
+app.get('/api/companies/:id/scenarios/active', requireCompanyAccess, (req, res) => {
+  const row = sql.getActiveScenarioForCompany.get(req.params.id);
+  res.json(row ? shapeScenario(row) : null);
+});
+
 app.get('/api/companies/:id/scenarios', requireCompanyAccess, (req, res) => {
   const tab = String(req.query.tab || 'active');
   const rows = tab === 'deleted'
@@ -1168,7 +1303,11 @@ const SCENARIO_GEN_SYSTEM = `أنت مهندس سيناريوهات لمنصة V
 
 السيناريو لازم يحتوي على:
 1. اسم واضح ومهني للسيناريو بالإنجليزية (مثل "Telecom Customer Service")
-2. رسالة افتتاحية بالعربية باستخدام المتغيرات {{customer_name}} و {{agent_name}}
+2. رسالة افتتاحية بالعربية على هذا النمط بالظبط:
+   "مرحباً {{customer_name}}، معك {{agent_name}} من <اسم الشركة الحقيقي>، كيف يقدر أساعدك اليوم؟"
+   - {{agent_name}} = اسم بشري للوكيل (هيتعبّى تلقائياً باسم الصوت المختار: ناصر أو عبدالله أو هشام).
+   - اسم الشركة اكتبه صريح كما هو (مثلاً: "وكن العقارية") — مش متغير.
+   - متخليش الـ agent يقول "أنا [اسم الشركة]" — هو شخص يعمل في الشركة، مش الشركة نفسها.
 3. instruction prompt تفصيلي بالعربية يحتوي على الأقسام:
    - AGENT IDENTITY & PURPOSE
    - TONE & STYLE (Saudi Najdi Arabic dialect, lahjet اللهجة السعودية)
@@ -1239,8 +1378,26 @@ app.post('/api/companies/:id/scenarios/generate', requireCompanyAccess, async (r
     audit(req, 'scenario.generate', `scenarios/${r.lastInsertRowid}`, { name });
     res.status(201).json(shapeScenario(sql.getScenario.get(r.lastInsertRowid)));
   } catch (e) {
-    req.log.error('scenario gen error', { err: e.message });
-    res.status(502).json({ error: e.message || 'AI generation failed' });
+    const hasKey = !!process.env.OPENAI_API_KEY;
+    req.log.error('scenario gen error', {
+      err    : e.message,
+      status : e.status,
+      type   : e.constructor?.name,
+      hasKey,
+    });
+    let msg = e.message || 'AI generation failed';
+    if (!hasKey) {
+      msg = 'OPENAI_API_KEY مش موجود على الخادم — أضفه في Railway Variables وأعد النشر.';
+    } else if (e.status === 401) {
+      msg = 'OPENAI_API_KEY غير صالح. تحقق من القيمة في Railway Variables.';
+    } else if (e.status === 429) {
+      msg = 'تم تجاوز الحصة أو معدّل الطلبات من OpenAI. تحقق من رصيد الحساب.';
+    } else if (/connection error/i.test(e.message || '') || e.constructor?.name === 'APIConnectionError') {
+      msg = 'تعذّر الاتصال بـ OpenAI من الخادم. تحقق من اتصال Railway بالإنترنت ومن صحة المفتاح.';
+    } else if (e.constructor?.name === 'APITimeoutError') {
+      msg = 'طلب OpenAI تأخر. حاول مرة ثانية أو قلّل وصف السيناريو.';
+    }
+    res.status(502).json({ error: msg });
   }
 });
 

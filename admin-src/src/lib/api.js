@@ -86,6 +86,22 @@ export const api = {
   // chat (playground)
   chat              : (body) => request('/chat', { method: 'POST', body: JSON.stringify(body) }),
 
+  // playground voice catalog (3 Saudi voices)
+  listVoices        : () => request('/api/voices'),
+
+  // currently-active scenario for a company (null if none) — used by playground
+  // to render the input-data form.
+  activeScenario    : (companyId) => request(`/api/companies/${companyId}/scenarios/active`),
+
+  // Vapi calls the user's phone using the company's synced assistant.
+  outboundCall      : (companyId, body) => request(`/api/companies/${companyId}/outbound-call`, {
+    method: 'POST', body: JSON.stringify(body),
+  }),
+  // Text chat against the Vapi assistant — same prompt, no audio.
+  assistantChat     : (companyId, body) => request(`/api/companies/${companyId}/assistant-chat`, {
+    method: 'POST', body: JSON.stringify(body),
+  }),
+
   // scenarios (per-company AI agents)
   listScenarios     : (companyId, tab = 'active') => request(`/api/companies/${companyId}/scenarios?tab=${tab}`),
   getScenario       : (id) => request(`/api/scenarios/${id}`),

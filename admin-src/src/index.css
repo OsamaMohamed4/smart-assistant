@@ -84,3 +84,24 @@ dialog::backdrop { background: rgba(14,15,18,0.45); backdrop-filter: blur(2px); 
   background-image: radial-gradient(rgba(255,255,255,0.08) 1px, transparent 1px);
   background-size: 14px 14px;
 }
+
+/* ─── Playground orb: drifting blobs that blend to a liquid look ── */
+.blob-anim   { animation: blob1 14s ease-in-out infinite; }
+.blob-anim-2 { animation: blob2 17s ease-in-out infinite; }
+.blob-anim-3 { animation: blob3 19s ease-in-out infinite; }
+
+@keyframes blob1 {
+  0%, 100% { transform: translate(0%,   0%)   scale(1);   }
+  33%      { transform: translate(15%, -10%)  scale(1.15);}
+  66%      { transform: translate(-10%, 15%)  scale(0.9); }
+}
+@keyframes blob2 {
+  0%, 100% { transform: translate(0%,   0%)   scale(1);   }
+  33%      { transform: translate(-15%, 10%)  scale(0.85);}
+  66%      { transform: translate(12%, -8%)   scale(1.15);}
+}
+@keyframes blob3 {
+  0%, 100% { transform: translate(0%,   0%)   scale(1);   }
+  33%      { transform: translate(8%,   12%)  scale(1.1); }
+  66%      { transform: translate(-12%, -6%)  scale(0.95);}
+}

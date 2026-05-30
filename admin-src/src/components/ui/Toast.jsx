@@ -11,7 +11,12 @@ export function ToastProvider({ children }) {
 
   const push = useCallback((msg, kind = 'info') => {
     const id = Math.random().toString(36).slice(2);
-    setToasts((s) => [...s, { id, msg, kind }]);
+    // Coerce object payloads (e.g. Vapi error events { type, msg, details })
+    // to a sensible string so we never throw React error #31 mid-render.
+    const text = typeof msg === 'string'
+      ? msg
+      : (msg?.msg || msg?.message || msg?.errorMsg || JSON.stringify(msg));
+    setToasts((s) => [...s, { id, msg: text, kind }]);
     setTimeout(() => setToasts((s) => s.filter((t) => t.id !== id)), 3500);
   }, []);
 

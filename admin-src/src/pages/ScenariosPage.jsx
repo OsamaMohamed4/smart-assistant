@@ -95,13 +95,25 @@ function ScenariosListPage({ companyId, companies, pinnedCompanyId, onPickCompan
   const [search, setSearch] = useState('');
   const [confirmDel, setConfirmDel] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [company, setCompany] = useState(null);     // for lastSyncedAt comparison
 
   useEffect(() => {
     setRows(null);
     api.listScenarios(companyId, tab)
       .then(setRows)
       .catch((e) => { push(e.message, 'error'); setRows([]); });
+    api.getCompany(companyId).then(setCompany).catch(() => {});
   }, [companyId, tab, refreshKey]);
+
+  // A scenario is "out of sync" with Vapi when it was edited after the last
+  // successful publish. We use the active scenario only — the others don't
+  // affect what the assistant says until activated + republished.
+  const isOutOfSync = (row) => {
+    if (!row.isActive) return false;
+    if (!company?.assistantId) return true;          // never published at all
+    if (!company.lastSyncedAt)  return true;
+    return new Date(row.updatedAt) > new Date(company.lastSyncedAt);
+  };
 
   const filtered = useMemo(() => {
     if (!rows) return null;
@@ -223,9 +235,14 @@ function ScenariosListPage({ companyId, companies, pinnedCompanyId, onPickCompan
                         <LangChip lang={r.language} />
                       </td>
                       <td className="px-4 py-3.5">
-                        {r.isActive
-                          ? <Badge tone="success" dot>نشط</Badge>
-                          : <Badge tone="neutral" dot>غير نشط</Badge>}
+                        <div className="flex flex-col items-end gap-1">
+                          {r.isActive
+                            ? <Badge tone="success" dot>نشط</Badge>
+                            : <Badge tone="neutral" dot>غير نشط</Badge>}
+                          {isOutOfSync(r) && (
+                            <Badge tone="warning" className="!text-[10px]">تغييرات غير منشورة</Badge>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3.5 text-[12.5px] text-ink-600 tabular-nums whitespace-nowrap">
                         {fmtDate(r.createdAt)}
@@ -296,7 +313,7 @@ function IconButton({ children, onClick, title, tone }) {
 }
 
 function LangChip({ lang }) {
-  const map = { ar: 'العربية', en: 'English', ur: 'اردو' };
+  const map = { ar: 'العربية', en: 'English' };
   return (
     <Badge tone="brand" className="!text-[10.5px] !py-0.5">{map[lang] || lang}</Badge>
   );
@@ -396,7 +413,6 @@ function ScenarioCreatePage({ companyId, onBack, onGenerating }) {
                 {[
                   { v: 'ar', l: 'العربية' },
                   { v: 'en', l: 'English' },
-                  { v: 'ur', l: 'اردو' },
                 ].map((opt) => (
                   <button
                     key={opt.v}
@@ -850,7 +866,6 @@ function ConfigurationTab({ scenario, update }) {
           {[
             { v: 'ar', l: 'العربية' },
             { v: 'en', l: 'English' },
-            { v: 'ur', l: 'اردو' },
           ].map((opt) => {
             const active = scenario.language === opt.v;
             return (

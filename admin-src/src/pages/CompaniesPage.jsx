@@ -168,7 +168,7 @@ export function CompaniesPage({ onPickCompany }) {
             title={search ? 'ما فيه شركات تطابق البحث' : 'ابدأ بإنشاء أول شركة'}
             description={search
               ? `ما لقينا نتايج لـ "${search}". جرّب كلمة ثانية أو امسح البحث.`
-              : 'أضف شركة، اكتب الـ system prompt وقاعدة المعرفة، وانشرها على Vapi لتبدأ بالعمل خلال دقايق.'}
+              : 'أضف شركة (اسم + معرّف + صوت)، ارفع ملفات RAG اختيارياً، ثم أنشئ سيناريو وفعّله — وانشرها على Vapi.'}
             action={!search && (
               <Button variant="brand" onClick={() => { setEditing(null); setFormOpen(true); }} className="gap-1.5">
                 <Plus className="w-3.5 h-3.5" strokeWidth={2.5} /> شركة جديدة

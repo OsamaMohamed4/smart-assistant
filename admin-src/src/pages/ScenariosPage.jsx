@@ -40,7 +40,7 @@ export function ScenariosPage({ user, pinnedCompanyId }) {
         <EmptyState
           icon={FileText}
           title="ما فيه شركات لسه"
-          description="أنشئ شركة أولاً من تبويب الشركات قبل ما تعمل سيناريو."
+          description="أنشئ شركة أولاً من تبويب الشركات."
         />
       </div>
     );
@@ -191,14 +191,14 @@ function ScenariosListPage({ companyId, companies, pinnedCompanyId, onPickCompan
 
         {/* ─── Table ─── */}
         {!filtered ? (
-          <div className="p-12 text-center text-ink-400 text-[13px]">يحمّل...</div>
+          <div className="p-12 text-center text-ink-400 text-[13px]">جارٍ التحميل...</div>
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={Wand2}
-            title={tab === 'active' ? 'ابدأ بأول سيناريو' : 'ما فيه سيناريوهات محذوفة'}
+            title={tab === 'active' ? 'ابدأ بأول سيناريو' : 'لا توجد سيناريوهات محذوفة'}
             description={tab === 'active'
-              ? 'كل شركة محتاجة سيناريو على الأقل عشان الـ AI يعرف يرد. اضغط "سيناريو جديد" وخل الـ AI يولّد لك واحد.'
-              : 'لما تحذف سيناريو هيظهر هنا قبل ما يتمسح نهائياً.'}
+              ? 'كل شركة تحتاج سيناريو واحد على الأقل ليرد الـ AI.'
+              : 'السيناريوهات المحذوفة تظهر هنا قبل المسح النهائي.'}
             action={tab === 'active' && (
               <Button variant="brand" onClick={onCreate} className="gap-1.5">
                 <Sparkles className="w-3.5 h-3.5" /> سيناريو جديد
@@ -288,7 +288,7 @@ function ScenariosListPage({ companyId, companies, pinnedCompanyId, onPickCompan
         confirmVariant="danger"
         confirmLabel="حذف"
         title={`حذف "${confirmDel?.name}"؟`}
-        message="السيناريو هيتحذف من القائمة النشطة. تقدر تستعيده من تبويب المحذوفة قبل المسح النهائي."
+        message="يمكنك استعادته من تبويب المحذوفة قبل المسح النهائي."
       />
     </div>
   );
@@ -322,20 +322,20 @@ function LangChip({ lang }) {
 // ─── Create with AI page ─────────────────────────────────────
 
 const QUICK_STARTS = [
-  { id: 'support',     label: 'خدمة العملاء',  body: 'وكيل خدمة عملاء لشركة [اسم الشركة]. يرد على استفسارات العملاء عن الفواتير وحل المشاكل التقنية ومتابعة الطلبات. ينقل المكالمة لموظف بشري لو المشكلة معقدة.' },
-  { id: 'booking',     label: 'حجز مواعيد',    body: 'وكيل حجز مواعيد لعيادة طبية في الرياض. يحجز موعد للعميل، يتأكد من رقم تلفونه، ويرسل تأكيد رسالة نصية. لو الطبيب اللي طلبه مش متاح خلال أسبوعين يحوّل للموظف.' },
-  { id: 'restaurant',  label: 'حجز مطاعم',     body: 'وكيل حجز طاولات لمطعم في جدة. يأخذ اسم العميل، عدد الأشخاص، الوقت المفضل، وأي طلبات خاصة. يؤكد توافر الطاولة ويرسل تأكيد.' },
-  { id: 'sales',       label: 'مبيعات',         body: 'وكيل مبيعات لمنتج SaaS بالعربية. يجمع معلومات الـ lead (الاسم، الشركة، حجم الفريق، الميزانية المتوقعة)، يحدد قابلية الـ lead، ويحجز ديمو مع فريق المبيعات.' },
+  { id: 'support',     label: 'خدمة العملاء',  body: 'وكيل خدمة عملاء لشركة [اسم الشركة]. يرد على استفسارات العملاء عن الفواتير، يحل المشاكل التقنية، ويتابع الطلبات. يحوّل المكالمة لموظف عند المشاكل المعقدة.' },
+  { id: 'booking',     label: 'حجز مواعيد',    body: 'وكيل حجز مواعيد لعيادة طبية في الرياض. يحجز الموعد للعميل، يتحقق من رقم جواله، ويرسل رسالة تأكيد. يحوّل للموظف إذا كان الطبيب غير متاح خلال أسبوعين.' },
+  { id: 'restaurant',  label: 'حجز مطاعم',     body: 'وكيل حجز طاولات لمطعم في جدة. يأخذ اسم العميل، عدد الأشخاص، الوقت المفضل، وأي طلبات خاصة. يؤكد توفر الطاولة ويرسل التأكيد.' },
+  { id: 'sales',       label: 'مبيعات',         body: 'وكيل مبيعات لمنتج SaaS بالعربية. يجمع معلومات العميل المحتمل (الاسم، الشركة، حجم الفريق، الميزانية)، يحدّد جودته، ويحجز عرضاً تجريبياً.' },
 ];
 
 const INCLUDE_HINTS = [
-  { icon: Bot,        label: 'الدور',       hint: 'ايه نوع الوكيل ووظيفته الأساسية؟' },
-  { icon: Target,     label: 'الهدف',       hint: 'ايه اللي المفروض يحققه في المكالمة؟' },
-  { icon: Type,       label: 'النبرة',      hint: 'إزاي يتكلم — رسمي، ودود، مختصر؟' },
-  { icon: Hash,       label: 'بيانات الإدخال', hint: 'متغيرات معروفة قبل المكالمة (اسم العميل، رقم الحساب...)' },
-  { icon: ListChecks, label: 'بيانات للجمع', hint: 'إيه اللي محتاجه يكتشفه أثناء المكالمة؟' },
-  { icon: AlertTriangle, label: 'حالات التحويل', hint: 'إمتى يحوّل لإنسان؟' },
-  { icon: Wrench,     label: 'الأدوات',     hint: 'إنهاء المكالمة، تذاكر، تحويلات...' },
+  { icon: Bot,        label: 'الدور',         hint: 'نوع الوكيل ووظيفته الأساسية.' },
+  { icon: Target,     label: 'الهدف',         hint: 'ما الذي يجب تحقيقه في المكالمة.' },
+  { icon: Type,       label: 'النبرة',        hint: 'رسمي، ودود، مختصر.' },
+  { icon: Hash,       label: 'بيانات الإدخال', hint: 'متغيرات معروفة قبل المكالمة.' },
+  { icon: ListChecks, label: 'بيانات للجمع',  hint: 'ما يجب اكتشافه خلال المكالمة.' },
+  { icon: AlertTriangle, label: 'حالات التحويل', hint: 'متى يحوّل لإنسان.' },
+  { icon: Wrench,     label: 'الأدوات',       hint: 'إنهاء المكالمة، تذاكر، تحويلات.' },
 ];
 
 function ScenarioCreatePage({ companyId, onBack, onGenerating }) {
@@ -347,8 +347,8 @@ function ScenarioCreatePage({ companyId, onBack, onGenerating }) {
   return (
     <div>
       <TopBar
-        title="سيناريو جديد بالـ AI"
-        subtitle="اوصف الـ agent بالعامي وخلّي gpt-4o-mini يبنيه لك"
+        title="سيناريو جديد"
+        subtitle="صف الوكيل بكلماتك، والـ AI يولّد السيناريو."
         right={
           <Button variant="ghost" onClick={onBack} className="gap-1.5">
             <ArrowLeft className="w-3.5 h-3.5" /> رجوع للقائمة
@@ -361,9 +361,9 @@ function ScenarioCreatePage({ companyId, onBack, onGenerating }) {
           <div className="inline-flex w-14 h-14 rounded-2xl bg-gradient-to-br from-brand-400 to-accent-violet items-center justify-center shadow-pop mb-4">
             <Sparkles className="w-6 h-6 text-white" strokeWidth={2} />
           </div>
-          <h1 className="text-[24px] font-bold text-ink-900 tracking-tight">أي وكيل صوتي عاوز تبنيه؟</h1>
+          <h1 className="text-[24px] font-bold text-ink-900 tracking-tight">أي وكيل صوتي تريد بناءه؟</h1>
           <p className="mt-2 text-[14px] text-ink-500 max-w-xl mx-auto">
-            اوصف اللي عاوزه الـ agent يعمله، والـ AI هيولّد لك سيناريو كامل: رسالة افتتاحية، instructions، معايير نجاح.
+            صف المهمة، والـ AI يولّد سيناريو كاملاً: رسالة افتتاحية، تعليمات، ومعايير نجاح.
           </p>
         </div>
 
@@ -388,7 +388,7 @@ function ScenarioCreatePage({ companyId, onBack, onGenerating }) {
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value.slice(0, 10000))}
-                placeholder={"# الدور: ممثل خدمة عملاء لشركة اتصالات\n# الهدف: حل استفسارات الفواتير، مشاكل الحساب، طلبات الخدمة\n# النبرة: مهني، صبور، ودود، يتكلم اللهجة السعودية النجدية\n\n# بيانات الإدخال (معروفة قبل المكالمة):\n- customer_name: اسم العميل\n- account_number: رقم حسابه\n- account_balance: الرصيد الحالي\n\n# بيانات للجمع:\n- طبيعة الاستفسار (فاتورة، تقنية، تغيير خدمة)\n- تفاصيل المشكلة والحل اللي قدمته\n- وقت مفضل لمعاودة الاتصال (اختياري)\n\n# قواعد التحويل:\n- لمشاكل الدفع فوق 500 ريال حوّل لبشري\n- لمشاكل تقنية ما اتحلتش بعد محاولتين"}
+                placeholder={"# الدور: ممثل خدمة عملاء لشركة اتصالات\n# الهدف: حل استفسارات الفواتير والمشاكل التقنية\n# النبرة: مهني، صبور، باللهجة السعودية النجدية\n\n# بيانات الإدخال:\n- customer_name\n- account_number\n\n# بيانات للجمع:\n- طبيعة الاستفسار\n- تفاصيل المشكلة\n\n# قواعد التحويل:\n- مشاكل الدفع فوق 500 ريال → حوّل لموظف"}
                 rows={16}
                 className="w-full resize-y bg-transparent rounded-2xl p-5 text-[13.5px] placeholder:text-ink-400 outline-none font-arabic leading-relaxed min-h-[360px]"
                 style={{ direction: 'rtl' }}
@@ -399,7 +399,7 @@ function ScenarioCreatePage({ companyId, onBack, onGenerating }) {
                 ready ? 'text-emerald-600' : 'text-ink-400')}>
                 {ready
                   ? <><CheckCircle2 className="w-3.5 h-3.5" /> جاهز للتوليد</>
-                  : <>اكتب 20 حرف على الأقل عشان تقدر تولّد</>}
+                  : <>اكتب 20 حرفاً على الأقل</>}
               </div>
               <div className="text-[12px] text-ink-500 tabular-nums">
                 {description.length} / 10,000
@@ -541,11 +541,11 @@ function ScenarioGeneratingPage({ companyId, description, language, onDone, onEr
           <div className="inline-flex w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-400 to-accent-violet items-center justify-center shadow-pop mb-5 animate-pulse">
             <Sparkles className="w-7 h-7 text-white" strokeWidth={2} />
           </div>
-          <h1 className="text-[26px] font-bold text-ink-900 tracking-tight">جاري توليد السيناريو</h1>
-          <p className="mt-2 text-[14px] text-ink-500">عادةً ياخد من 30 إلى 90 ثانية</p>
+          <h1 className="text-[26px] font-bold text-ink-900 tracking-tight">جارٍ توليد السيناريو</h1>
+          <p className="mt-2 text-[14px] text-ink-500">يستغرق من 30 إلى 90 ثانية.</p>
           <div className="mt-5 inline-flex items-center gap-2 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-xl text-[12px] text-amber-800">
             <AlertTriangle className="w-3.5 h-3.5" />
-            ابقى على الصفحة لحد ما الـ generation يخلص
+            ابقَ على الصفحة حتى ينتهي التوليد.
           </div>
         </div>
 
@@ -637,7 +637,7 @@ function ScenarioEditPage({ id, onBack }) {
   };
 
   if (!scenario) {
-    return <div className="p-10 text-center text-ink-400">يحمّل السيناريو...</div>;
+    return <div className="p-10 text-center text-ink-400">جارٍ التحميل...</div>;
   }
 
   return (
@@ -725,7 +725,7 @@ function ScenarioTab({ scenario, update }) {
           <div>
             <Label className="!mb-0">الرسالة الافتتاحية</Label>
             <p className="text-[12px] text-ink-500 mt-1 max-w-2xl">
-              ده اللي الـ agent يقوله أول ما المكالمة تبدأ. تقدر تستخدم متغيرات زي {'{'}{'{'} customer_name {'}'}{'}'} هتتعبّى بالقيم الفعلية وقت المكالمة.
+              ما يقوله الوكيل عند بداية المكالمة. المتغيرات مثل {'{'}{'{'} customer_name {'}'}{'}'} تُعبّأ بالقيم الفعلية وقت المكالمة.
             </p>
           </div>
           <button
@@ -759,7 +759,7 @@ function ScenarioTab({ scenario, update }) {
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="text-[14px] font-semibold text-ink-900">متغيرات القالب</h3>
-            <p className="text-[12px] text-ink-500 mt-0.5">اتعرف عليها تلقائياً من اللي كاتبه فوق</p>
+            <p className="text-[12px] text-ink-500 mt-0.5">تُكتشف تلقائياً من النص أعلاه.</p>
           </div>
           <Badge tone="brand">{scenario.variables?.length || 0} متغير</Badge>
         </div>
@@ -790,14 +790,14 @@ function ScenarioTab({ scenario, update }) {
           </div>
         ) : (
           <div className="text-[12.5px] text-ink-400 text-center py-6 border border-dashed border-ink-200 rounded-xl">
-            مفيش متغيرات لسه — استخدم {'{'}{'{'} variable_name {'}'}{'}'} في الـ prompt أو الرسالة الافتتاحية
+            لا توجد متغيرات. استخدم {'{'}{'{'} variable_name {'}'}{'}'} في الـ prompt أو الرسالة الافتتاحية.
           </div>
         )}
       </Card>
 
       {/* ─── Success criteria ─── */}
       <Card>
-        <Label hint="اللي بيحدّد لو الـ AI نجح في المكالمة">معايير النجاح</Label>
+        <Label hint="مقاييس نجاح المكالمة.">معايير النجاح</Label>
         <CriterionAdder onAdd={addCriterion} />
         <div className="mt-3 space-y-2">
           {(scenario.successCriteria || []).map((c, idx) => (
@@ -831,7 +831,7 @@ function ScenarioTab({ scenario, update }) {
           ))}
           {!scenario.successCriteria?.length && (
             <div className="text-[12.5px] text-ink-400 text-center py-4">
-              ضيف معيار واحد على الأقل عشان نعرف نقيس النجاح
+              أضف معياراً واحداً على الأقل.
             </div>
           )}
         </div>
@@ -848,7 +848,7 @@ function CriterionAdder({ onAdd }) {
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onAdd(text); setText(''); } }}
-        placeholder="مثال: تم تحديد نوع الاستفسار وجمع بيانات العميل"
+        placeholder="مثال: تم جمع بيانات العميل."
       />
       <Button variant="secondary" onClick={() => { onAdd(text); setText(''); }} disabled={!text.trim()}>
         إضافة
@@ -892,7 +892,7 @@ function ConfigurationTab({ scenario, update }) {
           <div>
             <h3 className="text-[14px] font-semibold text-ink-900">حالة السيناريو</h3>
             <p className="text-[12px] text-ink-500 mt-0.5">
-              لما يكون نشط، الـ agent بيستخدم هذا السيناريو في كل مكالمة وشات.
+              عند التفعيل، يستخدمه الوكيل في كل مكالمة وشات.
             </p>
           </div>
           <button
@@ -916,10 +916,9 @@ function ConfigurationTab({ scenario, update }) {
             <BookOpen className="w-4 h-4" />
           </div>
           <div className="flex-1">
-            <h3 className="text-[14px] font-semibold text-ink-900">قواعد المعرفة</h3>
+            <h3 className="text-[14px] font-semibold text-ink-900">قاعدة المعرفة</h3>
             <p className="text-[12px] text-ink-500 mt-0.5 leading-relaxed">
-              الـ agent بيستخدم قاعدة المعرفة المرفوعة في الشركة تلقائياً (تبويب "ملفات الـ RAG" داخل بيانات الشركة).
-              ربط KB منفصلة بكل سيناريو هييجي في تحديث قريب.
+              يستخدم الوكيل ملفات RAG المرفوعة في إعدادات الشركة تلقائياً.
             </p>
           </div>
         </div>

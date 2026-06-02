@@ -118,7 +118,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
         phoneNumber   : phone.trim(),
         variableValues: runtimeVars,
       });
-      push(`Vapi بيتصل بـ ${phone.trim()} دلوقتي`, 'success');
+      push(`جارٍ الاتصال بـ ${phone.trim()}`, 'success');
     } catch (e) {
       push(e.message, 'error');
     } finally {
@@ -130,7 +130,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
   const sendChat = async (text) => {
     const msg = text.trim();
     if (!msg || !published || chatBusy) return;
-    if (missingRequired) { push('املأ الحقول المطلوبة أولاً', 'error'); return; }
+    if (missingRequired) { push('عبّ الحقول المطلوبة', 'error'); return; }
     setInput('');
     setMessages((m) => [...m, { role: 'user', content: msg, time: new Date().toISOString() }]);
     setChatBusy(true);
@@ -159,8 +159,8 @@ export function PlaygroundPage({ pinnedCompanyId }) {
   if (!companyId) {
     return (
       <div className="p-10">
-        <EmptyState icon={Sparkles} title="ما فيه شركات لسه"
-          description="أنشئ شركة من تبويب الشركات قبل ما تجرّب المساعد." />
+        <EmptyState icon={Sparkles} title="لا توجد شركات"
+          description="أنشئ شركة من تبويب الشركات أولاً." />
       </div>
     );
   }
@@ -174,7 +174,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
           subtitle={
             scenario
               ? `${scenario.name} · ${activeCompany?.name || ''}`
-              : (scenLoading ? 'يحمّل السيناريو...' : (activeCompany?.name || ''))
+              : (scenLoading ? 'جارٍ التحميل...' : (activeCompany?.name || ''))
           }
           right={
             <div className="flex items-center gap-2">
@@ -212,8 +212,8 @@ export function PlaygroundPage({ pinnedCompanyId }) {
           <div className="flex-1 flex items-center justify-center p-10">
             <EmptyState
               icon={Settings2}
-              title="ما في سيناريو نشط"
-              description="فعّل سيناريو من تبويب السيناريوهات عشان تقدر تجرّب الـ Agent هنا."
+              title="لا يوجد سيناريو نشط"
+              description="فعّل سيناريو من تبويب السيناريوهات."
             />
           </div>
         )}
@@ -222,8 +222,8 @@ export function PlaygroundPage({ pinnedCompanyId }) {
           <div className="flex-1 flex items-center justify-center p-10">
             <EmptyState
               icon={AlertTriangle}
-              title="الشركة مش منشورة على Vapi"
-              description="روح الشركات واضغط 'تحديث/نشر' عشان السيناريو يتسجّل كـ Vapi assistant."
+              title="الشركة غير منشورة"
+              description="انشر الشركة من تبويب الشركات أولاً."
             />
           </div>
         )}
@@ -233,9 +233,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
             {scenarioOutOfSync && (
               <div className="mx-8 mt-5 inline-flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[12.5px] text-amber-900">
                 <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>
-                  السيناريو اتعدّل بعد آخر نشر — اضغط <strong>نشر</strong> في الشركات عشان التجربة تستخدم آخر نسخة.
-                </span>
+                <span>السيناريو عُدّل بعد آخر نشر. اضغط <strong>نشر</strong> لتحديث الـ assistant.</span>
               </div>
             )}
 
@@ -312,7 +310,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
             <span className="text-[12px] font-semibold text-ink-900 uppercase tracking-wider">صوت الـ Agent</span>
           </div>
           <p className="text-[11px] text-ink-500 mb-3 leading-relaxed">
-            الصوت الفعلي اللي بيتكلم على Vapi مأخوذ من إعدادات الشركة. اختيارك هنا بيحدّد <code className="font-mono">agent_name</code> اللي يقوله الـ agent.
+            اختيارك يحدّد قيمة <code className="font-mono">agent_name</code> فقط.
           </p>
           <div className="space-y-2">
             {voices.map((v) => {
@@ -382,13 +380,13 @@ function VoiceModePanel({ phone, setPhone, phoneOk, missingRequired, calling, on
         <div className="inline-flex w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-400 to-accent-violet items-center justify-center shadow-pop mb-5">
           <Phone className="w-7 h-7 text-white" strokeWidth={2} />
         </div>
-        <h2 className="text-[22px] font-bold text-ink-900 tracking-tight">جرّب الـ Agent على تليفونك</h2>
+        <h2 className="text-[22px] font-bold text-ink-900 tracking-tight">جرّب الوكيل على جوّالك</h2>
         <p className="mt-2 text-[13.5px] text-ink-500 leading-relaxed">
-          اكتب رقمك بصيغة دولية وVapi يتصل عليك بنفس الـ assistant اللي بيرد على العملاء فعلاً.
+          اكتب رقمك ليتصل بك الـ assistant.
         </p>
 
         <div className="mt-7 text-right">
-          <Label>رقم التليفون</Label>
+          <Label>رقم الجوال</Label>
           <div className="relative">
             <Input
               value={phone}
@@ -402,8 +400,8 @@ function VoiceModePanel({ phone, setPhone, phoneOk, missingRequired, calling, on
           <div className={cn('mt-2 text-[11.5px]',
             phone.trim() === '+966' || !phone ? 'text-ink-400'
               : phoneOk ? 'text-emerald-600' : 'text-rose-500')}>
-            {phoneOk ? '✓ صيغة صحيحة' :
-              (phone.trim() === '+966' || !phone) ? 'صيغة E.164: + ثم كود الدولة ثم الرقم بدون صفر'
+            {phoneOk ? '✓ صحيح' :
+              (phone.trim() === '+966' || !phone) ? 'مثال: +9665XXXXXXXX'
                 : 'صيغة غير صحيحة'}
           </div>
         </div>
@@ -411,7 +409,7 @@ function VoiceModePanel({ phone, setPhone, phoneOk, missingRequired, calling, on
         {missingRequired && (
           <div className="mt-4 inline-flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl text-[12px] text-amber-800">
             <AlertTriangle className="w-3.5 h-3.5" />
-            املأ الحقول المطلوبة في اليمين
+            عبّ الحقول المطلوبة
           </div>
         )}
 
@@ -425,12 +423,8 @@ function VoiceModePanel({ phone, setPhone, phoneOk, missingRequired, calling, on
               : 'bg-ink-200 text-ink-400 cursor-not-allowed',
           )}>
           {calling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Phone className="w-4 h-4" />}
-          {calling ? 'بيتصل...' : 'ابدأ المكالمة'}
+          {calling ? 'جارٍ الاتصال...' : 'ابدأ المكالمة'}
         </button>
-
-        <p className="mt-3 text-[11px] text-ink-400">
-          المكالمة بتنزل من رصيد Vapi (~$0.11/min) + تكلفة Twilio.
-        </p>
       </div>
     </div>
   );
@@ -448,14 +442,10 @@ function ChatModePanel({ messages, input, setInput, onSend, busy, company, onRes
         {messages.length === 0 ? (
           <div className="max-w-2xl mx-auto pt-16 text-center">
             <Avatar name={company?.name || 'AI'} size={56} className="mx-auto" />
-            <h2 className="mt-5 text-[20px] font-bold text-ink-900">جرّب {company?.name} عبر الشات</h2>
+            <h2 className="mt-5 text-[20px] font-bold text-ink-900">شات مع {company?.name}</h2>
             <p className="mt-2 text-[13.5px] text-ink-500 max-w-md mx-auto leading-relaxed">
-              نفس الـ Vapi assistant بنفس السيناريو والمتغيرات — رد نصي بس بدون صوت.
+              نفس الـ assistant بنفس السيناريو، ردود نصية.
             </p>
-            <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-ink-50 border border-ink-100 rounded-xl text-[11.5px] text-ink-600">
-              <MessageSquare className="w-3.5 h-3.5" />
-              ابعت أي رسالة عشان تبدأ
-            </div>
           </div>
         ) : (
           <div className="max-w-2xl mx-auto space-y-4">
@@ -479,7 +469,7 @@ function ChatModePanel({ messages, input, setInput, onSend, busy, company, onRes
           {messages.length > 0 && (
             <div className="flex items-center justify-end mb-2">
               <button onClick={onReset} className="text-[11.5px] text-ink-500 hover:text-ink-800 flex items-center gap-1">
-                <RotateCcw className="w-3 h-3" /> ابدأ جلسة جديدة
+                <RotateCcw className="w-3 h-3" /> جلسة جديدة
               </button>
             </div>
           )}
@@ -489,7 +479,7 @@ function ChatModePanel({ messages, input, setInput, onSend, busy, company, onRes
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKey}
               rows={1}
-              placeholder={missingRequired ? 'املأ الحقول المطلوبة أولاً...' : 'اكتب رسالتك...'}
+              placeholder={missingRequired ? 'عبّ الحقول المطلوبة...' : 'اكتب رسالتك...'}
               disabled={busy || missingRequired}
               className="w-full resize-none bg-transparent rounded-2xl px-4 py-3.5 pl-14 text-[14px] placeholder:text-ink-400 outline-none font-arabic leading-relaxed max-h-40 disabled:opacity-50"
               style={{ minHeight: 50 }}

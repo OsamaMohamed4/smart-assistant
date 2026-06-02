@@ -87,16 +87,14 @@ function ClientLogin({ company, companyId, currentUser, onAuthed, onLogout }) {
             لوحة تحكم {company.name}
           </h1>
           <p className="mt-1.5 text-[13px] text-ink-500">
-            سجّل دخولك بالبيانات اللي بعتتها لك الإدارة.
+            سجّل دخولك ببيانات الإدارة.
           </p>
         </div>
 
         <div className="bg-white rounded-3xl shadow-pop border border-ink-100 p-7">
           {currentUser && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-[12.5px] text-amber-900 leading-relaxed">
-              إنت متسجّل دلوقتي بحساب <strong>{currentUser.email}</strong> ومش
-              مصرّح لـ <strong>{company.name}</strong>. سجّل دخول بحساب صحيح
-              أو ارجع لـ <button type="button" onClick={onLogout} className="underline underline-offset-2 font-semibold">تسجيل الخروج</button>.
+              أنت مسجّل بحساب <strong>{currentUser.email}</strong> غير مصرّح له بـ <strong>{company.name}</strong>. سجّل دخول بحساب آخر أو <button type="button" onClick={onLogout} className="underline underline-offset-2 font-semibold">سجّل خروج</button>.
             </div>
           )}
 

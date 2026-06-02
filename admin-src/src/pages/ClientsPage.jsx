@@ -99,16 +99,16 @@ export function ClientsPage() {
       {!companyId ? (
         <EmptyState
           icon={Building2}
-          title="مفيش شركات لسه"
-          description="اعمل شركة الأول من تبويب الشركات، وبعدها تقدر تضيف عملاء عليها."
+          title="لا توجد شركات"
+          description="أنشئ شركة من تبويب الشركات أولاً."
         />
       ) : loading ? (
         <div className="text-center text-ink-400 py-12 text-sm">جاري التحميل…</div>
       ) : clients.length === 0 ? (
         <EmptyState
           icon={Users}
-          title="ما عندكش عملاء لسه"
-          description="أضف عميل جديد علشان يدخل صفحة الشركة ويكلّم المساعد."
+          title="لا يوجد عملاء"
+          description="أضف عميلاً جديداً ليتمكن من دخول صفحة الشركة."
         />
       ) : (
         <div className="bg-white border border-ink-100 rounded-2xl overflow-hidden">
@@ -193,7 +193,7 @@ function CreateClientModal({ open, companyId, onClose, onCreated }) {
       open={open}
       onClose={onClose}
       title="عميل جديد"
-      description="النظام يولّد كلمة سر تلقائياً، انسخها وابعتها للعميل بأمان."
+      description="ستُنشأ كلمة سر تلقائياً — احفظها لإرسالها للعميل."
       size="sm"
       footer={<>
         <Button variant="brand" onClick={submit} loading={busy} disabled={!email || !companyId}>إنشاء الحساب</Button>
@@ -246,15 +246,15 @@ function NewCredentialsModal({ cred, companyId, onClose }) {
     <Modal
       open={!!cred}
       onClose={onClose}
-      title="بيانات الدخول للعميل"
-      description="انسخ البيانات وابعتها للعميل — كلمة السر دي ما تتعرضش تاني."
+      title="بيانات الدخول"
+      description="انسخها وأرسلها للعميل — لن تظهر كلمة السر مرة أخرى."
       size="sm"
       footer={<Button variant="primary" onClick={onClose}>تمام</Button>}
     >
       <div className="space-y-4">
         <div className="rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-[12.5px] text-amber-900">
           <KeyRound className="w-3.5 h-3.5 inline ml-1" />
-          <strong>مهم:</strong> كلمة السر دي تظهر مرة واحدة فقط. لو ضاعت محتاج تعمل حساب جديد.
+          <strong>تنبيه:</strong> كلمة السر تظهر مرة واحدة فقط. عند فقدها يلزم إنشاء حساب جديد.
         </div>
 
         <div>

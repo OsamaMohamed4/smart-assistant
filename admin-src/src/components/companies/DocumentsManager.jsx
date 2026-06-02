@@ -45,7 +45,7 @@ export function DocumentsManager({ companyId, companyName }) {
   };
 
   const onDelete = async (doc) => {
-    if (!confirm(`حذف ${doc.filename}؟ كل الـ chunks بتاعته هتتمسح.`)) return;
+    if (!confirm(`حذف ${doc.filename}؟ ستُمسح كل المقاطع المرتبطة به.`)) return;
     try {
       await api.deleteDocument(companyId, doc.id);
       push('تم الحذف', 'success');
@@ -94,10 +94,10 @@ export function DocumentsManager({ companyId, companyName }) {
           </div>
           <div>
             <div className="text-[13.5px] font-semibold text-ink-900">
-              {uploading ? 'جاري الرفع والمعالجة...' : 'اسحب ملف أو اضغط لاختياره'}
+              {uploading ? 'جارٍ المعالجة...' : 'اسحب ملفاً أو اضغط للاختيار'}
             </div>
             <div className="text-[11.5px] text-ink-500 mt-0.5">
-              PDF · DOCX · TXT · MD — حد أقصى {MAX_MB}MB لكل ملف
+              PDF · DOCX · TXT · MD — حتى {MAX_MB}MB لكل ملف
             </div>
           </div>
         </div>
@@ -123,7 +123,7 @@ export function DocumentsManager({ companyId, companyName }) {
         </div>
       ) : docs.length === 0 ? (
         <div className="text-center py-4 text-[12.5px] text-ink-500">
-          ما فيه مستندات لسه — ارفع ملف عشان يبدأ المساعد يجاوب منه
+          لا توجد مستندات. ارفع ملفاً ليبدأ المساعد بالاستفادة منه.
         </div>
       ) : (
         <div className="space-y-2">
@@ -205,7 +205,7 @@ function RAGTestModal({ open, onClose, companyId, companyName }) {
   };
 
   return (
-    <Modal open={open} onClose={onClose} size="lg" title="اختبار البحث في قاعدة المعرفة" description={`جرّب سؤال على ${companyName} وشوف أي مقاطع المساعد سيستخدمها`}>
+    <Modal open={open} onClose={onClose} size="lg" title="اختبار البحث" description={`اكتب سؤالاً وستظهر المقاطع التي يستخدمها مساعد ${companyName}.`}>
       <form onSubmit={run} className="space-y-3">
         <div className="relative">
           <input
@@ -225,7 +225,7 @@ function RAGTestModal({ open, onClose, companyId, companyName }) {
       <div className="mt-5">
         {!result && !busy && (
           <div className="text-center py-8 text-[12.5px] text-ink-400">
-            ادخل سؤال وشوف المقاطع اللي هتجي في الـ system prompt
+            اكتب سؤالاً لعرض المقاطع التي ستُدرج في الـ system prompt.
           </div>
         )}
         {result?.error && (
@@ -234,7 +234,7 @@ function RAGTestModal({ open, onClose, companyId, companyName }) {
         {result?.chunks && (
           <div className="space-y-2.5">
             {result.chunks.length === 0 && (
-              <div className="text-center py-6 text-[12.5px] text-ink-500">ما فيه مقاطع تطابق هذا السؤال</div>
+              <div className="text-center py-6 text-[12.5px] text-ink-500">لا توجد مقاطع مطابقة.</div>
             )}
             {result.chunks.map((c, i) => {
               const tone = c.score >= 0.4 ? 'success' : c.score >= 0.25 ? 'warning' : 'neutral';

@@ -73,7 +73,7 @@ export function CompaniesPage({ onPickCompany }) {
     setSyncingId(c.id);
     try {
       await api.syncVapi(c.id);
-      push(`نشرنا ${c.name} على Vapi`, 'success');
+      push(`تم نشر ${c.name}`, 'success');
       load();
     } catch (e) { push(e.message, 'error'); }
     finally { setSyncingId(null); }
@@ -84,7 +84,7 @@ export function CompaniesPage({ onPickCompany }) {
     setBindingId(bindOf.id);
     try {
       const r = await api.bindPhone(bindOf.id);
-      push(`الرقم ${r.phoneNumber} مربوط بـ ${bindOf.name}`, 'success');
+      push(`تم ربط الرقم ${r.phoneNumber} بـ ${bindOf.name}`, 'success');
       load();
     } catch (e) { push(e.message, 'error'); }
     finally { setBindingId(null); setBindOf(null); }
@@ -168,7 +168,7 @@ export function CompaniesPage({ onPickCompany }) {
             title={search ? 'ما فيه شركات تطابق البحث' : 'ابدأ بإنشاء أول شركة'}
             description={search
               ? `ما لقينا نتايج لـ "${search}". جرّب كلمة ثانية أو امسح البحث.`
-              : 'أضف شركة (اسم + معرّف + صوت)، ارفع ملفات RAG اختيارياً، ثم أنشئ سيناريو وفعّله — وانشرها على Vapi.'}
+              : 'أضف شركة، ارفع ملفات RAG، أنشئ سيناريو، ثم انشر.'}
             action={!search && (
               <Button variant="brand" onClick={() => { setEditing(null); setFormOpen(true); }} className="gap-1.5">
                 <Plus className="w-3.5 h-3.5" strokeWidth={2.5} /> شركة جديدة
@@ -209,7 +209,7 @@ export function CompaniesPage({ onPickCompany }) {
         confirmVariant="danger"
         confirmLabel="نعم، احذف"
         title={`حذف ${deleteOf?.name}؟`}
-        message="هذه العملية ستحذف الشركة وكل جلسات الشات والمكالمات المرتبطة بها نهائياً. لا يمكن التراجع."
+        message="سيتم حذف الشركة وكل جلساتها ومكالماتها نهائياً."
       />
 
       <ConfirmDialog
@@ -218,7 +218,7 @@ export function CompaniesPage({ onPickCompany }) {
         onConfirm={onBindPhone}
         confirmLabel="نعم، اربط"
         title={`ربط الرقم بـ ${bindOf?.name}؟`}
-        message="سيتم نقل الرقم +12182766062 إلى هذه الشركة، وفصله عن أي شركة أخرى. أي مكالمات قادمة هترد عليها هذه الشركة."
+        message="سيتم نقل الرقم لهذه الشركة وفصله عن أي شركة أخرى."
       />
     </div>
   );

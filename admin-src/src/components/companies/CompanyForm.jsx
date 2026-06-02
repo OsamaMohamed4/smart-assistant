@@ -12,8 +12,8 @@ import { cn } from '../../lib/utils';
 const EMPTY = { id: '', name: '', language: 'ar-SA', voiceId: '', systemPrompt: '', kbText: '' };
 
 const TABS = [
-  { id: 'basics', label: 'الأساسيات',     icon: Settings2 },
-  { id: 'rag',    label: 'قاعدة المعرفة (RAG)', icon: FileText,  desc: 'PDF / DOCX / TXT — بحث ذكي' },
+  { id: 'basics', label: 'الأساسيات',         icon: Settings2 },
+  { id: 'rag',    label: 'قاعدة المعرفة',     icon: FileText },
 ];
 
 // Slugify the company name into a URL-safe id. For mostly-English names we
@@ -71,7 +71,7 @@ export function CompanyForm({ open, onClose, onSave, initial, saving }) {
       open={open}
       onClose={onClose}
       title={isEdit ? `تعديل ${initial.name}` : 'شركة جديدة'}
-      description={isEdit ? 'حدّث البيانات وانشر التغييرات إلى Vapi بعدها' : 'املأ التفاصيل ثم انشر الشركة على Vapi ليبدأ المساعد بالعمل'}
+      description={isEdit ? 'حدّث البيانات ثم انشر التغييرات.' : 'أدخل اسم الشركة ثم انشرها بعد إنشاء سيناريو.'}
       size="lg"
       footer={tab !== 'rag' ? <>
         <Button variant="brand" onClick={submit} loading={saving}>
@@ -125,7 +125,7 @@ export function CompanyForm({ open, onClose, onSave, initial, saving }) {
 
 
           <div className="rounded-xl bg-brand-50/60 border border-brand-200/60 p-3 text-[12px] text-brand-900 leading-relaxed">
-            <strong>الـ Prompt والرسالة الافتتاحية</strong> اتنقلوا لتبويب <strong>السيناريوهات</strong>. أنشئ سيناريو وفعّله بعد ما تحفظ الشركة.
+            بعد الحفظ، أنشئ سيناريو من تبويب <strong>السيناريوهات</strong> وفعّله.
           </div>
         </form>
       )}

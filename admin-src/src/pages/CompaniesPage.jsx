@@ -165,7 +165,7 @@ export function CompaniesPage({ onPickCompany }) {
         {companies && filtered.length === 0 && (
           <EmptyState
             icon={search ? Building2 : Wand2}
-            title={search ? 'ما فيه شركات تطابق البحث' : 'ابدأ بإنشاء أول شركة'}
+            title={search ? 'لا توجد شركات مطابقة' : 'ابدأ بإنشاء أول شركة'}
             description={search
               ? `ما لقينا نتايج لـ "${search}". جرّب كلمة ثانية أو امسح البحث.`
               : 'أضف شركة، ارفع ملفات RAG، أنشئ سيناريو، ثم انشر.'}

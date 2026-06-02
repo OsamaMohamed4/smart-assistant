@@ -67,7 +67,7 @@ export function DashboardPage({ user, pinnedCompanyId }) {
     <div>
       <TopBar
         title="لوحة التحكم"
-        subtitle="نظرة شاملة على نشاط المساعد الذكي"
+        subtitle="نظرة شاملة على نشاط المساعد"
         right={(
           <div className="flex items-center gap-2">
             {isSuper && !locked && companies.length > 1 && (
@@ -153,7 +153,7 @@ export function DashboardPage({ user, pinnedCompanyId }) {
               icon={ArrowUpRight}
               label="مكالمات صادرة"
               value="0"
-              hint="قريباً — حملات outbound"
+              hint="حملات outbound — قريباً"
               accent="amber"
               dimmed
             />
@@ -295,9 +295,9 @@ function ChartEmpty() {
       <div className="w-12 h-12 rounded-2xl bg-ink-50 text-ink-400 flex items-center justify-center mb-3">
         <Building2 className="w-5 h-5" />
       </div>
-      <div className="text-[13px] font-semibold text-ink-700">ما فيه نشاط في الفترة دي</div>
+      <div className="text-[13px] font-semibold text-ink-700">لا يوجد نشاط في هذه الفترة</div>
       <p className="text-[11.5px] text-ink-500 mt-1 max-w-xs">
-        لما العملاء يبدأوا يكلموا المساعد، الرسم البياني هيتعبأ هنا تلقائياً.
+        سيظهر الرسم البياني تلقائياً عند بدء المحادثات.
       </p>
     </div>
   );

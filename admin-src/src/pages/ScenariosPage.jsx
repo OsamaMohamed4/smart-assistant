@@ -39,7 +39,7 @@ export function ScenariosPage({ user, pinnedCompanyId }) {
       <div className="p-10">
         <EmptyState
           icon={FileText}
-          title="ما فيه شركات لسه"
+          title="لا توجد شركات"
           description="أنشئ شركة أولاً من تبويب الشركات."
         />
       </div>

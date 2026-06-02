@@ -177,12 +177,12 @@ export function SessionsPage({ user, pinnedCompanyId }) {
         {/* ─── Table ─── */}
         <div className="bg-white border border-ink-100 rounded-2xl overflow-hidden shadow-card">
           {loading && !data.items.length ? (
-            <div className="p-12 text-center text-ink-400 text-[13px]">يحمّل المحادثات...</div>
+            <div className="p-12 text-center text-ink-400 text-[13px]">جارٍ التحميل...</div>
           ) : data.items.length === 0 ? (
             <EmptyState
               icon={Inbox}
-              title="ما فيه محادثات تطابق الفلتر"
-              description="جرّب تنظّف الفلاتر، أو غيّر الفترة الزمنية."
+              title="لا توجد محادثات مطابقة"
+              description="امسح الفلاتر أو غيّر الفترة الزمنية."
             />
           ) : (
             <div className="overflow-x-auto">

@@ -242,15 +242,6 @@ if (!hasColumn('companies', 'last_synced_at')) {
     `ALTER TABLE companies ADD COLUMN last_synced_at TEXT`);
 }
 
-// Migration 9: a scenario now has two opening lines — one for inbound calls
-// (no customer name available) and one for outbound (we know who we're
-// calling). The Vapi assistant's default firstMessage is the inbound one;
-// outbound calls override per-call with the personalized version.
-if (!hasColumn('scenarios', 'first_message_inbound')) {
-  runMigration(9, 'scenarios_add_first_message_inbound',
-    `ALTER TABLE scenarios ADD COLUMN first_message_inbound TEXT`);
-}
-
 // Migration 7: scenarios — each company can author multiple AI agent scenarios
 // (Customer Service / Booking / Sales / etc). At chat time the *active*
 // scenario for the company replaces the legacy company.system_prompt.
@@ -274,6 +265,16 @@ runMigration(7, 'create_scenarios', `
   CREATE INDEX IF NOT EXISTS idx_scenarios_company ON scenarios(company_id);
   CREATE INDEX IF NOT EXISTS idx_scenarios_active  ON scenarios(company_id, is_active, deleted_at);
 `);
+
+// Migration 9: a scenario now has two opening lines — one for inbound calls
+// (no customer name available) and one for outbound (we know who we're
+// calling). The Vapi assistant's default firstMessage is the inbound one;
+// outbound calls override per-call with the personalized version.
+// MUST run after migration 7 (which creates the scenarios table).
+if (!hasColumn('scenarios', 'first_message_inbound')) {
+  runMigration(9, 'scenarios_add_first_message_inbound',
+    `ALTER TABLE scenarios ADD COLUMN first_message_inbound TEXT`);
+}
 
 // ─── Prepared statements ──────────────────────────────────
 const sql = {

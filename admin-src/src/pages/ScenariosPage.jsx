@@ -622,12 +622,13 @@ function ScenarioEditPage({ id, onBack }) {
     setSaving(true);
     try {
       const updated = await api.updateScenario(id, {
-        name              : scenario.name,
-        firstMessage      : scenario.firstMessage,
-        instructionPrompt : scenario.instructionPrompt,
-        successCriteria   : scenario.successCriteria,
-        isActive          : scenario.isActive,
-        language          : scenario.language,
+        name                : scenario.name,
+        firstMessage        : scenario.firstMessage,
+        firstMessageInbound : scenario.firstMessageInbound,
+        instructionPrompt   : scenario.instructionPrompt,
+        successCriteria     : scenario.successCriteria,
+        isActive            : scenario.isActive,
+        language            : scenario.language,
       });
       setScenario(updated);
       setDirty(false);
@@ -719,17 +720,17 @@ function ScenarioTab({ scenario, update }) {
         />
       </Card>
 
-      {/* ─── First message ─── */}
+      {/* ─── First message (outbound) ─── */}
       <Card>
         <div className="flex items-start justify-between mb-2">
           <div>
-            <Label className="!mb-0">الرسالة الافتتاحية</Label>
+            <Label className="!mb-0">الرسالة الافتتاحية — مكالمات صادرة</Label>
             <p className="text-[12px] text-ink-500 mt-1 max-w-2xl">
-              ما يقوله الوكيل عند بداية المكالمة. المتغيرات مثل {'{'}{'{'} customer_name {'}'}{'}'} تُعبّأ بالقيم الفعلية وقت المكالمة.
+              ما يقوله الوكيل عندما نتصل نحن بالعميل. اسمه معروف، فاستخدم {'{'}{'{'} customer_name {'}'}{'}'}.
             </p>
           </div>
           <button
-            onClick={() => update({ firstMessage: scenario.firstMessage ? '' : 'مرحباً {{customer_name}}، معك {{agent_name}}.' })}
+            onClick={() => update({ firstMessage: scenario.firstMessage ? '' : 'مرحباً {{customer_name}}، معك {{agent_name}} من شركتنا.' })}
             className="text-[11.5px] text-ink-500 hover:text-ink-800"
           >
             {scenario.firstMessage ? 'إفراغ' : 'مثال'}
@@ -740,6 +741,30 @@ function ScenarioTab({ scenario, update }) {
           onChange={(e) => update({ firstMessage: e.target.value })}
           rows={3}
           placeholder="مرحباً {{customer_name}}، معك {{agent_name}} من..."
+        />
+      </Card>
+
+      {/* ─── First message (inbound) ─── */}
+      <Card>
+        <div className="flex items-start justify-between mb-2">
+          <div>
+            <Label className="!mb-0">الرسالة الافتتاحية — مكالمات واردة</Label>
+            <p className="text-[12px] text-ink-500 mt-1 max-w-2xl">
+              ما يقوله الوكيل عندما يتصل العميل بنا. اسمه غير معروف، فلا تستخدم {'{'}{'{'} customer_name {'}'}{'}'}؛ ابدأ بتحية عامة.
+            </p>
+          </div>
+          <button
+            onClick={() => update({ firstMessageInbound: scenario.firstMessageInbound ? '' : 'حياك الله، معك {{agent_name}} من شركتنا، كيف يقدر أساعدك؟' })}
+            className="text-[11.5px] text-ink-500 hover:text-ink-800"
+          >
+            {scenario.firstMessageInbound ? 'إفراغ' : 'مثال'}
+          </button>
+        </div>
+        <Textarea
+          value={scenario.firstMessageInbound || ''}
+          onChange={(e) => update({ firstMessageInbound: e.target.value })}
+          rows={3}
+          placeholder="حياك الله، معك {{agent_name}} من..."
         />
       </Card>
 

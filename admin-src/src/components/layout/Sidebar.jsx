@@ -12,7 +12,9 @@ const NAV_GROUPS = [
     items: [
       { id: 'scenarios',  label: 'السيناريوهات', icon: FileText,  hint: 'AI agents',         roles: ['superadmin', 'client'] },
       { id: 'playground', label: 'التجربة',     icon: Sparkles,  hint: 'صوت + شات',          roles: ['superadmin', 'client'] },
-      { id: 'companies',  label: 'الشركات',     icon: Building2, hint: 'إدارة',              roles: ['superadmin'] },
+      // 'companies' is visible to both superadmin and client. Inside a
+      // workspace, the page renders only the client's own company.
+      { id: 'companies',  label: 'الشركات',     icon: Building2, hint: 'إدارة',              roles: ['superadmin', 'client'] },
       { id: 'clients',    label: 'العملاء',     icon: Users,     hint: 'حسابات الزبائن',     roles: ['superadmin'] },
     ],
   },
@@ -33,9 +35,10 @@ function initials(label) {
 }
 
 export function Sidebar({ active, onChange, user, onLogout, workspaceMode = false }) {
-  // Management items only make sense outside workspace mode — inside a single
-  // company's URL there's no "list of companies" to surf to.
-  const WORKSPACE_HIDDEN = new Set(['companies', 'clients']);
+  // Inside a workspace there's no "list of clients" page — that's a
+  // control-plane concern. 'companies' is shown but the page itself filters
+  // to a single company.
+  const WORKSPACE_HIDDEN = new Set(['clients']);
   return (
     <aside className="w-[260px] shrink-0 bg-ink-950 text-ink-300 flex flex-col h-screen sticky top-0 border-l border-ink-800/60">
       {/* ─── Brand ─── */}

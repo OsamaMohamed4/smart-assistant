@@ -369,6 +369,15 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
     }
   }
 
+  // Outbound override: use the scenario's outbound first_message instead of
+  // the inbound default baked into the assistant. Vapi interpolates
+  // {{customer_name}}/etc from variableValues at call start.
+  const overrides = { variableValues: vars };
+  const activeScenario = sql.getActiveScenarioForCompany.get(c.id);
+  if (activeScenario?.first_message) {
+    overrides.firstMessage = activeScenario.first_message;
+  }
+
   try {
     const r = await axios.post(
       'https://api.vapi.ai/call',
@@ -376,7 +385,7 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
         assistantId       : c.assistantId,
         phoneNumberId     : process.env.VAPI_PHONE_NUMBER_ID,
         customer          : { number: phoneNumber },
-        assistantOverrides: { variableValues: vars },
+        assistantOverrides: overrides,
       },
       {
         headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' },
@@ -749,7 +758,13 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
     // Azure ar-SA is specifically tuned for Saudi Arabic — better word
     // accuracy on Saudi vocab (شقق/مكتب/إيجار) than the multilingual model.
     transcriber: { provider: 'azure', language: 'ar-SA' },
-    firstMessage     : scenario.firstMessage || `حياك الله في ${c.name}، كيف يقدر أساعدك؟`,
+    // Inbound default: the assistant-level firstMessage is what an unknown
+    // caller hears, so it must NOT depend on customer_name. We use the
+    // scenario's inbound variant, falling back to the outbound version
+    // (still better than a 404), then to a generic Saudi greeting.
+    firstMessage     : scenario.firstMessageInbound
+                    || scenario.firstMessage
+                    || `حياك الله في ${c.name}، كيف يقدر أساعدك؟`,
     firstMessageMode : 'assistant-speaks-first',
     backgroundDenoisingEnabled: true,
     silenceTimeoutSeconds: 90,
@@ -1137,19 +1152,22 @@ function parseVariables(raw) {
 function shapeScenario(row) {
   if (!row) return null;
   return {
-    id                : row.id,
-    companyId         : row.company_id,
-    name              : row.name,
-    description       : row.description || '',
-    firstMessage      : row.first_message || '',
-    instructionPrompt : row.instruction_prompt || '',
-    successCriteria   : parseCriteria(row.success_criteria),
-    variables         : parseVariables(row.variables),
-    isActive          : !!row.is_active,
-    language          : row.language || 'ar',
-    knowledgeBaseIds  : parseVariables(row.knowledge_base_ids),
-    createdAt         : row.created_at,
-    updatedAt         : row.updated_at,
+    id                  : row.id,
+    companyId           : row.company_id,
+    name                : row.name,
+    description         : row.description || '',
+    // Outbound (Vapi calls the customer; we know who's on the line).
+    firstMessage        : row.first_message || '',
+    // Inbound (customer calls us; identity unknown until later).
+    firstMessageInbound : row.first_message_inbound || '',
+    instructionPrompt   : row.instruction_prompt || '',
+    successCriteria     : parseCriteria(row.success_criteria),
+    variables           : parseVariables(row.variables),
+    isActive            : !!row.is_active,
+    language            : row.language || 'ar',
+    knowledgeBaseIds    : parseVariables(row.knowledge_base_ids),
+    createdAt           : row.created_at,
+    updatedAt           : row.updated_at,
   };
 }
 
@@ -1180,6 +1198,15 @@ function detectVariables(prevConfig, ...texts) {
   }
   return out;
 }
+
+// Single-active invariant: at most one scenario per company carries
+// is_active = 1. The activate / create / generate paths all funnel through
+// here so we never end up with two "winners" again. Runs as one SQLite
+// transaction so a partial failure can't leave the table inconsistent.
+const activateExclusively = db.transaction((companyId, scenarioId) => {
+  sql.deactivateAllScenariosForCompany.run({ company_id: companyId, except_id: scenarioId });
+  sql.setScenarioActive.run({ id: scenarioId, is_active: 1 });
+});
 
 // Returns the currently-active scenario for a company (or null). The
 // Playground uses this to render input-data fields, prefill the greeting,
@@ -1222,22 +1249,26 @@ app.post('/api/companies/:id/scenarios', requireCompanyAccess, (req, res) => {
   if (!name || !instructionPrompt) {
     return res.status(400).json({ error: 'name and instructionPrompt are required' });
   }
-  const firstMessage = String(b.firstMessage || '').slice(0, 2000);
+  const firstMessage        = String(b.firstMessage || '').slice(0, 2000);
+  const firstMessageInbound = String(b.firstMessageInbound || '').slice(0, 2000);
   const criteria     = Array.isArray(b.successCriteria) ? b.successCriteria : [];
-  const variables    = detectVariables(b.variables, firstMessage, instructionPrompt);
+  const variables    = detectVariables(b.variables, firstMessage, firstMessageInbound, instructionPrompt);
   const kbIds        = Array.isArray(b.knowledgeBaseIds) ? b.knowledgeBaseIds : [];
+  const wantActive = b.isActive !== false;
   const r = sql.insertScenario.run({
-    company_id         : req.params.id,
+    company_id              : req.params.id,
     name,
-    description        : String(b.description || '').slice(0, 4000),
-    first_message      : firstMessage,
-    instruction_prompt : instructionPrompt.slice(0, 30000),
-    success_criteria   : JSON.stringify(criteria),
-    variables          : JSON.stringify(variables),
-    is_active          : b.isActive === false ? 0 : 1,
-    language           : String(b.language || 'ar').slice(0, 8),
-    knowledge_base_ids : JSON.stringify(kbIds),
+    description             : String(b.description || '').slice(0, 4000),
+    first_message           : firstMessage,
+    first_message_inbound   : firstMessageInbound,
+    instruction_prompt      : instructionPrompt.slice(0, 30000),
+    success_criteria        : JSON.stringify(criteria),
+    variables               : JSON.stringify(variables),
+    is_active               : wantActive ? 1 : 0,
+    language                : String(b.language || 'ar').slice(0, 8),
+    knowledge_base_ids      : JSON.stringify(kbIds),
   });
+  if (wantActive) activateExclusively(req.params.id, r.lastInsertRowid);
   audit(req, 'scenario.create', `scenarios/${r.lastInsertRowid}`, { name });
   res.status(201).json(shapeScenario(sql.getScenario.get(r.lastInsertRowid)));
 });
@@ -1249,26 +1280,32 @@ app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
     return res.status(404).json({ error: 'not found' });
   }
   const b = req.body || {};
-  const firstMessage      = b.firstMessage      !== undefined ? String(b.firstMessage).slice(0, 2000) : existing.first_message;
-  const instructionPrompt = b.instructionPrompt !== undefined ? String(b.instructionPrompt).slice(0, 30000) : existing.instruction_prompt;
-  const prevVars          = parseVariables(existing.variables);
-  const variables         = b.variables !== undefined
-    ? (Array.isArray(b.variables) ? b.variables : detectVariables(prevVars, firstMessage, instructionPrompt))
-    : detectVariables(prevVars, firstMessage, instructionPrompt);
+  const firstMessage         = b.firstMessage         !== undefined ? String(b.firstMessage).slice(0, 2000)         : existing.first_message;
+  const firstMessageInbound  = b.firstMessageInbound  !== undefined ? String(b.firstMessageInbound).slice(0, 2000)  : (existing.first_message_inbound || '');
+  const instructionPrompt    = b.instructionPrompt    !== undefined ? String(b.instructionPrompt).slice(0, 30000)   : existing.instruction_prompt;
+  const prevVars             = parseVariables(existing.variables);
+  const variables            = b.variables !== undefined
+    ? (Array.isArray(b.variables) ? b.variables : detectVariables(prevVars, firstMessage, firstMessageInbound, instructionPrompt))
+    : detectVariables(prevVars, firstMessage, firstMessageInbound, instructionPrompt);
+  const nextIsActive = b.isActive !== undefined ? (b.isActive ? 1 : 0) : existing.is_active;
   sql.updateScenario.run({
-    id                 : existing.id,
-    name               : b.name             !== undefined ? String(b.name).trim().slice(0, 200) : existing.name,
-    description        : b.description      !== undefined ? String(b.description).slice(0, 4000) : (existing.description || ''),
-    first_message      : firstMessage,
-    instruction_prompt : instructionPrompt,
-    success_criteria   : b.successCriteria !== undefined ? JSON.stringify(b.successCriteria) : (existing.success_criteria || '[]'),
-    variables          : JSON.stringify(variables),
-    is_active          : b.isActive !== undefined ? (b.isActive ? 1 : 0) : existing.is_active,
-    language           : b.language         !== undefined ? String(b.language).slice(0, 8) : (existing.language || 'ar'),
-    knowledge_base_ids : b.knowledgeBaseIds !== undefined
+    id                       : existing.id,
+    name                     : b.name             !== undefined ? String(b.name).trim().slice(0, 200) : existing.name,
+    description              : b.description      !== undefined ? String(b.description).slice(0, 4000) : (existing.description || ''),
+    first_message            : firstMessage,
+    first_message_inbound    : firstMessageInbound,
+    instruction_prompt       : instructionPrompt,
+    success_criteria         : b.successCriteria !== undefined ? JSON.stringify(b.successCriteria) : (existing.success_criteria || '[]'),
+    variables                : JSON.stringify(variables),
+    is_active                : nextIsActive,
+    language                 : b.language         !== undefined ? String(b.language).slice(0, 8) : (existing.language || 'ar'),
+    knowledge_base_ids       : b.knowledgeBaseIds !== undefined
       ? JSON.stringify(b.knowledgeBaseIds)
       : (existing.knowledge_base_ids || '[]'),
   });
+  // If this PATCH flipped isActive ON, deactivate the other scenarios so we
+  // still satisfy the one-active-per-company invariant.
+  if (nextIsActive === 1) activateExclusively(existing.company_id, existing.id);
   audit(req, 'scenario.update', `scenarios/${existing.id}`, Object.keys(b));
   res.json(shapeScenario(sql.getScenario.get(existing.id)));
 });
@@ -1280,7 +1317,12 @@ app.post('/api/scenarios/:id/activate', requireAuth, (req, res) => {
     return res.status(404).json({ error: 'not found' });
   }
   const isActive = req.body?.isActive === false ? 0 : 1;
-  sql.setScenarioActive.run({ id: existing.id, is_active: isActive });
+  if (isActive) {
+    // Activating: this scenario becomes the sole active one for the company.
+    activateExclusively(existing.company_id, existing.id);
+  } else {
+    sql.setScenarioActive.run({ id: existing.id, is_active: 0 });
+  }
   audit(req, isActive ? 'scenario.activate' : 'scenario.deactivate', `scenarios/${existing.id}`);
   res.json({ id: existing.id, isActive: !!isActive });
 });
@@ -1303,9 +1345,12 @@ const SCENARIO_GEN_SYSTEM = `أنت مهندس سيناريوهات لمنصة V
 
 السيناريو لازم يحتوي على:
 1. اسم واضح ومهني للسيناريو بالإنجليزية (مثل "Telecom Customer Service")
-2. رسالة افتتاحية بالعربية على هذا النمط بالظبط:
-   "مرحباً {{customer_name}}، معك {{agent_name}} من <اسم الشركة الحقيقي>، كيف يقدر أساعدك اليوم؟"
-   - {{agent_name}} = اسم بشري للوكيل (هيتعبّى تلقائياً باسم الصوت المختار: ناصر أو عبدالله أو هشام).
+2. رسالتين افتتاحيتين بالعربية بصيغتين منفصلتين:
+   (a) first_message — للمكالمات الصادرة (outbound). نعرف اسم العميل، استخدم {{customer_name}}:
+       "مرحباً {{customer_name}}، معك {{agent_name}} من <اسم الشركة الحقيقي>، كيف يقدر أساعدك اليوم؟"
+   (b) first_message_inbound — للمكالمات الواردة (inbound). ما نعرف اسم العميل، استخدم تحية عامة:
+       "حياك الله في <اسم الشركة الحقيقي>، معك {{agent_name}}، كيف يقدر أساعدك اليوم؟"
+   - {{agent_name}} في الاتنين = اسم بشري للوكيل (هيتعبّى تلقائياً باسم الصوت المختار).
    - اسم الشركة اكتبه صريح كما هو (مثلاً: "وكن العقارية") — مش متغير.
    - متخليش الـ agent يقول "أنا [اسم الشركة]" — هو شخص يعمل في الشركة، مش الشركة نفسها.
 3. instruction prompt تفصيلي بالعربية يحتوي على الأقسام:
@@ -1322,6 +1367,7 @@ const SCENARIO_GEN_SYSTEM = `أنت مهندس سيناريوهات لمنصة V
 {
   "name": "...",
   "first_message": "...",
+  "first_message_inbound": "...",
   "instruction_prompt": "...",
   "success_criteria": ["...", "...", "..."]
 }`;
@@ -1353,28 +1399,33 @@ app.post('/api/companies/:id/scenarios/generate', requireCompanyAccess, async (r
       req.log.error('scenario gen: invalid JSON', { raw: raw.slice(0, 400) });
       return res.status(502).json({ error: 'AI returned invalid JSON; try again or rephrase' });
     }
-    const name              = String(parsed.name              || 'Generated Scenario').slice(0, 200);
-    const firstMessage      = String(parsed.first_message     || '').slice(0, 2000);
-    const instructionPrompt = String(parsed.instruction_prompt|| '').slice(0, 30000);
-    const criteriaArr       = Array.isArray(parsed.success_criteria) ? parsed.success_criteria : [];
-    const successCriteria   = criteriaArr.slice(0, 6).map((t, i) => ({
+    const name                  = String(parsed.name                  || 'Generated Scenario').slice(0, 200);
+    const firstMessage          = String(parsed.first_message          || '').slice(0, 2000);
+    const firstMessageInbound   = String(parsed.first_message_inbound  || '').slice(0, 2000);
+    const instructionPrompt     = String(parsed.instruction_prompt     || '').slice(0, 30000);
+    const criteriaArr           = Array.isArray(parsed.success_criteria) ? parsed.success_criteria : [];
+    const successCriteria       = criteriaArr.slice(0, 6).map((t, i) => ({
       text: String(t).slice(0, 500),
       primary: i === 0,
     }));
-    const variables = detectVariables([], firstMessage, instructionPrompt);
+    const variables = detectVariables([], firstMessage, firstMessageInbound, instructionPrompt);
 
     const r = sql.insertScenario.run({
-      company_id         : req.params.id,
+      company_id              : req.params.id,
       name,
       description,
-      first_message      : firstMessage,
-      instruction_prompt : instructionPrompt,
-      success_criteria   : JSON.stringify(successCriteria),
-      variables          : JSON.stringify(variables),
+      first_message           : firstMessage,
+      first_message_inbound   : firstMessageInbound,
+      instruction_prompt      : instructionPrompt,
+      success_criteria        : JSON.stringify(successCriteria),
+      variables               : JSON.stringify(variables),
       is_active          : 1,
       language,
       knowledge_base_ids : '[]',
     });
+    // AI-generated scenarios are immediately the new active one for the
+    // company, so deactivate any sibling that was previously winning.
+    activateExclusively(req.params.id, r.lastInsertRowid);
     audit(req, 'scenario.generate', `scenarios/${r.lastInsertRowid}`, { name });
     res.status(201).json(shapeScenario(sql.getScenario.get(r.lastInsertRowid)));
   } catch (e) {

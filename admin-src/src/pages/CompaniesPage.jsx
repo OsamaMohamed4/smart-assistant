@@ -11,8 +11,12 @@ import { useToast } from '../components/ui/Toast';
 import { api } from '../lib/api';
 import { cn, fmtNumber } from '../lib/utils';
 
-export function CompaniesPage({ onPickCompany }) {
+export function CompaniesPage({ onPickCompany, pinnedCompanyId, user }) {
   const { push } = useToast();
+  const isSuper    = user?.role === 'superadmin';
+  const isWorkspace = !!pinnedCompanyId;
+  const canManage  = isSuper;                       // create / delete / bind-phone
+
   const [companies, setCompanies] = useState(null);
   const [search, setSearch]       = useState('');
   const [sort, setSort]           = useState('recent');
@@ -25,10 +29,13 @@ export function CompaniesPage({ onPickCompany }) {
   const [bindOf, setBindOf]       = useState(null);
 
   const load = async () => {
-    try { setCompanies(await api.listCompanies()); }
-    catch (e) { push(e.message, 'error'); }
+    try {
+      const all = await api.listCompanies();
+      // Workspace view shows only the pinned company. Clients see the same.
+      setCompanies(pinnedCompanyId ? all.filter((c) => c.id === pinnedCompanyId) : all);
+    } catch (e) { push(e.message, 'error'); }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [pinnedCompanyId]);
 
   const filtered = useMemo(() => {
     if (!companies) return null;
@@ -103,26 +110,36 @@ export function CompaniesPage({ onPickCompany }) {
   return (
     <div>
       <TopBar
-        title="الشركات"
-        subtitle={totals ? `${fmtNumber(totals.companies)} شركة · ${fmtNumber(totals.synced)} منشورة · ${fmtNumber(totals.chats + totals.calls)} تفاعل` : 'جاري التحميل...'}
-        search={search}
-        onSearch={setSearch}
+        title={isWorkspace ? 'إعدادات الشركة' : 'الشركات'}
+        subtitle={
+          totals
+            ? (isWorkspace
+                ? (totals.synced ? 'منشورة على Vapi' : 'غير منشورة على Vapi')
+                : `${fmtNumber(totals.companies)} شركة · ${fmtNumber(totals.synced)} منشورة · ${fmtNumber(totals.chats + totals.calls)} تفاعل`)
+            : 'جارٍ التحميل...'
+        }
+        // Search is platform-wide only — inside a workspace there's a single
+        // company so a search box is pointless.
+        search={isWorkspace ? undefined : search}
+        onSearch={isWorkspace ? undefined : setSearch}
         searchPlaceholder="ابحث باسم الشركة أو المعرّف"
         right={<>
           <Button variant="secondary" size="md" onClick={load} className="gap-1.5">
             <RefreshCw className="w-3.5 h-3.5" strokeWidth={2} />
             تحديث
           </Button>
-          <Button variant="brand" size="md" onClick={() => { setEditing(null); setFormOpen(true); }} className="gap-1.5">
-            <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
-            شركة جديدة
-          </Button>
+          {canManage && (
+            <Button variant="brand" size="md" onClick={() => { setEditing(null); setFormOpen(true); }} className="gap-1.5">
+              <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
+              شركة جديدة
+            </Button>
+          )}
         </>}
       />
 
       <div className="px-8 py-7">
-        {/* ─── Hero stats strip ─── */}
-        {totals && (
+        {/* ─── Hero stats strip (platform-wide only) ─── */}
+        {!isWorkspace && totals && (
           <div className="grid grid-cols-4 gap-4 mb-6">
             <HeroStat label="إجمالي الشركات" value={fmtNumber(totals.companies)} hint="مفعّلة في النظام" accent="brand" />
             <HeroStat label="منشورة على Vapi" value={fmtNumber(totals.synced)} hint={`${totals.companies - totals.synced} غير منشورة`} accent="emerald" />
@@ -131,30 +148,32 @@ export function CompaniesPage({ onPickCompany }) {
           </div>
         )}
 
-        {/* ─── Toolbar ─── */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="text-[12px] text-ink-500 font-medium">
-            {filtered ? `${filtered.length} ${filtered.length === 1 ? 'شركة' : 'شركة'}` : '...'}
+        {/* ─── Toolbar (sort/search makes no sense for a single company) ─── */}
+        {!isWorkspace && (
+          <div className="flex items-center justify-between mb-4">
+            <div className="text-[12px] text-ink-500 font-medium">
+              {filtered ? `${filtered.length} شركة` : '...'}
+            </div>
+            <div className="flex items-center gap-1 text-[12px] text-ink-500 bg-white border border-ink-200 rounded-xl p-0.5">
+              {[
+                { id: 'recent',  label: 'الأحدث' },
+                { id: 'busiest', label: 'الأكثر نشاطاً' },
+                { id: 'name',    label: 'الاسم' },
+              ].map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => setSort(opt.id)}
+                  className={cn(
+                    'h-7 px-3 rounded-lg transition-colors',
+                    sort === opt.id ? 'bg-ink-900 text-white' : 'hover:bg-ink-100 text-ink-700',
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="flex items-center gap-1 text-[12px] text-ink-500 bg-white border border-ink-200 rounded-xl p-0.5">
-            {[
-              { id: 'recent',  label: 'الأحدث' },
-              { id: 'busiest', label: 'الأكثر نشاطاً' },
-              { id: 'name',    label: 'الاسم' },
-            ].map((opt) => (
-              <button
-                key={opt.id}
-                onClick={() => setSort(opt.id)}
-                className={cn(
-                  'h-7 px-3 rounded-lg transition-colors',
-                  sort === opt.id ? 'bg-ink-900 text-white' : 'hover:bg-ink-100 text-ink-700',
-                )}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        )}
 
         {/* ─── Grid ─── */}
         {!companies && (
@@ -167,9 +186,9 @@ export function CompaniesPage({ onPickCompany }) {
             icon={search ? Building2 : Wand2}
             title={search ? 'لا توجد شركات مطابقة' : 'ابدأ بإنشاء أول شركة'}
             description={search
-              ? `ما لقينا نتايج لـ "${search}". جرّب كلمة ثانية أو امسح البحث.`
+              ? `لا توجد نتائج لـ "${search}".`
               : 'أضف شركة، ارفع ملفات RAG، أنشئ سيناريو، ثم انشر.'}
-            action={!search && (
+            action={!search && canManage && (
               <Button variant="brand" onClick={() => { setEditing(null); setFormOpen(true); }} className="gap-1.5">
                 <Plus className="w-3.5 h-3.5" strokeWidth={2.5} /> شركة جديدة
               </Button>
@@ -177,11 +196,15 @@ export function CompaniesPage({ onPickCompany }) {
           />
         )}
         {companies && filtered.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className={cn(
+            'grid gap-4',
+            isWorkspace ? 'max-w-2xl mx-auto' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3',
+          )}>
             {filtered.map((c) => (
               <CompanyCard
                 key={c.id}
                 company={c}
+                canManage={canManage}
                 syncing={syncingId === c.id}
                 binding={bindingId === c.id}
                 onEdit={(c) => { setEditing(c); setFormOpen(true); }}

@@ -5,7 +5,10 @@ import { Button } from '../ui/Button';
 import { cn, fmtNumber, relTime } from '../../lib/utils';
 import { useState, useRef, useEffect } from 'react';
 
-export function CompanyCard({ company, onEdit, onSync, onBindPhone, onDelete, syncing, binding }) {
+// `canManage = false` hides destructive / platform-only actions (delete,
+// bind-phone). Clients see only edit + sync because that's all the backend
+// would let them do anyway — keeping the UI honest.
+export function CompanyCard({ company, onEdit, onSync, onBindPhone, onDelete, syncing, binding, canManage = true }) {
   const c = company;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
@@ -56,13 +59,17 @@ export function CompanyCard({ company, onEdit, onSync, onBindPhone, onDelete, sy
                     <button onClick={() => { setMenuOpen(false); onEdit(c); }} className="w-full px-3 py-2 text-right text-[13px] flex items-center gap-2.5 hover:bg-ink-50 text-ink-800">
                       <Pencil className="w-3.5 h-3.5 text-ink-500" strokeWidth={2} /> تعديل
                     </button>
-                    <button onClick={() => { setMenuOpen(false); onBindPhone(c); }} className="w-full px-3 py-2 text-right text-[13px] flex items-center gap-2.5 hover:bg-ink-50 text-ink-800">
-                      <Phone className="w-3.5 h-3.5 text-ink-500" strokeWidth={2} /> اربط الرقم
-                    </button>
-                    <div className="my-1 border-t border-ink-100" />
-                    <button onClick={() => { setMenuOpen(false); onDelete(c); }} className="w-full px-3 py-2 text-right text-[13px] flex items-center gap-2.5 hover:bg-rose-50 text-rose-700">
-                      <Trash2 className="w-3.5 h-3.5" strokeWidth={2} /> حذف الشركة
-                    </button>
+                    {canManage && (
+                      <button onClick={() => { setMenuOpen(false); onBindPhone(c); }} className="w-full px-3 py-2 text-right text-[13px] flex items-center gap-2.5 hover:bg-ink-50 text-ink-800">
+                        <Phone className="w-3.5 h-3.5 text-ink-500" strokeWidth={2} /> اربط الرقم
+                      </button>
+                    )}
+                    {canManage && <div className="my-1 border-t border-ink-100" />}
+                    {canManage && (
+                      <button onClick={() => { setMenuOpen(false); onDelete(c); }} className="w-full px-3 py-2 text-right text-[13px] flex items-center gap-2.5 hover:bg-rose-50 text-rose-700">
+                        <Trash2 className="w-3.5 h-3.5" strokeWidth={2} /> حذف الشركة
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

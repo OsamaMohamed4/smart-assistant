@@ -108,10 +108,11 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
   const isSuper = user.role === 'superadmin';
   const isWorkspace = !!pinnedCompanyId;
 
-  // Workspace view hides the platform-wide management tabs even for
-  // superadmin — you're inside ONE workspace, not the control plane.
+  // Workspace mode still hides the *list* of clients (that's a control-plane
+  // concern), but the company-settings tab is visible — a workspace owner
+  // needs to edit their own company details and republish to Vapi.
   const allowedTabs = isWorkspace
-    ? new Set(['dashboard', 'scenarios', 'playground', 'sessions'])
+    ? new Set(['dashboard', 'scenarios', 'playground', 'companies', 'sessions'])
     : isSuper
       ? new Set(['dashboard', 'scenarios', 'playground', 'companies', 'clients', 'sessions'])
       : new Set(['dashboard', 'scenarios', 'playground', 'sessions']);
@@ -130,7 +131,9 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         {activeTab === 'dashboard' && <DashboardPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'scenarios'  && <ScenariosPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'playground' && <PlaygroundPage pinnedCompanyId={pinnedCompanyId} />}
-        {activeTab === 'companies' && isSuper && !isWorkspace && <CompaniesPage />}
+        {activeTab === 'companies' && (isSuper || isWorkspace) && (
+          <CompaniesPage pinnedCompanyId={pinnedCompanyId} user={user} />
+        )}
         {activeTab === 'clients'   && isSuper && !isWorkspace && <ClientsPage />}
         {activeTab === 'sessions'  && <SessionsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
       </main>

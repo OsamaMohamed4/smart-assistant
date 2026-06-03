@@ -242,6 +242,15 @@ if (!hasColumn('companies', 'last_synced_at')) {
     `ALTER TABLE companies ADD COLUMN last_synced_at TEXT`);
 }
 
+// Migration 9: a scenario now has two opening lines — one for inbound calls
+// (no customer name available) and one for outbound (we know who we're
+// calling). The Vapi assistant's default firstMessage is the inbound one;
+// outbound calls override per-call with the personalized version.
+if (!hasColumn('scenarios', 'first_message_inbound')) {
+  runMigration(9, 'scenarios_add_first_message_inbound',
+    `ALTER TABLE scenarios ADD COLUMN first_message_inbound TEXT`);
+}
+
 // Migration 7: scenarios — each company can author multiple AI agent scenarios
 // (Customer Service / Booking / Sales / etc). At chat time the *active*
 // scenario for the company replaces the legacy company.system_prompt.
@@ -466,25 +475,28 @@ const sql = {
   // without losing history. listScenarios excludes deleted rows by default.
   insertScenario     : db.prepare(`
     INSERT INTO scenarios (
-      company_id, name, description, first_message, instruction_prompt,
-      success_criteria, variables, is_active, language, knowledge_base_ids
+      company_id, name, description, first_message, first_message_inbound,
+      instruction_prompt, success_criteria, variables, is_active, language,
+      knowledge_base_ids
     ) VALUES (
-      @company_id, @name, @description, @first_message, @instruction_prompt,
-      @success_criteria, @variables, @is_active, @language, @knowledge_base_ids
+      @company_id, @name, @description, @first_message, @first_message_inbound,
+      @instruction_prompt, @success_criteria, @variables, @is_active, @language,
+      @knowledge_base_ids
     )
   `),
   updateScenario     : db.prepare(`
     UPDATE scenarios SET
-      name               = @name,
-      description        = @description,
-      first_message      = @first_message,
-      instruction_prompt = @instruction_prompt,
-      success_criteria   = @success_criteria,
-      variables          = @variables,
-      is_active          = @is_active,
-      language           = @language,
-      knowledge_base_ids = @knowledge_base_ids,
-      updated_at         = datetime('now')
+      name                    = @name,
+      description             = @description,
+      first_message           = @first_message,
+      first_message_inbound   = @first_message_inbound,
+      instruction_prompt      = @instruction_prompt,
+      success_criteria        = @success_criteria,
+      variables               = @variables,
+      is_active               = @is_active,
+      language                = @language,
+      knowledge_base_ids      = @knowledge_base_ids,
+      updated_at              = datetime('now')
     WHERE id = @id AND deleted_at IS NULL
   `),
   listScenarios      : db.prepare(`
@@ -515,9 +527,34 @@ const sql = {
     UPDATE scenarios SET is_active = @is_active, updated_at = datetime('now')
      WHERE id = @id AND deleted_at IS NULL
   `),
+  // Used by the "exclusive activate" transaction below — clears all active
+  // flags inside a company before we set the new winner. Optionally excludes
+  // a scenario id we're about to flip ON so we don't toggle it twice.
+  deactivateAllScenariosForCompany: db.prepare(`
+    UPDATE scenarios
+       SET is_active = 0, updated_at = datetime('now')
+     WHERE company_id = @company_id
+       AND id != @except_id
+       AND is_active = 1
+       AND deleted_at IS NULL
+  `),
   softDeleteScenario : db.prepare(`
     UPDATE scenarios SET deleted_at = datetime('now'), is_active = 0
      WHERE id = ? AND deleted_at IS NULL
+  `),
+  // Helper used by the post-migration backfill to find every company that
+  // currently has more than one active scenario.
+  listCompaniesWithMultipleActives: db.prepare(`
+    SELECT company_id, COUNT(*) AS n
+      FROM scenarios
+     WHERE is_active = 1 AND deleted_at IS NULL
+     GROUP BY company_id
+     HAVING n > 1
+  `),
+  pickNewestActiveScenarioId: db.prepare(`
+    SELECT id FROM scenarios
+     WHERE company_id = ? AND is_active = 1 AND deleted_at IS NULL
+     ORDER BY updated_at DESC LIMIT 1
   `),
   restoreScenario    : db.prepare(`
     UPDATE scenarios SET deleted_at = NULL WHERE id = ?
@@ -614,6 +651,22 @@ try {
   }
 } catch (e) {
   console.error('[Auto-Seed] Failed to auto-seed database:', e.message);
+}
+
+// ─── Startup backfill: enforce one-active-scenario per company ─────
+// Older databases let several scenarios stay flagged is_active=1 at once.
+// The new policy is single-active per company; pick the most recently
+// edited one as the winner and clear the rest.
+try {
+  const dupes = sql.listCompaniesWithMultipleActives.all();
+  for (const { company_id } of dupes) {
+    const winner = sql.pickNewestActiveScenarioId.get(company_id);
+    if (!winner) continue;
+    sql.deactivateAllScenariosForCompany.run({ company_id, except_id: winner.id });
+    console.log(`[Backfill] company=${company_id} → kept scenario ${winner.id} active`);
+  }
+} catch (e) {
+  console.error('[Backfill] one-active-scenario failed:', e.message);
 }
 
 module.exports = { db, sql };

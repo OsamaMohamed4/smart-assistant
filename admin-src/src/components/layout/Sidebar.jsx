@@ -1,4 +1,4 @@
-import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles } from 'lucide-react';
+import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 // Two-tier nav: "Build" is where you author the assistant; "Monitor" is where
@@ -11,6 +11,7 @@ const NAV_GROUPS = [
     title: 'BUILD',
     items: [
       { id: 'scenarios',  label: 'السيناريوهات', icon: FileText,  hint: 'AI agents',         roles: ['superadmin', 'client'] },
+      { id: 'knowledge',  label: 'قاعدة المعرفة', icon: BookOpen, hint: 'RAG',                roles: ['superadmin', 'client'] },
       { id: 'playground', label: 'التجربة',     icon: Sparkles,  hint: 'صوت + شات',          roles: ['superadmin', 'client'] },
       // 'companies' is visible to both superadmin and client. Inside a
       // workspace, the page renders only the client's own company.

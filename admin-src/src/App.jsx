@@ -4,6 +4,7 @@ import { CompaniesPage } from './pages/CompaniesPage';
 import { SessionsPage } from './pages/SessionsPage';
 import { ScenariosPage } from './pages/ScenariosPage';
 import { PlaygroundPage } from './pages/PlaygroundPage';
+import { KnowledgeBasesPage } from './pages/KnowledgeBasesPage';
 import { WorkspaceGate } from './pages/WorkspaceGate';
 import { AuthPage } from './pages/AuthPage';
 import { ClientsPage } from './pages/ClientsPage';
@@ -112,10 +113,10 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
   // concern), but the company-settings tab is visible — a workspace owner
   // needs to edit their own company details and republish to Vapi.
   const allowedTabs = isWorkspace
-    ? new Set(['dashboard', 'scenarios', 'playground', 'companies', 'sessions'])
+    ? new Set(['dashboard', 'scenarios', 'knowledge', 'playground', 'companies', 'sessions'])
     : isSuper
-      ? new Set(['dashboard', 'scenarios', 'playground', 'companies', 'clients', 'sessions'])
-      : new Set(['dashboard', 'scenarios', 'playground', 'sessions']);
+      ? new Set(['dashboard', 'scenarios', 'knowledge', 'playground', 'companies', 'clients', 'sessions'])
+      : new Set(['dashboard', 'scenarios', 'knowledge', 'playground', 'sessions']);
   const activeTab = allowedTabs.has(tab) ? tab : 'dashboard';
 
   return (
@@ -130,6 +131,7 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
       <main className="flex-1 min-w-0">
         {activeTab === 'dashboard' && <DashboardPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'scenarios'  && <ScenariosPage user={user} pinnedCompanyId={pinnedCompanyId} />}
+        {activeTab === 'knowledge'  && <KnowledgeBasesPage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'playground' && <PlaygroundPage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'companies' && (isSuper || isWorkspace) && (
           <CompaniesPage pinnedCompanyId={pinnedCompanyId} user={user} />

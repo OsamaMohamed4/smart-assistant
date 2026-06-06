@@ -249,7 +249,7 @@ function NewCredentialsModal({ cred, companyId, onClose }) {
       title="بيانات الدخول"
       description="انسخها وأرسلها للعميل — لن تظهر كلمة السر مرة أخرى."
       size="sm"
-      footer={<Button variant="primary" onClick={onClose}>تمام</Button>}
+      footer={<Button variant="primary" onClick={onClose}>حسنًا</Button>}
     >
       <div className="space-y-4">
         <div className="rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-[12.5px] text-amber-900">

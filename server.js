@@ -331,9 +331,7 @@ app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
 // /chat-voice, so a tampered client can't bill an arbitrary ElevenLabs voice.
 // All three are Saudi-Arabic male voices already on the account.
 const PLAYGROUND_VOICES = [
-  { id: 'cFUFIbKkO2iZFwS8cRnY', name: 'Nasser',   label: 'ناصر',  description: 'سعودي محترف — صوت رسمي ومتزن', gender: 'male', accent: 'saudi' },
-  { id: 'usjDi9nBY6UHvtKrL4ba', name: 'Abdullah', label: 'عبدالله', description: 'سعودي راوي — هادئ ومُقنع',     gender: 'male', accent: 'saudi' },
-  { id: '2bnoa3wtrtcUW41TrSJM', name: 'Hisham',   label: 'هشام',   description: 'سعودي ودود — أدفأ وأكثر شعبية', gender: 'male', accent: 'saudi' },
+  { id: 'xvhpbk8otnNHtT3fjCpr', name: 'Omar', label: 'عمر', description: 'صوت عربي فصيح ومحترف', gender: 'male', accent: 'modern-standard' },
 ];
 const PLAYGROUND_VOICE_IDS = new Set(PLAYGROUND_VOICES.map((v) => v.id));
 
@@ -568,6 +566,151 @@ app.post('/webhook/vapi', async (req, res) => {
   try { await drainWebhookInbox(5); } catch (e) { req.log.error('drain failed', { err: e.message }); }
 });
 
+// ─── Twilio WhatsApp webhook ─────────────────────────────────────
+// Receives inbound WhatsApp messages from Twilio, runs them through the
+// same Vapi assistant the phone calls use, and replies via the Twilio
+// Messages API. The Twilio sandbox URL should be set to:
+//   POST https://<host>/webhook/twilio-whatsapp
+//
+// Body comes as application/x-www-form-urlencoded (Twilio's default), so
+// we mount a urlencoded parser scoped to this route only.
+
+// Twilio's signature scheme: HMAC-SHA1(authToken, URL + concat(sortedParams))
+// base64-encoded. Reject anything that doesn't match unless we're in dev
+// without an auth token configured (so local sandbox testing isn't blocked).
+function verifyTwilioSignature(req, fullUrl) {
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  if (!token) return process.env.NODE_ENV !== 'production';
+  const sig = req.get('x-twilio-signature') || '';
+  if (!sig) return false;
+  const params = req.body || {};
+  const sorted = Object.keys(params).sort();
+  const payload = fullUrl + sorted.map((k) => k + params[k]).join('');
+  const expected = crypto.createHmac('sha1', token).update(payload).digest('base64');
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sig));
+  } catch { return false; }
+}
+
+// Reply over the Twilio Messages API. Returns the message SID or throws.
+async function sendWhatsappReply(to, body) {
+  const sid   = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const from  = process.env.TWILIO_WHATSAPP_FROM;
+  if (!sid || !token || !from) throw new Error('Twilio WhatsApp not configured');
+  const form = new URLSearchParams({ From: from, To: to, Body: body }).toString();
+  const r = await axios.post(
+    `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
+    form,
+    {
+      auth   : { username: sid, password: token },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      timeout: 15_000,
+    },
+  );
+  return r.data?.sid;
+}
+
+app.post(
+  '/webhook/twilio-whatsapp',
+  express.urlencoded({ extended: false, limit: '1mb' }),
+  async (req, res) => {
+    // Reconstruct the URL Twilio signed (must match what's set in the console).
+    const fullUrl = (req.protocol + '://' + req.get('host') + req.originalUrl).split('?')[0];
+    if (!verifyTwilioSignature(req, fullUrl)) {
+      req.log.warn('twilio: bad signature', { url: fullUrl });
+      return res.status(403).send('bad signature');
+    }
+
+    const from = String(req.body.From || '');         // e.g. whatsapp:+9665XXXXXXXX
+    const body = String(req.body.Body || '').trim();
+    if (!from || !body) return res.status(200).send('');  // ignore status callbacks etc.
+
+    // Sandbox: every message routes to one configured company. Production
+    // would map each WhatsApp number to its own company.
+    const companyId = process.env.TWILIO_DEFAULT_COMPANY_ID;
+    if (!companyId) {
+      req.log.error('twilio: TWILIO_DEFAULT_COMPANY_ID not set');
+      return res.status(200).send('');
+    }
+    const company = loadCompany(companyId);
+    if (!company?.assistantId) {
+      req.log.error('twilio: company not published', { companyId });
+      try { await sendWhatsappReply(from, 'الخدمة غير متاحة حالياً. حاول لاحقاً.'); } catch {}
+      return res.status(200).send('');
+    }
+
+    // Resume the existing Vapi chat thread for this customer if we have one.
+    const prev = sql.getWhatsappSession.get(company.id, from);
+    const previousChatId = prev?.vapi_chat_id || undefined;
+
+    const t0 = Date.now();
+    let reply = '';
+    let newChatId = previousChatId;
+    try {
+      const r = await axios.post(
+        'https://api.vapi.ai/chat',
+        { assistantId: company.assistantId, input: body, previousChatId },
+        {
+          headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' },
+          timeout: VAPI_TIMEOUT_MS,
+        },
+      );
+      reply = (r.data.output || []).map((m) => m.content).filter(Boolean).join('\n').trim();
+      newChatId = r.data.id || newChatId;
+    } catch (e) {
+      // Vapi chat IDs expire — if the previous one is gone, retry without it.
+      if (previousChatId && /not found|invalid/i.test(e.response?.data?.message || '')) {
+        try {
+          const r = await axios.post(
+            'https://api.vapi.ai/chat',
+            { assistantId: company.assistantId, input: body },
+            {
+              headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' },
+              timeout: VAPI_TIMEOUT_MS,
+            },
+          );
+          reply = (r.data.output || []).map((m) => m.content).filter(Boolean).join('\n').trim();
+          newChatId = r.data.id;
+        } catch (e2) {
+          req.log.error('twilio: vapi chat (retry) failed', { err: e2.message });
+        }
+      } else {
+        req.log.error('twilio: vapi chat failed', { err: e.message, status: e.response?.status });
+      }
+    }
+
+    if (!reply) reply = 'تعذّر الرد حالياً. جرّب بعد دقيقة.';
+    const latency = Date.now() - t0;
+
+    // Persist the session id so the next inbound message resumes the thread.
+    sql.upsertWhatsappSession.run({
+      company_id: company.id, customer_phone: from, vapi_chat_id: newChatId || null,
+    });
+
+    // Log to the chats table so it shows up in the Conversations + Dashboard
+    // alongside voice/Vapi chats.
+    try {
+      sql.insertChat.run({
+        company_id     : company.id,
+        session_id     : 'wa-' + from.replace(/[^0-9]/g, ''),
+        user_message   : body,
+        assistant_reply: reply,
+        channel        : 'whatsapp',
+        latency_ms     : latency,
+        user_id        : null,
+      });
+    } catch (e) { req.log.error('twilio: chat insert failed', { err: e.message }); }
+
+    // Send the reply (best-effort — Twilio will retry the webhook if we 5xx).
+    try { await sendWhatsappReply(from, reply); }
+    catch (e) { req.log.error('twilio: send reply failed', { err: e.message }); }
+
+    // Twilio expects 200 + empty body (we already replied via the API).
+    res.type('text/xml').send('<Response></Response>');
+  },
+);
+
 // ─── Admin API ───────────────────────────────────────────────────
 app.get('/api/companies', (req, res) => {
   // Clients see only their own workspace; superadmins see everything.
@@ -737,12 +880,70 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   // get sensible defaults baked in. Per-call vars (customer_name, etc) stay
   // as placeholders — Vapi interpolates them from variableValues at call time.
   const { MASTER_PROMPT } = require('./lib/master-prompt');
-  const systemContent = MASTER_PROMPT + fillGlobals(scenario.instructionPrompt, c);
+  let systemContent = MASTER_PROMPT + fillGlobals(scenario.instructionPrompt, c);
+
+  // Vapi can't query our DB during a call, so any company documents the user
+  // expects the agent to know about have to be baked into the system prompt
+  // at sync time. Cap the dump so we don't blow past the model's context.
+  // Tightened from 30K → 10K: most companies have a few key docs, and a
+  // smaller prompt directly reduces per-turn LLM latency.
+  const KB_INJECT_CAP = 10000;   // chars
+  const chunks = sql.listAllChunksForCompany.all(c.id);
+  if (chunks.length) {
+    let kbBlock = '\n\n---\n\n## قاعدة معرفة الشركة\n\nاستخدم المعلومات التالية كمصدر حقائق رسمي. لا تختلق أسعاراً أو معلومات غير موجودة هنا:\n\n';
+    let used = kbBlock.length;
+    for (const ch of chunks) {
+      const seg = `\n### ${ch.filename} — مقطع ${ch.chunk_index}\n${ch.text}\n`;
+      if (used + seg.length > KB_INJECT_CAP) break;
+      kbBlock += seg;
+      used += seg.length;
+    }
+    systemContent += kbBlock;
+  }
+
+  // Final "brevity + voice-natural" block — appended LAST so it's freshest
+  // in the model's context window when generating each turn. Few-shot
+  // examples below teach the cadence faster than rules alone could.
+  systemContent += `
+
+---
+
+## قواعد المكالمة الصوتية (مهم جداً — التزم بها)
+- رد بجملة أو جملتين قصيرتين فقط، طبيعية كأنك بشري.
+- ما تستخدم أي تنسيق ماركداون: لا **، لا *، لا #، لا قوائم، لا أرقام مرقّمة.
+- ما تقرأ روابط أو رموز خاصة.
+- ابدأ ردودك بكلمات سعودية دافئة: حياك الله، أبشر، تدلل، تفضّل، طبعاً، أكيد، إن شاء الله، ما تحتاج.
+- اقرأ الأرقام بالكلمات: "500 ريال" → "خمسمائة ريال" — "1200" → "ألف ومئتين".
+- لو ما تعرف الإجابة: قل صراحة "محتاج أتأكد من الفريق وأرجع لك" — لا تخمن.
+- اسأل سؤال واحد في كل رد، مش أكثر.
+
+### أمثلة على نبرة طبيعية (التزم بنفس الأسلوب):
+العميل: السلام عليكم
+المساعد: وعليكم السلام ورحمة الله، حياك الله. كيف يقدر أساعدك اليوم؟
+
+العميل: كم سعر الشقة؟
+المساعد: تدلل، الشقة بسبعمائة ألف ريال. تحب أرتب لك معاينة؟
+
+العميل: متى مواعيدكم؟
+المساعد: أبشر، من الساعة تسعة الصباح إلى التاسعة مساءً، طوال أيام الأسبوع.
+
+العميل: شكراً
+المساعد: العفو، حياك الله أي وقت. في أمان الله.`;
+
+  // ELEVENLABS_VOICE_ID is the source of truth for the agent's voice. We
+  // ignore company.voice_id here because it gets stamped at seed time and
+  // becomes stale the moment you change voices globally. There's no admin
+  // UI for per-company voice overrides, so deferring to env is simplest.
+  const voiceId = process.env.ELEVENLABS_VOICE_ID || c.voiceId;
 
   const cfg = {
     name: `smart-assistant:${c.id}`,
     model: {
-      provider   : 'openai', model: 'gpt-4o-mini', temperature: 0.7, maxTokens: 300,
+      // 0.6 temperature + 200 maxTokens is the sweet spot we landed on:
+      // 0.5 was too robotic (judge marked replies as formulaic), and 150
+      // tokens cut sentences off mid-thought. Bumping both restores a
+      // natural cadence without giving back the speed win.
+      provider   : 'openai', model: 'gpt-4o-mini', temperature: 0.6, maxTokens: 200,
       // endCall tool lets the model actually hang up by calling a function —
       // without this, writing "end call" in the prompt does nothing because
       // there's no tool to invoke. The scenario prompt instructs the agent
@@ -751,7 +952,7 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
       messages   : [{ role: 'system', content: systemContent }],
     },
     voice: {
-      provider: '11labs', voiceId: c.voiceId || process.env.ELEVENLABS_VOICE_ID,
+      provider: '11labs', voiceId,
       model: 'eleven_flash_v2_5', stability: 0.55, similarityBoost: 0.8,
       useSpeakerBoost: true, optimizeStreamingLatency: 4,
     },

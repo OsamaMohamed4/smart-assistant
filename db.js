@@ -276,6 +276,28 @@ if (!hasColumn('scenarios', 'first_message_inbound')) {
     `ALTER TABLE scenarios ADD COLUMN first_message_inbound TEXT`);
 }
 
+// Migration 11: drop the qa_runs table. It was created by migration 10 for
+// the (since-removed) Assistant Test page; the feature was rolled back, so
+// the table is dead weight. IF EXISTS makes this safe on fresh databases
+// where migration 10 never ran.
+runMigration(11, 'drop_qa_runs', `
+  DROP TABLE IF EXISTS qa_runs;
+`);
+
+// Migration 12: WhatsApp conversation continuity. Vapi assigns each text
+// chat a chatId; passing it back as previousChatId keeps the conversation
+// stateful. We store the (company, customer phone) → vapi_chat_id mapping
+// so a customer messaging us over days resumes from where they left off.
+runMigration(12, 'create_whatsapp_sessions', `
+  CREATE TABLE IF NOT EXISTS whatsapp_sessions (
+    company_id     TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    customer_phone TEXT NOT NULL,
+    vapi_chat_id   TEXT,
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (company_id, customer_phone)
+  );
+`);
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users
@@ -470,6 +492,17 @@ const sql = {
     SELECT id, chunk_index, text, token_count
     FROM kb_chunks WHERE document_id = ? ORDER BY chunk_index ASC
   `),
+  // All chunks for a company, ordered for stable concatenation. Used at
+  // Vapi sync time to bake the KB into the assistant's system prompt
+  // (Vapi can't reach our DB at call time, so we inline it once).
+  listAllChunksForCompany: db.prepare(`
+    SELECT c.id, c.document_id, c.chunk_index, c.text, d.filename
+      FROM kb_chunks c
+      JOIN kb_documents d ON d.id = c.document_id
+     WHERE c.company_id = ?
+       AND d.deleted_at IS NULL
+     ORDER BY d.id ASC, c.chunk_index ASC
+  `),
 
   // ─── Scenarios (per-company AI agent configurations) ─────
   // Soft-deletes via deleted_at so we can show a "Recently Deleted" tab
@@ -559,6 +592,19 @@ const sql = {
   `),
   restoreScenario    : db.prepare(`
     UPDATE scenarios SET deleted_at = NULL WHERE id = ?
+  `),
+
+  // ─── WhatsApp sessions ──────────────────────────────────────
+  getWhatsappSession   : db.prepare(`
+    SELECT vapi_chat_id FROM whatsapp_sessions
+     WHERE company_id = ? AND customer_phone = ?
+  `),
+  upsertWhatsappSession: db.prepare(`
+    INSERT INTO whatsapp_sessions (company_id, customer_phone, vapi_chat_id, updated_at)
+    VALUES (@company_id, @customer_phone, @vapi_chat_id, datetime('now'))
+    ON CONFLICT(company_id, customer_phone) DO UPDATE
+       SET vapi_chat_id = excluded.vapi_chat_id,
+           updated_at   = datetime('now')
   `),
 
   // ─── Dashboard analytics ─────────────────────────────────

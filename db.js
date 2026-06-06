@@ -700,6 +700,17 @@ try {
   console.error('[Auto-Seed] Failed to auto-seed database:', e.message);
 }
 
+// One-time cleanup: drop the legacy demo seed companies if they're still
+// around. The seed JSON files have been deleted from disk, but volumes
+// created when the files still existed will already have these rows.
+// Idempotent — a no-op once the rows are gone.
+try {
+  const r = db.prepare("DELETE FROM companies WHERE id IN ('acme', 'techstore')").run();
+  if (r.changes) console.log(`[Cleanup] Removed ${r.changes} demo seed companies`);
+} catch (e) {
+  console.error('[Cleanup] demo companies failed:', e.message);
+}
+
 // ─── Startup backfill: enforce one-active-scenario per company ─────
 // Older databases let several scenarios stay flagged is_active=1 at once.
 // The new policy is single-active per company; pick the most recently

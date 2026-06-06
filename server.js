@@ -910,12 +910,15 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
 
 ## قواعد المكالمة الصوتية (مهم جداً — التزم بها)
 - رد بجملة أو جملتين قصيرتين فقط، طبيعية كأنك بشري.
+- **تكلم بطلاقة كأنك إنسان**: جمل مترابطة، لا تتوقف بين الكلمات. اربط الجمل بطبيعية بـ: يعني، طيب، تمام، حسناً، بس، لكن.
+- لا تكرّر اسم العميل في كل رد — مرّة في البداية تكفي.
 - ما تستخدم أي تنسيق ماركداون: لا **، لا *، لا #، لا قوائم، لا أرقام مرقّمة.
 - ما تقرأ روابط أو رموز خاصة.
 - ابدأ ردودك بكلمات سعودية دافئة: حياك الله، أبشر، تدلل، تفضّل، طبعاً، أكيد، إن شاء الله، ما تحتاج.
 - اقرأ الأرقام بالكلمات: "500 ريال" → "خمسمائة ريال" — "1200" → "ألف ومئتين".
 - لو ما تعرف الإجابة: قل صراحة "محتاج أتأكد من الفريق وأرجع لك" — لا تخمن.
 - اسأل سؤال واحد في كل رد، مش أكثر.
+- لو قاطعك العميل، توقّف فوراً واستمع، ثم رد على اللي قاله.
 
 ### أمثلة على نبرة طبيعية (التزم بنفس الأسلوب):
 العميل: السلام عليكم
@@ -953,8 +956,15 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
     },
     voice: {
       provider: '11labs', voiceId,
-      model: 'eleven_flash_v2_5', stability: 0.55, similarityBoost: 0.8,
-      useSpeakerBoost: true, optimizeStreamingLatency: 4,
+      model: 'eleven_flash_v2_5',
+      // stability 0.55 → 0.45: more variation across syllables, less of a
+      // monotone "report" cadence. similarityBoost 0.8 keeps the speaker
+      // identity tight despite the wider variation.
+      stability: 0.45, similarityBoost: 0.8,
+      useSpeakerBoost: true,
+      // 4 (max) streamed audio in tiny chunks → sounded chopped, "word by
+      // word". 3 keeps the start-time low but joins phonemes more smoothly.
+      optimizeStreamingLatency: 3,
     },
     // Azure ar-SA is specifically tuned for Saudi Arabic — better word
     // accuracy on Saudi vocab (شقق/مكتب/إيجار) than the multilingual model.
@@ -971,8 +981,16 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
     silenceTimeoutSeconds: 90,
     maxDurationSeconds: 600,
     endCallPhrases   : ['شكراً مع السلامة', 'باي باي', 'goodbye'],
-    startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingEnabled: 'livekit' },
-    stopSpeakingPlan : { numWords: 2, voiceSeconds: 0.2, backoffSeconds: 1.0 },
+    // 0.4 → 0.3s: the agent jumps in faster after the user stops talking.
+    // smartEndpointingEnabled tells Vapi to detect real end-of-speech via
+    // LiveKit's ML model rather than relying on raw silence.
+    startSpeakingPlan: { waitSeconds: 0.3, smartEndpointingEnabled: 'livekit' },
+    // Aggressive interrupt: stop the agent the instant the user starts
+    // speaking. numWords 1 (vs 2) means a single syllable triggers a stop;
+    // voiceSeconds 0.1 (vs 0.2) shortens the voice-activity confirmation;
+    // backoffSeconds 0.5 (vs 1.0) means it doesn't sulk for a full second
+    // after being cut off.
+    stopSpeakingPlan : { numWords: 1, voiceSeconds: 0.1, backoffSeconds: 0.5 },
   };
 
   const headers = { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' };

@@ -942,11 +942,11 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   const cfg = {
     name: `smart-assistant:${c.id}`,
     model: {
-      // 0.6 temperature + 200 maxTokens is the sweet spot we landed on:
-      // 0.5 was too robotic (judge marked replies as formulaic), and 150
-      // tokens cut sentences off mid-thought. Bumping both restores a
-      // natural cadence without giving back the speed win.
-      provider   : 'openai', model: 'gpt-4o-mini', temperature: 0.6, maxTokens: 200,
+      // gpt-4.1-mini: same OpenAI key, ~20% cost bump vs gpt-4o-mini,
+      // materially better Arabic comprehension and instruction-following
+      // (especially the "don't read markdown / pronounce numbers as words"
+      // rules). 0.6 temp + 200 maxTokens balance brevity with natural flow.
+      provider   : 'openai', model: 'gpt-4.1-mini', temperature: 0.6, maxTokens: 200,
       // endCall tool lets the model actually hang up by calling a function —
       // without this, writing "end call" in the prompt does nothing because
       // there's no tool to invoke. The scenario prompt instructs the agent
@@ -978,9 +978,22 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
                     || `حياك الله في ${c.name}، كيف يقدر أساعدك؟`,
     firstMessageMode : 'assistant-speaks-first',
     backgroundDenoisingEnabled: true,
-    silenceTimeoutSeconds: 90,
     maxDurationSeconds: 600,
     endCallPhrases   : ['شكراً مع السلامة', 'باي باي', 'goodbye'],
+    // Silence handling: after 8s of customer silence the agent prompts them
+    // with an idle line ("are you still with me?"), then again up to 2 more
+    // times. If the total session silence ever hits silenceTimeoutSeconds
+    // the call ends — set short (30s) so dead calls don't linger.
+    messagePlan: {
+      idleMessages: [
+        'هل لا زلت معي؟',
+        'تفضّل أستاذي، أنا في انتظارك.',
+        'في شي ثاني أقدر أساعدك فيه؟',
+      ],
+      idleMessageMaxSpokenCount: 2,
+      idleTimeoutSeconds: 8,
+    },
+    silenceTimeoutSeconds: 30,
     // 0.4 → 0.3s: the agent jumps in faster after the user stops talking.
     // smartEndpointingEnabled tells Vapi to detect real end-of-speech via
     // LiveKit's ML model rather than relying on raw silence.

@@ -915,10 +915,24 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
 - ما تستخدم أي تنسيق ماركداون: لا **، لا *، لا #، لا قوائم، لا أرقام مرقّمة.
 - ما تقرأ روابط أو رموز خاصة.
 - ابدأ ردودك بكلمات سعودية دافئة: حياك الله، أبشر، تدلل، تفضّل، طبعاً، أكيد، إن شاء الله، ما تحتاج.
-- اقرأ الأرقام بالكلمات: "500 ريال" → "خمسمائة ريال" — "1200" → "ألف ومئتين".
+
+### قاعدة الأرقام (إلزامية — أهم قاعدة):
+**ممنوع تماماً تكتب أي رقم بالأرقام (0-9). كل رقم في ردك يجب أن يكون بالكلمات العربية.**
+- "50,000" أو "50000" → "خمسين ألف"
+- "500" → "خمسمائة"
+- "1,200" → "ألف ومئتين"
+- "750" → "سبعمائة وخمسين"
+- "2.5%" → "اثنين ونص بالمئة"
+- "20 ألف" → "عشرين ألف"
+- "920031116" → نطق كل رقم منفرد: "تسعة، اثنين، صفر، صفر، ثلاثة، واحد، واحد، واحد، ستة"
+
+**حتى لو العميل قال الرقم بالأرقام أو الـ KB فيها أرقام رقمية، ردك يجب أن يكون بالكلمات فقط.**
+
+### قواعد أخرى:
 - لو ما تعرف الإجابة: قل صراحة "محتاج أتأكد من الفريق وأرجع لك" — لا تخمن.
 - اسأل سؤال واحد في كل رد، مش أكثر.
 - لو قاطعك العميل، توقّف فوراً واستمع، ثم رد على اللي قاله.
+- لا تكتب كلمات إنجليزية في ردك (Want، Can، etc.) — حتى لو العميل خلط لغته، إنت رد بعربي خالص.
 
 ### أمثلة على نبرة طبيعية (التزم بنفس الأسلوب):
 العميل: السلام عليكم
@@ -1010,6 +1024,26 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   const vapiOpts = { headers, timeout: VAPI_TIMEOUT_MS };
   try {
     let assistantId = c.assistantId;
+
+    // If we have a saved id, confirm it still exists on Vapi. The user could
+    // have deleted it from the Vapi dashboard, leaving our DB pointing at a
+    // dead UUID. PATCH would silently 404 and the user would think their
+    // config changes "aren't reaching Vapi". Verify first and clear if dead.
+    if (assistantId) {
+      try {
+        await axios.get(`https://api.vapi.ai/assistant/${assistantId}`, vapiOpts);
+      } catch (e) {
+        if (e.response?.status === 404) {
+          req.log.warn('vapi sync: stored assistant gone, recreating', { assistantId, companyId: c.id });
+          assistantId = null;
+        } else {
+          throw e;
+        }
+      }
+    }
+
+    // Still no id: try to find an existing one by name (lets us recover after
+    // a manual rename or a DB wipe), otherwise create from scratch.
     if (!assistantId) {
       const list = (await axios.get('https://api.vapi.ai/assistant', vapiOpts)).data || [];
       const found = list.find((a) => a.name === cfg.name);

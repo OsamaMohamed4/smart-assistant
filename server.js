@@ -1025,13 +1025,16 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
     // times. If the total session silence ever hits silenceTimeoutSeconds
     // the call ends — set short (30s) so dead calls don't linger.
     messagePlan: {
+      // Phrasing tuned to sound like a real Saudi rep checking in — not a
+      // canned "are you still there?". Rotates so the customer doesn't hear
+      // the same line twice if they pause more than once.
       idleMessages: [
-        'هل لا زلت معي؟',
-        'تفضّل أستاذي، أنا في انتظارك.',
-        'في شي ثاني أقدر أساعدك فيه؟',
+        'ألو أستاذي، معاي؟',
+        'أسمعك، تفضّل.',
+        'ممكن أكون فقدت الصوت عندك، إذا تسمعني أنا معك.',
       ],
       idleMessageMaxSpokenCount: 2,
-      idleTimeoutSeconds: 8,
+      idleTimeoutSeconds: 7,
     },
     silenceTimeoutSeconds: 30,
     // 0.4 → 0.3s: the agent jumps in faster after the user stops talking.

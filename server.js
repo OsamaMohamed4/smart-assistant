@@ -504,7 +504,10 @@ function captureWebhookAttempt(req) {
 // We accept any of the above so the user can pick whichever header survives
 // their reverse-proxy filtering. timingSafeEqual on every candidate.
 function verifyVapiSignature(req) {
-  const secret = process.env.VAPI_WEBHOOK_SECRET;
+  // Trim defensively: a single trailing newline or space pasted into the
+  // Railway env var makes timingSafeEqual return false even when the values
+  // look identical at a glance. Cheap insurance.
+  const secret = (process.env.VAPI_WEBHOOK_SECRET || '').trim();
   if (!secret) {
     // Unset secret is fatal in production; tolerated only in development.
     return process.env.NODE_ENV !== 'production';
@@ -522,7 +525,7 @@ function verifyVapiSignature(req) {
   for (const v of candidates) {
     if (!v) continue;
     try {
-      const b = Buffer.from(String(v));
+      const b = Buffer.from(String(v).trim());
       if (b.length === secretBuf.length && crypto.timingSafeEqual(b, secretBuf)) return true;
     } catch {}
   }
@@ -797,12 +800,17 @@ app.post(
 // is sending and what Railway has in its env vars.
 app.get('/api/_debug/recent-webhooks', (req, res) => {
   if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  const raw     = process.env.VAPI_WEBHOOK_SECRET || '';
+  const trimmed = raw.trim();
   res.json({
     serverEnv: {
-      VAPI_WEBHOOK_SECRET_length: (process.env.VAPI_WEBHOOK_SECRET || '').length,
-      VAPI_WEBHOOK_SECRET_first8 : (process.env.VAPI_WEBHOOK_SECRET || '').slice(0, 8),
+      raw_length    : raw.length,
+      trimmed_length: trimmed.length,
+      first8        : trimmed.slice(0, 8),
+      last4         : trimmed.slice(-4),
+      has_whitespace: raw.length !== trimmed.length,
     },
-    attempts: recentWebhookAttempts.slice().reverse(), // newest first
+    attempts: recentWebhookAttempts.slice().reverse(),
   });
 });
 

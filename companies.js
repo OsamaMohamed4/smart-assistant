@@ -31,17 +31,17 @@ class NoActiveScenarioError extends Error {
 }
 
 async function buildSystemPromptWithRAG(company, userQuery, vars) {
-  const { MASTER_PROMPT } = require('./lib/master-prompt');
   const scenario = sql.getActiveScenarioForCompany.get(company.id);
   if (!scenario || !scenario.instruction_prompt) {
     throw new NoActiveScenarioError(company.id);
   }
   // Runtime vars first (per-call values like agent_name from selected voice),
   // then globals as fallback (date/time, and agent_name ← company.name if
-  // the caller didn't supply one).
+  // the caller didn't supply one). Scenario is the SOLE source of truth — no
+  // MASTER prefix — so the text channel matches the Vapi voice channel.
   let filled = fillRuntimeVars(scenario.instruction_prompt, vars);
   filled = fillGlobals(filled, company);
-  const base = `${MASTER_PROMPT}${filled}`;
+  const base = filled;
 
   if (!userQuery) return base;
   const chunkCount = sql.countCompanyChunks.get(company.id)?.n || 0;

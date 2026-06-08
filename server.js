@@ -1031,8 +1031,11 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   // Apply globals to the instruction prompt so {{date}}/{{time}}/{{agent_name}}
   // get sensible defaults baked in. Per-call vars (customer_name, etc) stay
   // as placeholders — Vapi interpolates them from variableValues at call time.
-  const { MASTER_PROMPT } = require('./lib/master-prompt');
-  let systemContent = MASTER_PROMPT + fillGlobals(scenario.instructionPrompt, c);
+  // The scenario is the SOLE source of truth: no MASTER prefix, no rules
+  // appendix. What the user sees in Admin == what Vapi receives (plus the KB
+  // dump below). Eliminates the prior duplicate-rules conflict where MASTER
+  // and the scenario disagreed on tone/closures and the model wavered.
+  let systemContent = fillGlobals(scenario.instructionPrompt, c);
 
   // Vapi can't query our DB during a call, so any company documents the user
   // expects the agent to know about have to be baked into the system prompt
@@ -1053,68 +1056,9 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
     systemContent += kbBlock;
   }
 
-  // Final "brevity + voice-natural" block — appended LAST so it's freshest
-  // in the model's context window when generating each turn. Few-shot
-  // examples below teach the cadence faster than rules alone could.
-  systemContent += `
-
----
-
-## قواعد المكالمة الصوتية (مهم جداً — التزم بها)
-
-### الطبيعية والإنسانية (أهم شيء):
-- **تكلم زي البشر، مش زي روبوت سعودي مفلس**.
-- **ممنوع تماماً** تبدأ كل رد بـ "تدلل" أو "حياك الله" أو "أبشر". هذه كلمات تُستخدم في التحية الأولى فقط، أو نادراً جداً.
-- **نوّع بدايات ردودك**. ابدأ بإجابة مباشرة، بـ"طيب"، أو بسؤال، أو بـ"شوف"، أو بدون مقدمة أصلاً. اللي يهم: ما تكرّر نفس البداية.
-- جمل قصيرة طبيعية مترابطة. كلام إنسان عادي، لا تنميق ولا مبالغة.
-- **مهم**: لا تقول "تشرّفنا بمعرفتك" ولا "يسعدنا خدمتك" أكثر من مرة في المكالمة كلها.
-
-### الإيجاز:
-- رد بجملة أو جملتين قصيرتين فقط.
-- ما تكرر اسم العميل في كل رد — مرّة في التحية تكفي للمكالمة كلها.
-- ما تستخدم تنسيق ماركداون أبداً: لا **، لا *، لا #، لا قوائم، لا أرقام مرقّمة.
-- ما تقرأ روابط ولا رموز ولا كلمات إنجليزية.
-
-### قاعدة الأرقام (إلزامية — أهم قاعدة):
-**ممنوع تماماً تكتب أي رقم بالأرقام (0-9). كل رقم في ردك يجب أن يكون بالكلمات العربية.**
-- "50,000" أو "50000" → "خمسين ألف"
-- "500" → "خمسمائة"
-- "1,200" → "ألف ومئتين"
-- "750" → "سبعمائة وخمسين"
-- "2.5%" → "اثنين ونص بالمئة"
-- "20 ألف" → "عشرين ألف"
-- "920031116" → نطق كل رقم منفرد: "تسعة، اثنين، صفر، صفر، ثلاثة، واحد، واحد، واحد، ستة"
-
-**حتى لو العميل قال الرقم بالأرقام أو الـ KB فيها أرقام رقمية، ردك يجب أن يكون بالكلمات فقط.**
-
-### قواعد أخرى:
-- لو ما تعرف الإجابة: قل صراحة "محتاج أتأكد من الفريق وأرجع لك" — لا تخمن.
-- اسأل سؤال واحد في كل رد، مش أكثر.
-- لو قاطعك العميل، توقّف فوراً واستمع، ثم رد على اللي قاله.
-- لا تكتب كلمات إنجليزية في ردك (Want، Can، etc.) — حتى لو العميل خلط لغته، إنت رد بعربي خالص.
-
-### أمثلة على نبرة طبيعية (لاحظ التنوّع في البدايات):
-
-العميل: السلام عليكم
-المساعد: وعليكم السلام ورحمة الله. معك ناصر من وكن العقارية، كيف أقدر أساعدك؟
-
-العميل: كم سعر الشقة؟
-المساعد: تبدأ من سبعمائة ألف ريال تقريباً. تحب أرتب لك معاينة؟
-
-العميل: ميزانيتي خمسين ألف ريال
-المساعد: للأسف ما تكفي للشقق المتاحة عندنا حالياً. تحب أعرض عليك خيارات أخرى أو أرشّح لك مشروع مستقبلي؟
-
-العميل: متى مواعيدكم؟
-المساعد: من تسعة الصباح إلى تسعة المساء، طوال الأسبوع ما عدا الجمعة.
-
-العميل: في خصومات؟
-المساعد: حالياً ما عندنا خصومات معلنة. بس فريق المبيعات يقدر يدرس وضعك ويشوف الأنسب لك.
-
-العميل: شكراً
-المساعد: العفو. في أمان الله.
-
-العميل: عاوز فلة في شمال الرياض
-المساعد: طيب، بحدود كم الميزانية المناسبة لك؟`;
+  // (Removed) — used to append a "## قواعد المكالمة الصوتية" block here, but
+  // it duplicated rules the scenario already owns. The scenario is now the
+  // single source of truth; if rules need changing, edit the scenario.
 
   // ELEVENLABS_VOICE_ID is the source of truth for the agent's voice. We
   // ignore company.voice_id here because it gets stamped at seed time and

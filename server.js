@@ -464,26 +464,48 @@ app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, 
 // The /chat (text) endpoint above stays for non-voice scenarios + tests.
 
 // ─── Vapi webhook ────────────────────────────────────────────────
-// Verify the request was sent by Vapi using HMAC-SHA256 over the raw body.
-// Vapi computes: hex(hmacSha256(VAPI_WEBHOOK_SECRET, rawRequestBody)) and
-// sends it in `x-vapi-signature`. We recompute and timing-safe compare.
+// Verify the request was sent by Vapi. Vapi supports several auth modes
+// configured per organization in its dashboard:
+//   1. Custom HTTP Headers — Vapi forwards exactly what you configured.
+//      Common names: VAPI_WEBHOOK_SECRET (the one we use), X-Vapi-Secret,
+//      Authorization: Bearer ...
+//   2. Legacy HMAC-SHA256 over the raw body, sent in `x-vapi-signature`.
+// We accept any of the above so the user can pick whichever header survives
+// their reverse-proxy filtering. timingSafeEqual on every candidate.
 function verifyVapiSignature(req) {
   const secret = process.env.VAPI_WEBHOOK_SECRET;
   if (!secret) {
     // Unset secret is fatal in production; tolerated only in development.
     return process.env.NODE_ENV !== 'production';
   }
-  const sig = req.get('x-vapi-signature') || '';
-  if (!sig || !req.rawBody) return false;
-  const expected = crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return false;
-  try {
-    return crypto.timingSafeEqual(a, b);
-  } catch {
-    return false;
+  const candidates = [
+    req.get('vapi_webhook_secret'),
+    req.get('VAPI_WEBHOOK_SECRET'),
+    req.get('x-vapi-secret'),
+    req.get('x-vapi-webhook-secret'),
+  ];
+  const authHeader = req.get('authorization') || '';
+  const m = /^Bearer\s+(.+)$/i.exec(authHeader);
+  if (m) candidates.push(m[1]);
+  const secretBuf = Buffer.from(secret);
+  for (const v of candidates) {
+    if (!v) continue;
+    try {
+      const b = Buffer.from(String(v));
+      if (b.length === secretBuf.length && crypto.timingSafeEqual(b, secretBuf)) return true;
+    } catch {}
   }
+  // Legacy HMAC-SHA256 fallback.
+  const sig = req.get('x-vapi-signature') || '';
+  if (sig && req.rawBody) {
+    const expected = crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
+    try {
+      const a = Buffer.from(sig);
+      const b = Buffer.from(expected);
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) return true;
+    } catch {}
+  }
+  return false;
 }
 
 // Process a single Vapi event row from the inbox. Idempotent: upsertCall is
@@ -550,6 +572,12 @@ async function drainWebhookInbox(limit = 5) {
 
 app.post('/webhook/vapi', async (req, res) => {
   if (!verifyVapiSignature(req)) {
+    // Log the header names received so the user can confirm Vapi is sending
+    // whatever they configured. Values stay hidden — names alone are enough
+    // to debug 'I set X but the server sees Y'.
+    const seen = Object.keys(req.headers).filter((h) =>
+      /vapi|secret|signature|authorization/i.test(h));
+    req.log.warn('vapi webhook: signature verification failed', { seenAuthHeaders: seen });
     return res.status(401).json({ error: 'invalid signature' });
   }
 
@@ -1416,10 +1444,11 @@ app.get('/api/conversations', (req, res) => {
   }
 
   const OK_REASONS = new Set(['customer-ended-call', 'assistant-ended-call']);
-  // 10-minute grace window: a row with no ended_reason that was created
-  // within the last 10 minutes is treated as "in progress" instead of
-  // "failed". Past 10 minutes assume the webhook never arrived.
-  const IN_PROGRESS_CUTOFF = Date.now() - 10 * 60 * 1000;
+  // 60-minute grace window: a row with no ended_reason that was created
+  // within the last hour is shown as "in progress" instead of "failed".
+  // The user can click into it to trigger an on-demand Vapi pull which
+  // hydrates the row immediately. Past 1h, the row is assumed stale.
+  const IN_PROGRESS_CUTOFF = Date.now() - 60 * 60 * 1000;
 
   const chatItems = chats.map((c) => ({
     id          : `chat-${c.session_id}`,

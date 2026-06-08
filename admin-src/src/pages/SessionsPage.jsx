@@ -136,9 +136,10 @@ export function SessionsPage({ user, pinnedCompanyId }) {
           <FilterSelect
             value={filters.status} onChange={setFilter('status')}
             options={[
-              { v: 'all',       l: 'كل الحالات' },
-              { v: 'completed', l: 'مكتملة' },
-              { v: 'failed',    l: 'فاشلة' },
+              { v: 'all',         l: 'كل الحالات' },
+              { v: 'completed',   l: 'مكتملة' },
+              { v: 'in_progress', l: 'قيد التنفيذ' },
+              { v: 'failed',      l: 'فاشلة' },
             ]}
           />
           <FilterSelect
@@ -320,6 +321,14 @@ function StatusBadge({ status }) {
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-50 text-emerald-700">
         <CheckCircle2 className="w-2.5 h-2.5" />
         مكتملة
+      </span>
+    );
+  }
+  if (status === 'in_progress') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-50 text-amber-700">
+        <Hourglass className="w-2.5 h-2.5" />
+        قيد التنفيذ
       </span>
     );
   }

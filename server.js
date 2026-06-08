@@ -867,8 +867,48 @@ function ensureCallOwned(req, res, next) {
   next();
 }
 
-app.get('/api/calls/:id', ensureCallOwned, (req, res) => {
-  res.json(req._call);
+app.get('/api/calls/:id', ensureCallOwned, async (req, res) => {
+  let call = req._call;
+  // If the row is a stub (no transcript or no ended_reason yet), pull the
+  // latest state from Vapi and upsert. Covers two cases:
+  //   1. Outbound call we just initiated — webhook hasn't arrived yet.
+  //   2. Webhook arrived but never reached us (misconfigured URL, signature
+  //      mismatch, etc). Without this, the row stays as a permanent stub.
+  const needsRefresh = (!call.transcript || !call.ended_reason) && process.env.VAPI_API_KEY;
+  if (needsRefresh) {
+    try {
+      const r = await axios.get(`https://api.vapi.ai/call/${encodeURIComponent(call.id)}`, {
+        headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}` },
+        timeout: 10_000,
+      });
+      const v = r.data || {};
+      const startedAt = v.startedAt || null;
+      const endedAt   = v.endedAt   || null;
+      const duration  = startedAt && endedAt
+        ? Math.round((new Date(endedAt) - new Date(startedAt)) / 1000)
+        : (call.duration_sec || null);
+      const direction = String(v.type || '').toLowerCase().includes('outbound')
+        ? 'outbound' : (call.direction || 'inbound');
+      sql.upsertCall.run({
+        id            : call.id,
+        company_id    : call.company_id,
+        assistant_id  : v.assistantId || call.assistant_id || null,
+        caller_number : v.customer?.number || call.caller_number || null,
+        duration_sec  : duration,
+        started_at    : startedAt || call.started_at || null,
+        ended_at      : endedAt   || call.ended_at   || null,
+        ended_reason  : v.endedReason || call.ended_reason || null,
+        transcript    : v.artifact?.transcript || v.transcript || call.transcript || null,
+        summary       : v.summary || call.summary || null,
+        cost_usd      : v.cost ?? call.cost_usd ?? null,
+        direction,
+      });
+      call = sql.getCall.get(call.id);
+    } catch (e) {
+      req.log.warn('vapi call refresh failed', { err: e.message, callId: call.id });
+    }
+  }
+  res.json(call);
 });
 
 app.post('/api/calls/:id/summarize', ensureCallOwned, async (req, res) => {
@@ -1376,6 +1416,10 @@ app.get('/api/conversations', (req, res) => {
   }
 
   const OK_REASONS = new Set(['customer-ended-call', 'assistant-ended-call']);
+  // 10-minute grace window: a row with no ended_reason that was created
+  // within the last 10 minutes is treated as "in progress" instead of
+  // "failed". Past 10 minutes assume the webhook never arrived.
+  const IN_PROGRESS_CUTOFF = Date.now() - 10 * 60 * 1000;
 
   const chatItems = chats.map((c) => ({
     id          : `chat-${c.session_id}`,
@@ -1399,6 +1443,18 @@ app.get('/api/conversations', (req, res) => {
 
   const callItems = calls.map((c) => {
     const ok = OK_REASONS.has(c.ended_reason || '');
+    // Three-way status:
+    //   completed → call ended with an OK reason
+    //   in_progress → no ended_reason yet AND created recently (webhook may
+    //                 still arrive, or the call is literally still ringing)
+    //   failed → anything else
+    let status;
+    if (!c.ended_reason) {
+      const ts = c.ts ? Date.parse(c.ts + 'Z') : Date.now();
+      status = (Number.isFinite(ts) && ts >= IN_PROGRESS_CUTOFF) ? 'in_progress' : 'failed';
+    } else {
+      status = ok ? 'completed' : 'failed';
+    }
     return {
       id          : `call-${c.id}`,
       callId      : c.id,
@@ -1410,7 +1466,7 @@ app.get('/api/conversations', (req, res) => {
       companyId   : c.company_id,
       companyName : companyMap.get(c.company_id) || c.company_id,
       scenario    : companyMap.get(c.company_id) || c.company_id,
-      status      : ok ? 'completed' : 'failed',
+      status,
       outcome     : (ok && (c.duration_sec || 0) >= 30) ? 'success' : 'not_available',
       messages    : null,
       duration    : c.duration_sec || 0,

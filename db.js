@@ -298,6 +298,16 @@ runMigration(12, 'create_whatsapp_sessions', `
   );
 `);
 
+// Migration 13: track call direction (inbound vs outbound). Old rows default
+// to 'inbound' since that was the only path supported when they were created.
+// Outbound rows are inserted as stubs when the Playground initiates a call,
+// then upserted with full data when the Vapi end-of-call-report arrives.
+if (!hasColumn('calls', 'direction')) {
+  runMigration(13, 'calls_add_direction',
+    `ALTER TABLE calls ADD COLUMN direction TEXT NOT NULL DEFAULT 'inbound';
+     CREATE INDEX IF NOT EXISTS idx_calls_direction ON calls(direction);`);
+}
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users
@@ -443,8 +453,8 @@ const sql = {
 
   // calls
   upsertCall         : db.prepare(`
-    INSERT INTO calls (id, company_id, assistant_id, caller_number, duration_sec, started_at, ended_at, ended_reason, transcript, summary, cost_usd)
-    VALUES (@id, @company_id, @assistant_id, @caller_number, @duration_sec, @started_at, @ended_at, @ended_reason, @transcript, @summary, @cost_usd)
+    INSERT INTO calls (id, company_id, assistant_id, caller_number, duration_sec, started_at, ended_at, ended_reason, transcript, summary, cost_usd, direction)
+    VALUES (@id, @company_id, @assistant_id, @caller_number, @duration_sec, @started_at, @ended_at, @ended_reason, @transcript, @summary, @cost_usd, @direction)
     ON CONFLICT(id) DO UPDATE SET
       company_id    = excluded.company_id,
       assistant_id  = excluded.assistant_id,
@@ -455,7 +465,17 @@ const sql = {
       ended_reason  = excluded.ended_reason,
       transcript    = COALESCE(excluded.transcript, calls.transcript),
       summary       = COALESCE(excluded.summary, calls.summary),
-      cost_usd      = excluded.cost_usd
+      cost_usd      = excluded.cost_usd,
+      direction     = COALESCE(excluded.direction, calls.direction)
+  `),
+  // Stub row written when we initiate an outbound call so the attempt is
+  // visible in the Conversations table even before Vapi's end-of-call webhook
+  // arrives (or if it never does). Idempotent on call id — the later upsert
+  // from the webhook fills in transcript/duration/etc.
+  insertOutboundCallStub: db.prepare(`
+    INSERT INTO calls (id, company_id, assistant_id, caller_number, started_at, direction)
+    VALUES (@id, @company_id, @assistant_id, @caller_number, datetime('now'), 'outbound')
+    ON CONFLICT(id) DO NOTHING
   `),
   setCallSummary     : db.prepare('UPDATE calls SET summary = ? WHERE id = ?'),
   listCallsForCompany: db.prepare('SELECT * FROM calls WHERE company_id = ? ORDER BY created_at DESC LIMIT ?'),
@@ -649,11 +669,13 @@ const sql = {
   // because strftime against TEXT created_at with trailing fractional seconds
   // sometimes returns NULL on Windows builds.
   callsPerHourInRange : db.prepare(`
-    SELECT substr(created_at, 12, 2) AS hour, COUNT(*) AS n
+    SELECT substr(created_at, 12, 2) AS hour,
+           COALESCE(direction, 'inbound') AS direction,
+           COUNT(*) AS n
       FROM calls
      WHERE created_at BETWEEN @from AND @to
        AND (@company_id IS NULL OR company_id = @company_id)
-     GROUP BY hour
+     GROUP BY hour, COALESCE(direction, 'inbound')
   `),
   chatsPerHourInRange : db.prepare(`
     SELECT substr(created_at, 12, 2) AS hour, COUNT(*) AS n

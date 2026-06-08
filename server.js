@@ -331,7 +331,7 @@ app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
 // /chat-voice, so a tampered client can't bill an arbitrary ElevenLabs voice.
 // All three are Saudi-Arabic male voices already on the account.
 const PLAYGROUND_VOICES = [
-  { id: 'xvhpbk8otnNHtT3fjCpr', name: 'Omar', label: 'عمر', description: 'صوت عربي فصيح ومحترف', gender: 'male', accent: 'modern-standard' },
+  { id: 'cFUFIbKkO2iZFwS8cRnY', name: 'Nasser', label: 'ناصر', description: 'صوت سعودي طبيعي', gender: 'male', accent: 'saudi' },
 ];
 const PLAYGROUND_VOICE_IDS = new Set(PLAYGROUND_VOICES.map((v) => v.id));
 
@@ -390,6 +390,19 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
         timeout: VAPI_TIMEOUT_MS,
       },
     );
+    // Pre-register the call so it appears in Conversations immediately,
+    // even before Vapi's end-of-call-report webhook arrives. The webhook's
+    // upsert fills in transcript/duration/cost when the call ends.
+    try {
+      sql.insertOutboundCallStub.run({
+        id            : r.data.id,
+        company_id    : c.id,
+        assistant_id  : c.assistantId,
+        caller_number : phoneNumber,
+      });
+    } catch (e) {
+      req.log.error('outbound-call stub insert failed', { err: e.message });
+    }
     audit(req, 'playground.outbound', `calls/${r.data.id}`, { phoneNumber, companyId: c.id });
     res.json({ callId: r.data.id, status: r.data.status });
   } catch (e) {
@@ -491,6 +504,12 @@ async function processVapiEvent(msg) {
     const endedAt   = call.endedAt || msg.endedAt;
     const duration  = startedAt && endedAt ? Math.round((new Date(endedAt) - new Date(startedAt)) / 1000) : null;
 
+    // Vapi sends `type` as `inboundPhoneCall` / `outboundPhoneCall` / `webCall`.
+    // We collapse everything that isn't an outbound PSTN call into 'inbound'
+    // so the Conversations table has a clean two-way split.
+    const callType = String(call.type || msg.type || '').toLowerCase();
+    const direction = callType.includes('outbound') ? 'outbound' : 'inbound';
+
     sql.upsertCall.run({
       id            : call.id || crypto.randomUUID(),
       company_id    : companyRow?.id || null,
@@ -503,6 +522,7 @@ async function processVapiEvent(msg) {
       transcript    : transcript || null,
       summary       : msg.summary || null,
       cost_usd      : msg.cost || call.cost || null,
+      direction,
     });
 
     if (transcript && (!msg.summary || msg.summary.length < 20)) {
@@ -982,11 +1002,10 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   const cfg = {
     name: `smart-assistant:${c.id}`,
     model: {
-      // gpt-4.1-mini: same OpenAI key, ~20% cost bump vs gpt-4o-mini,
-      // materially better Arabic comprehension and instruction-following
-      // (especially the "don't read markdown / pronounce numbers as words"
-      // rules). 0.6 temp + 200 maxTokens balance brevity with natural flow.
-      provider   : 'openai', model: 'gpt-4.1-mini', temperature: 0.6, maxTokens: 200,
+      // gpt-4o-mini (Vapi cluster routing): lowest-latency OpenAI option that
+      // still handles Saudi Arabic + instruction-following cleanly. 0.6 temp
+      // + 200 maxTokens balance brevity with natural flow.
+      provider   : 'openai', model: 'gpt-4o-mini', temperature: 0.6, maxTokens: 200,
       // endCall tool lets the model actually hang up by calling a function —
       // without this, writing "end call" in the prompt does nothing because
       // there's no tool to invoke. The scenario prompt instructs the agent
@@ -1245,18 +1264,22 @@ app.get('/api/dashboard', (req, res) => {
   // not on calendar date — for a "Today" window that maps to a real timeline,
   // for "This Week/Month" it shows when in the day activity tends to land.
   const a = args(cur);
-  const callsByHour = new Map(sql.callsPerHourInRange.all(a).map((r) => [r.hour, r.n]));
+  const callRows = sql.callsPerHourInRange.all(a);
+  const inboundByHour  = new Map();
+  const outboundByHour = new Map();
+  for (const r of callRows) {
+    const map = r.direction === 'outbound' ? outboundByHour : inboundByHour;
+    map.set(r.hour, (map.get(r.hour) || 0) + r.n);
+  }
   const chatsByHour = new Map(sql.chatsPerHourInRange.all(a).map((r) => [r.hour, r.n]));
   const chart = [];
   for (let h = 0; h < 24; h++) {
     const key = String(h).padStart(2, '0');
     chart.push({
       hour    : key,
-      inbound : callsByHour.get(key) || 0,
-      // No outbound-call infrastructure yet — slot reserved so the chart UX
-      // stays stable when batch-calls ships.
-      outbound: 0,
-      chats   : chatsByHour.get(key) || 0,
+      inbound : inboundByHour.get(key)  || 0,
+      outbound: outboundByHour.get(key) || 0,
+      chats   : chatsByHour.get(key)    || 0,
     });
   }
 
@@ -1338,7 +1361,7 @@ app.get('/api/conversations', (req, res) => {
 
   // Calls.
   const calls = typeFilter === 'chat' ? [] : db.prepare(`
-    SELECT id, company_id, created_at AS ts, caller_number, duration_sec, ended_reason, summary
+    SELECT id, company_id, created_at AS ts, caller_number, duration_sec, ended_reason, summary, direction
     FROM calls
     WHERE company_id IN (${inPlaceholders}) ${timeClause}
   `).all(...ids, ...timeArgs);
@@ -1380,7 +1403,7 @@ app.get('/api/conversations', (req, res) => {
       id          : `call-${c.id}`,
       callId      : c.id,
       type        : 'voice',
-      direction   : 'inbound',
+      direction   : c.direction || 'inbound',
       timestamp   : c.ts,
       user        : null,
       phoneNumber : c.caller_number || null,

@@ -463,6 +463,37 @@ app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, 
 // Web SDK now handles audio in the Playground, so these routes are gone.
 // The /chat (text) endpoint above stays for non-voice scenarios + tests.
 
+// ─── Vapi webhook debug capture ──────────────────────────────────
+// In-memory ring buffer of the last 10 webhook attempts so the operator
+// can hit /api/_debug/recent-webhooks and see EXACTLY what Vapi is sending
+// when verification keeps failing. Values longer than 24 chars are masked
+// (first 8 + last 4 + length) so secrets never leak verbatim into the UI.
+const RECENT_WEBHOOK_MAX = 10;
+const recentWebhookAttempts = [];
+
+function maskHeaderValue(v) {
+  const s = String(v ?? '');
+  if (s.length <= 24) return s;
+  return `${s.slice(0, 8)}…${s.slice(-4)} (len=${s.length})`;
+}
+
+function captureWebhookAttempt(req) {
+  const headers = {};
+  for (const [k, v] of Object.entries(req.headers || {})) {
+    headers[k] = maskHeaderValue(v);
+  }
+  const entry = {
+    at      : new Date().toISOString(),
+    ip      : req.ip || null,
+    bodyType: req.body?.message?.type || req.body?.type || null,
+    headers,
+    verified: null,
+  };
+  recentWebhookAttempts.push(entry);
+  if (recentWebhookAttempts.length > RECENT_WEBHOOK_MAX) recentWebhookAttempts.shift();
+  return entry;
+}
+
 // ─── Vapi webhook ────────────────────────────────────────────────
 // Verify the request was sent by Vapi. Vapi supports several auth modes
 // configured per organization in its dashboard:
@@ -571,15 +602,15 @@ async function drainWebhookInbox(limit = 5) {
 }
 
 app.post('/webhook/vapi', async (req, res) => {
+  // Capture every attempt so the operator can inspect what Vapi actually sent
+  // when verification fails (header names + sanitized values, body type).
+  const captured = captureWebhookAttempt(req);
   if (!verifyVapiSignature(req)) {
-    // Log the header names received so the user can confirm Vapi is sending
-    // whatever they configured. Values stay hidden — names alone are enough
-    // to debug 'I set X but the server sees Y'.
-    const seen = Object.keys(req.headers).filter((h) =>
-      /vapi|secret|signature|authorization/i.test(h));
-    req.log.warn('vapi webhook: signature verification failed', { seenAuthHeaders: seen });
+    captured.verified = false;
+    req.log.warn('vapi webhook: signature verification failed', captured);
     return res.status(401).json({ error: 'invalid signature' });
   }
+  captured.verified = true;
 
   // 1. Persist the raw payload before doing anything else. If processing or
   // the process itself dies, the event survives in the inbox for retry.
@@ -758,6 +789,22 @@ app.post(
     res.type('text/xml').send('<Response></Response>');
   },
 );
+
+// ─── Debug: recent webhook attempts ──────────────────────────────
+// Superadmin only. Returns the last 10 webhook attempts (headers
+// sanitized) plus the length of VAPI_WEBHOOK_SECRET as configured on
+// this server, so the operator can spot mismatches between what Vapi
+// is sending and what Railway has in its env vars.
+app.get('/api/_debug/recent-webhooks', (req, res) => {
+  if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  res.json({
+    serverEnv: {
+      VAPI_WEBHOOK_SECRET_length: (process.env.VAPI_WEBHOOK_SECRET || '').length,
+      VAPI_WEBHOOK_SECRET_first8 : (process.env.VAPI_WEBHOOK_SECRET || '').slice(0, 8),
+    },
+    attempts: recentWebhookAttempts.slice().reverse(), // newest first
+  });
+});
 
 // ─── Admin API ───────────────────────────────────────────────────
 app.get('/api/companies', (req, res) => {

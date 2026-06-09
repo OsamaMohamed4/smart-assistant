@@ -13,6 +13,7 @@ const { db, sql } = require('./db');
 const { loadCompany, listCompaniesFull, invalidateCache, buildSystemPromptWithRAG, fillGlobals } = require('./companies');
 const { summarize, chatToTranscript } = require('./summarize');
 const { ingestDocument, retrieve } = require('./lib/rag');
+const loopchat = require('./lib/loopchat');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
 const { requireAuth, requireCompanyAccess, requireCompanyAdmin, canChatWithCompany, startSessionCleanup } = require('./lib/auth');
@@ -584,6 +585,33 @@ async function processVapiEvent(msg) {
     if (transcript && (!msg.summary || msg.summary.length < 20)) {
       const ours = await summarize(transcript);
       if (ours) sql.setCallSummary.run(ours, call.id);
+    }
+
+    // Post-call WhatsApp template via LoopChat. Skipped silently when the
+    // template UUID isn't configured (so the integration is opt-in per env).
+    // Only fires for real conversations (>=30s) and when we have a customer
+    // number to message. Fire-and-forget — failures are logged, never raised.
+    const tplUuid    = process.env.LOOPCHAT_TEMPLATE_UUID_CALL_SUMMARY;
+    const recipient  = call.customer?.number || msg.customer?.number || null;
+    if (tplUuid && recipient && (duration || 0) >= 30) {
+      const company    = companyRow ? loadCompany(companyRow.id) : null;
+      const companyNm  = company?.name || 'فريق المبيعات';
+      const finalSummary = msg.summary || sql.getCall.get(call.id)?.summary || '';
+      const summaryShort = String(finalSummary).slice(0, 240) || 'تم استلام طلبك';
+      loopchat.sendTemplateBestEffort(
+        {
+          recipient,
+          templateUuid : tplUuid,
+          // Keys are template placeholder numbers ({{1}}, {{2}}, ...). The
+          // user defines the template body in LoopChat's dashboard; make
+          // sure the placeholders line up with the order below.
+          bodyVariables: {
+            '1': companyNm,
+            '2': summaryShort,
+          },
+        },
+        { companyId: companyRow?.id || null, callId: call.id },
+      );
     }
   }
 }

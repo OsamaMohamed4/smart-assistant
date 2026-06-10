@@ -168,7 +168,10 @@ export function PlaygroundPage({ pinnedCompanyId }) {
   return (
     <div className="flex h-screen overflow-hidden bg-ink-50/40">
       {/* ═══ Main area ═══════════════════════════ */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* min-h-0 is required at every flex-column ancestor of the chat scroll
+          area; without it Flexbox uses the children's intrinsic height and
+          overflow-y-auto on the chat panel never fires. */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <TopBar
           title="التجربة"
           subtitle={
@@ -229,7 +232,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
         )}
 
         {scenario && published && (
-          <div className="flex-1 flex flex-col">
+          <div className="flex-1 flex flex-col min-h-0">
             {scenarioOutOfSync && (
               <div className="mx-8 mt-5 inline-flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[12.5px] text-amber-900">
                 <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />

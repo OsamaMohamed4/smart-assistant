@@ -157,6 +157,9 @@ function requireXhrHeader(req, res, next) {
   const m = req.method.toUpperCase();
   if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return next();
   if (req.path.startsWith('/webhook/')) return next();
+  // Public API endpoints (server-to-server). They authenticate via
+  // Bearer API key so the CSRF cookie+SameSite shield doesn't apply.
+  if (req.path.startsWith('/api/v1/')) return next();
   if (req.get('x-requested-with') !== 'XMLHttpRequest') {
     return res.status(403).json({ error: 'CSRF check failed' });
   }
@@ -188,6 +191,135 @@ app.get('/api/public/companies/:id', (req, res) => {
     language   : c.language,
     hasKB      : c.hasKB,
     phoneNumber: c.phoneNumber,
+  });
+});
+
+// ─── Public Agent HTTP API (/api/v1/agent/chat) ──────────────────
+// External integrations (e.g. LoopChat for WhatsApp) POST a customer
+// message here and get the AI agent's text reply. Same pipeline as the
+// Twilio WhatsApp webhook — calls Vapi /chat with previousChatId resumed
+// from the whatsapp_sessions table — but exposed as a server-to-server
+// REST endpoint authenticated via a Bearer API key (env: AGENT_API_KEY).
+// Mounted before requireAuth so callers don't need a logged-in session.
+app.post('/api/v1/agent/chat', async (req, res) => {
+  const expected = (process.env.AGENT_API_KEY || '').trim();
+  if (!expected) {
+    return res.status(503).json({ success: false, error: 'AGENT_API_KEY not configured on server' });
+  }
+  const authHeader = req.get('authorization') || '';
+  const m = /^Bearer\s+(.+)$/i.exec(authHeader);
+  const provided = (m?.[1] || req.get('x-api-key') || '').trim();
+  if (!provided) {
+    return res.status(401).json({ success: false, error: 'missing api key' });
+  }
+  let ok = false;
+  try {
+    const a = Buffer.from(provided);
+    const b = Buffer.from(expected);
+    ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+  } catch {}
+  if (!ok) return res.status(401).json({ success: false, error: 'invalid api key' });
+
+  const companyId     = String(req.body?.company_id || '').trim();
+  const customerPhone = String(req.body?.customer_phone || '').trim();
+  const message       = String(req.body?.message || '').trim();
+  if (!COMPANY_ID_RE.test(companyId)) {
+    return res.status(400).json({ success: false, error: 'company_id is required' });
+  }
+  if (!customerPhone) {
+    return res.status(400).json({ success: false, error: 'customer_phone is required' });
+  }
+  if (!message) {
+    return res.status(400).json({ success: false, error: 'message is required' });
+  }
+  if (message.length > MAX_USER_MSG_CHARS) {
+    return res.status(413).json({ success: false, error: 'message too long' });
+  }
+
+  const company = loadCompany(companyId);
+  if (!company) {
+    return res.status(404).json({ success: false, error: 'company not found' });
+  }
+  if (!company.assistantId) {
+    return res.status(409).json({ success: false, error: 'company not published to Vapi' });
+  }
+
+  // Per-call variable substitutions (optional).
+  const rawVars = req.body?.variables;
+  const vars = {};
+  if (rawVars && typeof rawVars === 'object' && !Array.isArray(rawVars)) {
+    for (const [k, v] of Object.entries(rawVars)) {
+      if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k) && (typeof v === 'string' || typeof v === 'number')) {
+        vars[k] = String(v).slice(0, 200);
+      }
+    }
+  }
+
+  // Resume previousChatId for this (company, customer_phone) pair so the
+  // conversation stays stateful across multiple HTTP calls.
+  const prev = sql.getWhatsappSession.get(company.id, customerPhone);
+  const previousChatId = prev?.vapi_chat_id || undefined;
+
+  const t0 = Date.now();
+  const vapiHeaders = { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' };
+  const vapiBody = (withPrev) => ({
+    assistantId       : company.assistantId,
+    input             : message,
+    assistantOverrides: { variableValues: vars },
+    ...(withPrev && previousChatId ? { previousChatId } : {}),
+  });
+
+  let reply = '';
+  let newChatId = previousChatId;
+  try {
+    const r = await axios.post('https://api.vapi.ai/chat', vapiBody(true),
+      { headers: vapiHeaders, timeout: VAPI_TIMEOUT_MS });
+    reply = (r.data.output || []).map((x) => x.content).filter(Boolean).join('\n').trim();
+    newChatId = r.data.id || newChatId;
+  } catch (e) {
+    // Stale chat ids expire on Vapi — retry once without previousChatId.
+    if (previousChatId && /not found|invalid/i.test(e.response?.data?.message || '')) {
+      try {
+        const r = await axios.post('https://api.vapi.ai/chat', vapiBody(false),
+          { headers: vapiHeaders, timeout: VAPI_TIMEOUT_MS });
+        reply = (r.data.output || []).map((x) => x.content).filter(Boolean).join('\n').trim();
+        newChatId = r.data.id;
+      } catch (e2) {
+        req.log.error('agent api: vapi chat (retry) failed', { err: e2.message, companyId: company.id });
+        return res.status(502).json({ success: false, error: 'agent unavailable' });
+      }
+    } else {
+      req.log.error('agent api: vapi chat failed', { err: e.message, status: e.response?.status, companyId: company.id });
+      return res.status(502).json({ success: false, error: 'agent unavailable' });
+    }
+  }
+
+  // Persist the new chat id so the next inbound message resumes the thread.
+  sql.upsertWhatsappSession.run({
+    company_id    : company.id,
+    customer_phone: customerPhone,
+    vapi_chat_id  : newChatId || null,
+  });
+
+  // Log to chats so the conversation shows up in the dashboard.
+  try {
+    sql.insertChat.run({
+      company_id     : company.id,
+      session_id     : 'api-' + customerPhone.replace(/[^0-9]/g, ''),
+      user_message   : message,
+      assistant_reply: reply || '',
+      channel        : 'whatsapp',
+      latency_ms     : Date.now() - t0,
+      user_id        : null,
+    });
+  } catch (e) { req.log.error('agent api: chat insert failed', { err: e.message }); }
+
+  res.json({
+    success    : true,
+    reply      : reply || '',
+    chat_id    : newChatId || null,
+    company_id : company.id,
+    latency_ms : Date.now() - t0,
   });
 });
 

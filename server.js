@@ -953,6 +953,27 @@ app.post(
   },
 );
 
+// ─── Admin: SQLite backup snapshot ───────────────────────────────
+// Superadmin-only. Returns a binary-consistent snapshot of data.db so the
+// operator can save a copy before risky changes (Railway volume swap,
+// schema migration, etc.). db.serialize() runs a synchronous in-process
+// snapshot — safe with WAL mode, no torn writes mid-transaction.
+app.get('/api/_admin/backup', (req, res) => {
+  if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  try {
+    const snapshot = db.serialize();
+    const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="smart-assistant-${stamp}.db"`);
+    res.setHeader('Content-Length', String(snapshot.length));
+    audit(req, 'admin.backup', null, { sizeBytes: snapshot.length });
+    res.send(snapshot);
+  } catch (e) {
+    req.log.error('backup failed', { err: e.message });
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── Debug: recent webhook attempts ──────────────────────────────
 // Superadmin only. Returns the last 10 webhook attempts (headers
 // sanitized) plus the length of VAPI_WEBHOOK_SECRET as configured on

@@ -953,6 +953,70 @@ app.post(
   },
 );
 
+// Upsert a single Vapi call object (from the REST list/get API) into our
+// calls table. Mirrors the mapping in processVapiEvent but works on the
+// call object directly rather than a webhook envelope. Returns the matched
+// company id (or null). Used by the backfill endpoint below so calls that
+// missed their webhook (e.g. a phone number whose Server URL lacked the
+// auth header) still show up in the dashboard.
+function upsertVapiCall(v) {
+  if (!v || !v.id) return null;
+  const assistantId = v.assistantId || v.assistant?.id || null;
+  const companyRow = assistantId
+    ? db.prepare('SELECT id FROM companies WHERE assistant_id = ?').get(assistantId)
+    : null;
+  const startedAt = v.startedAt || null;
+  const endedAt   = v.endedAt || null;
+  const duration  = startedAt && endedAt
+    ? Math.round((new Date(endedAt) - new Date(startedAt)) / 1000) : null;
+  const direction = String(v.type || '').toLowerCase().includes('outbound') ? 'outbound' : 'inbound';
+  sql.upsertCall.run({
+    id            : v.id,
+    company_id    : companyRow?.id || null,
+    assistant_id  : assistantId,
+    caller_number : v.customer?.number || null,
+    duration_sec  : duration,
+    started_at    : startedAt,
+    ended_at      : endedAt,
+    ended_reason  : v.endedReason || null,
+    transcript    : v.artifact?.transcript || v.transcript || null,
+    summary       : v.analysis?.summary || v.summary || null,
+    cost_usd      : v.cost ?? null,
+    direction,
+  });
+  return companyRow?.id || null;
+}
+
+// ─── Admin: backfill recent calls from Vapi ──────────────────────
+// Superadmin-only. Pulls the most recent calls straight from Vapi's REST
+// API and upserts them, catching anything the webhook missed (inbound or
+// outbound) — e.g. when a phone number's per-number Server URL didn't
+// carry the auth header, so end-of-call reports 401'd. Safe to run anytime;
+// upsertCall is idempotent on call id.
+app.get('/api/_admin/sync-calls', async (req, res) => {
+  if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  if (!process.env.VAPI_API_KEY) return res.status(503).json({ error: 'VAPI_API_KEY not set' });
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+  try {
+    const r = await axios.get('https://api.vapi.ai/call', {
+      headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}` },
+      params : { limit },
+      timeout: 20_000,
+    });
+    const calls = Array.isArray(r.data) ? r.data : [];
+    let matched = 0;
+    for (const v of calls) {
+      const cid = upsertVapiCall(v);
+      if (cid) matched++;
+    }
+    audit(req, 'admin.sync_calls', null, { fetched: calls.length, matched });
+    res.json({ success: true, fetched: calls.length, matched, unmatched: calls.length - matched });
+  } catch (e) {
+    req.log.error('sync-calls failed', { err: e.response?.data || e.message });
+    res.status(502).json({ success: false, error: e.response?.data?.message || e.message });
+  }
+});
+
 // ─── Admin: SQLite backup snapshot ───────────────────────────────
 // Superadmin-only. Returns a binary-consistent snapshot of data.db so the
 // operator can save a copy before risky changes (Railway volume swap,

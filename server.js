@@ -558,6 +558,11 @@ app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, 
   if (!message) return res.status(400).json({ error: 'message required' });
   if (message.length > MAX_USER_MSG_CHARS) return res.status(413).json({ error: 'message too long' });
   const previousChatId = String(req.body?.previousChatId || '').slice(0, 80) || undefined;
+  // Stable client-supplied session id groups every turn of one Playground
+  // conversation into a single row on the Conversations page. Falls back to
+  // a fresh id if the client didn't send one (each turn would then be its
+  // own session — acceptable but not ideal).
+  const sessionId = String(req.body?.sessionId || '').slice(0, 80) || ('pg-' + crypto.randomUUID());
   const rawVars = req.body?.variableValues;
   const vars = {};
   if (rawVars && typeof rawVars === 'object' && !Array.isArray(rawVars)) {
@@ -568,6 +573,7 @@ app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, 
     }
   }
 
+  const t0 = Date.now();
   try {
     const r = await axios.post(
       'https://api.vapi.ai/chat',
@@ -584,7 +590,20 @@ app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, 
     );
     // Vapi returns output as an array of message objects.
     const reply = (r.data.output || []).map((m) => m.content).filter(Boolean).join('\n').trim();
-    res.json({ chatId: r.data.id, reply });
+    // Persist the turn so the Playground chat shows up in Conversations like
+    // every other channel. channel='text' marks it as an internal test chat.
+    try {
+      sql.insertChat.run({
+        company_id     : c.id,
+        session_id     : sessionId,
+        user_message   : message,
+        assistant_reply: reply || '',
+        channel        : 'text',
+        latency_ms     : Date.now() - t0,
+        user_id        : req.user?.id || null,
+      });
+    } catch (e) { req.log.error('assistant-chat: chat insert failed', { err: e.message }); }
+    res.json({ chatId: r.data.id, reply, sessionId });
   } catch (e) {
     const detail = e.response?.data?.message || e.response?.data?.error || e.message;
     req.log.error('assistant-chat error', { err: detail, companyId: c.id });

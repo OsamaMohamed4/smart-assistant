@@ -42,6 +42,9 @@ export function PlaygroundPage({ pinnedCompanyId }) {
 
   // Chat state
   const [chatId, setChatId]       = useState(null);
+  // Stable id for the whole Playground conversation so the backend groups
+  // every turn into one row on the Conversations page. Regenerated on reset.
+  const [sessionId, setSessionId] = useState(() => 'pg-' + crypto.randomUUID());
   const [messages, setMessages]   = useState([]);
   const [input, setInput]         = useState('');
   const [chatBusy, setChatBusy]   = useState(false);
@@ -76,7 +79,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
           setVars({});
         }
         // Reset chat session when switching company.
-        setChatId(null); setMessages([]);
+        setChatId(null); setMessages([]); setSessionId('pg-' + crypto.randomUUID());
       })
       .catch((e) => push(e.message, 'error'))
       .finally(() => setScenLoading(false));
@@ -138,6 +141,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
       const r = await api.assistantChat(companyId, {
         message       : msg,
         previousChatId: chatId,
+        sessionId,
         variableValues: runtimeVars,
       });
       setChatId(r.chatId);
@@ -153,7 +157,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
       setChatBusy(false);
     }
   };
-  const resetChat = () => { setChatId(null); setMessages([]); };
+  const resetChat = () => { setChatId(null); setMessages([]); setSessionId('pg-' + crypto.randomUUID()); };
 
   // ─── Render ─────────────────────────────────────────────
   if (!companyId) {

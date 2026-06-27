@@ -144,7 +144,7 @@ export function DocumentsManager({ companyId, companyName }) {
                   doc={d} 
                   onDelete={() => onDelete(d)} 
                   onReplace={() => {
-                    if (!confirm(\`هل أنت متأكد من استبدال \${d.filename}؟ سيتم حذف الملف القديم واختيار ملف جديد.\`)) return;
+                    if (!confirm(`هل أنت متأكد من استبدال ${d.filename}؟ سيتم حذف الملف القديم واختيار ملف جديد.`)) return;
                     inputRef.current?.click();
                     api.deleteDocument(companyId, d.id).catch(() => {});
                   }}

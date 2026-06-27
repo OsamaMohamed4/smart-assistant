@@ -126,10 +126,33 @@ export function DocumentsManager({ companyId, companyName }) {
           لا توجد مستندات. ارفع ملفاً ليبدأ المساعد بالاستفادة منه.
         </div>
       ) : (
-        <div className="space-y-2">
-          {docs.map((d) => (
-            <DocRow key={d.id} doc={d} onDelete={() => onDelete(d)} />
-          ))}
+        <div className="overflow-x-auto">
+          <table className="w-full text-right border-collapse">
+            <thead>
+              <tr className="border-b border-ink-100 text-[12px] text-ink-500 font-semibold">
+                <th className="py-3 px-4 whitespace-nowrap">اسم الملف</th>
+                <th className="py-3 px-4 whitespace-nowrap">تاريخ الرفع</th>
+                <th className="py-3 px-4 whitespace-nowrap">آخر تعديل</th>
+                <th className="py-3 px-4 whitespace-nowrap">الحجم</th>
+                <th className="py-3 px-4 whitespace-nowrap text-left">الإجراءات</th>
+              </tr>
+            </thead>
+            <tbody>
+              {docs.map((d) => (
+                <DocRow 
+                  key={d.id} 
+                  doc={d} 
+                  onDelete={() => onDelete(d)} 
+                  onReplace={() => {
+                    if (!confirm(\`هل أنت متأكد من استبدال \${d.filename}؟ سيتم حذف الملف القديم واختيار ملف جديد.\`)) return;
+                    inputRef.current?.click();
+                    api.deleteDocument(companyId, d.id).catch(() => {});
+                  }}
+                  onDownload={() => push('ميزة التنزيل غير متوفرة حالياً', 'neutral')}
+                />
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -143,39 +166,37 @@ export function DocumentsManager({ companyId, companyName }) {
   );
 }
 
-function DocRow({ doc, onDelete }) {
-  const ext = (doc.filename.split('.').pop() || '').toLowerCase();
-  const colorMap = {
-    pdf : 'bg-rose-50 text-rose-600 ring-rose-200/60',
-    docx: 'bg-sky-50 text-sky-600 ring-sky-200/60',
-    txt : 'bg-ink-100 text-ink-600 ring-ink-200/60',
-    md  : 'bg-brand-50 text-brand-600 ring-brand-200/60',
-  };
-  const color = colorMap[ext] || colorMap.txt;
-  const sizeKB = (doc.size_bytes / 1024).toFixed(0);
+function DocRow({ doc, onDelete, onReplace, onDownload }) {
+  const sizeMB = (doc.size_bytes / (1024 * 1024)).toFixed(1);
+  const uploadDate = new Date(doc.created_at).toLocaleDateString('en-GB'); // DD/MM/YYYY
+  const modifiedDate = uploadDate; // DB only tracks created_at for kb_documents right now
 
   return (
-    <div className="bg-white border border-ink-100 rounded-xl p-3 flex items-center gap-3 group hover:border-ink-200 transition-colors">
-      <div className={cn('w-9 h-9 rounded-lg ring-1 ring-inset flex items-center justify-center shrink-0', color)}>
-        <FileText className="w-4 h-4" strokeWidth={1.8} />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="text-[13.5px] font-medium text-ink-900 truncate">{doc.filename}</div>
-        <div className="text-[11.5px] text-ink-500 mt-0.5 flex items-center gap-2">
-          <Badge tone="neutral" className="!py-0">{doc.chunk_count} مقطع</Badge>
-          <span>·</span>
-          <span>{sizeKB} KB</span>
-          <span>·</span>
-          <span className="uppercase">{ext}</span>
+    <tr className="border-b border-ink-50 hover:bg-ink-50/30 transition-colors">
+      <td className="py-3 px-4">
+        <div className="text-[13.5px] font-medium text-ink-900 truncate" dir="auto">
+          {doc.filename}
         </div>
-      </div>
-      <button
-        onClick={onDelete}
-        className="opacity-0 group-hover:opacity-100 w-8 h-8 rounded-lg text-ink-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition-all"
-      >
-        <Trash2 className="w-3.5 h-3.5" strokeWidth={1.8} />
-      </button>
-    </div>
+      </td>
+      <td className="py-3 px-4 text-[13px] text-ink-600 font-mono whitespace-nowrap">
+        {uploadDate}
+      </td>
+      <td className="py-3 px-4 text-[13px] text-ink-600 font-mono whitespace-nowrap">
+        {modifiedDate}
+      </td>
+      <td className="py-3 px-4 text-[13px] text-ink-600 font-mono whitespace-nowrap">
+        {sizeMB} MB
+      </td>
+      <td className="py-3 px-4 text-left whitespace-nowrap">
+        <div className="flex items-center justify-end gap-2 text-[12.5px] text-ink-500">
+          <button onClick={onDownload} className="hover:text-brand-600 transition-colors">تنزيل</button>
+          <span className="text-ink-200">-</span>
+          <button onClick={onReplace} className="hover:text-brand-600 transition-colors">استبدال</button>
+          <span className="text-ink-200">-</span>
+          <button onClick={onDelete} className="hover:text-rose-600 transition-colors">حذف</button>
+        </div>
+      </td>
+    </tr>
   );
 }
 

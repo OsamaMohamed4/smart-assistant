@@ -304,8 +304,15 @@ runMigration(12, 'create_whatsapp_sessions', `
 // then upserted with full data when the Vapi end-of-call-report arrives.
 if (!hasColumn('calls', 'direction')) {
   runMigration(13, 'calls_add_direction',
-    `ALTER TABLE calls ADD COLUMN direction TEXT NOT NULL DEFAULT 'inbound';
-     CREATE INDEX IF NOT EXISTS idx_calls_direction ON calls(direction);`);
+    `ALTER TABLE calls ADD COLUMN direction TEXT NOT NULL DEFAULT 'inbound'`
+  );
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_calls_direction ON calls(direction);`);
+}
+
+if (!hasColumn('kb_documents', 'raw_data')) {
+  runMigration(14, 'kb_documents_add_raw_data',
+    `ALTER TABLE kb_documents ADD COLUMN raw_data BLOB`
+  );
 }
 
 // ─── Prepared statements ──────────────────────────────────
@@ -484,8 +491,8 @@ const sql = {
 
   // ─── RAG: KB documents + chunks ──────────────────────────
   insertDocument     : db.prepare(`
-    INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text)
-    VALUES (@company_id, @filename, @mime_type, @size_bytes, @raw_text)
+    INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data)
+    VALUES (@company_id, @filename, @mime_type, @size_bytes, @raw_text, @raw_data)
   `),
   insertChunk        : db.prepare(`
     INSERT INTO kb_chunks (company_id, document_id, chunk_index, text, embedding, token_count)

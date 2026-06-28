@@ -1530,13 +1530,21 @@ app.delete('/api/companies/:id/documents/:docId', requireCompanyAccess, (req, re
   res.json({ deleted: 1 });
 });
 
-// Download the extracted text of a document. The original binary isn't stored
-// (we only keep raw_text), so we serve it as a UTF-8 .txt file.
+// Download the original document if available, otherwise fallback to extracted text.
 app.get('/api/companies/:id/documents/:docId/download', requireCompanyAccess, (req, res) => {
   const doc = sql.getDocument.get(req.params.docId);
   if (!doc || doc.company_id !== req.params.id) {
     return res.status(404).json({ error: 'document not found' });
   }
+
+  if (doc.raw_data) {
+    const safeName = encodeURIComponent(doc.filename);
+    res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeName}`);
+    return res.send(doc.raw_data);
+  }
+
+  // Fallback for old documents that only have raw_text
   const basename = doc.filename.replace(/\.[^.]+$/, '');
   const safeName = encodeURIComponent(basename + '.txt');
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');

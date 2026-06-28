@@ -220,8 +220,8 @@ function DocRow({ doc, onDelete, onReplace, onDownload }) {
   return (
     <tr className="border-b border-ink-50 hover:bg-ink-50/30 transition-colors">
       <td className="py-3 px-4">
-        <div className="text-[13.5px] font-medium text-ink-900 truncate" dir="auto">
-          {doc.filename}
+        <div className="text-[13.5px] font-medium text-ink-900 truncate">
+          <bdi>{doc.filename}</bdi>
         </div>
       </td>
       <td className="py-3 px-4 text-[13px] text-ink-600 font-mono whitespace-nowrap">

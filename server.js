@@ -1487,16 +1487,20 @@ app.post('/api/companies/:id/documents', requireCompanyAccess, upload.single('fi
   if (!c) return res.status(404).json({ error: 'not found' });
   if (!req.file) return res.status(400).json({ error: 'no file uploaded' });
 
+  // Multer stores originalname as latin1 bytes; decode to UTF-8 so Arabic /
+  // Unicode filenames display correctly instead of appearing as mojibake.
+  const filename = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+
   try {
     const result = await ingestDocument({
       companyId: c.id,
-      filename : req.file.originalname,
+      filename,
       mime     : req.file.mimetype,
       buffer   : req.file.buffer,
     });
     res.status(201).json({
       documentId  : result.documentId,
-      filename    : req.file.originalname,
+      filename,
       chunkCount  : result.chunkCount,
       textLength  : result.textLength,
       sizeBytes   : req.file.size,
@@ -1524,6 +1528,20 @@ app.delete('/api/companies/:id/documents/:docId', requireCompanyAccess, (req, re
   })();
   audit(req, 'document.delete', `companies/${req.params.id}/documents/${req.params.docId}`, { filename: doc.filename });
   res.json({ deleted: 1 });
+});
+
+// Download the extracted text of a document. The original binary isn't stored
+// (we only keep raw_text), so we serve it as a UTF-8 .txt file.
+app.get('/api/companies/:id/documents/:docId/download', requireCompanyAccess, (req, res) => {
+  const doc = sql.getDocument.get(req.params.docId);
+  if (!doc || doc.company_id !== req.params.id) {
+    return res.status(404).json({ error: 'document not found' });
+  }
+  const basename = doc.filename.replace(/\.[^.]+$/, '');
+  const safeName = encodeURIComponent(basename + '.txt');
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeName}`);
+  res.send(doc.raw_text || '');
 });
 
 // ─── Dashboard analytics ─────────────────────────────────────────

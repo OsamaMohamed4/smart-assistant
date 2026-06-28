@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Upload, FileText, Trash2, Sparkles, X, Loader2 } from 'lucide-react';
+import { Upload, FileText, Trash2, Sparkles, X, Loader2, Download, RefreshCw } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
@@ -17,6 +17,8 @@ export function DocumentsManager({ companyId, companyName }) {
   const [dragOver, setDragOver]   = useState(false);
   const [testOpen, setTestOpen]   = useState(false);
   const inputRef = useRef(null);
+  const replaceInputRef = useRef(null);
+  const replaceDocRef   = useRef(null);
 
   const load = async () => {
     try { setDocs(await api.listDocuments(companyId)); }
@@ -51,6 +53,45 @@ export function DocumentsManager({ companyId, companyName }) {
       push('تم الحذف', 'success');
       load();
     } catch (e) { push(e.message, 'error'); }
+  };
+
+  // Replace: upload new file first, then delete the old one
+  const onReplace = (doc) => {
+    if (!confirm(`هل أنت متأكد من استبدال ${doc.filename}؟ سيتم حذف الملف القديم ورفع ملف جديد.`)) return;
+    replaceDocRef.current = doc;
+    replaceInputRef.current.value = '';
+    replaceInputRef.current.click();
+  };
+
+  const handleReplaceFile = async (e) => {
+    const file = e.target.files?.[0];
+    const oldDoc = replaceDocRef.current;
+    if (!file || !oldDoc) return;
+
+    if (file.size > MAX_MB * 1024 * 1024) {
+      push(`${file.name}: الحجم تجاوز ${MAX_MB}MB`, 'error');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      // Upload the new file first
+      const r = await api.uploadDocument(companyId, file);
+      push(`تم استبدال ${oldDoc.filename} → ${file.name} (${fmtNumber(r.chunkCount)} مقطع)`, 'success');
+      // Then delete the old one
+      await api.deleteDocument(companyId, oldDoc.id).catch(() => {});
+      load();
+    } catch (err) {
+      push(`${file.name}: ${err.message}`, 'error');
+    } finally {
+      setUploading(false);
+      replaceDocRef.current = null;
+    }
+  };
+
+  const onDownload = (doc) => {
+    // Open download URL in a new tab (uses the server's download endpoint)
+    window.open(`/api/companies/${companyId}/documents/${doc.id}/download`, '_blank');
   };
 
   const onDrop = (e) => {
@@ -103,6 +144,15 @@ export function DocumentsManager({ companyId, companyName }) {
         </div>
       </div>
 
+      {/* Hidden input for replace flow (separate from main upload) */}
+      <input
+        ref={replaceInputRef}
+        type="file"
+        accept={ACCEPT}
+        className="hidden"
+        onChange={handleReplaceFile}
+      />
+
       {/* ─── Test button ─── */}
       {docs && docs.length > 0 && (
         <div className="flex items-center justify-between">
@@ -143,12 +193,8 @@ export function DocumentsManager({ companyId, companyName }) {
                   key={d.id} 
                   doc={d} 
                   onDelete={() => onDelete(d)} 
-                  onReplace={() => {
-                    if (!confirm(`هل أنت متأكد من استبدال ${d.filename}؟ سيتم حذف الملف القديم واختيار ملف جديد.`)) return;
-                    inputRef.current?.click();
-                    api.deleteDocument(companyId, d.id).catch(() => {});
-                  }}
-                  onDownload={() => push('ميزة التنزيل غير متوفرة حالياً', 'neutral')}
+                  onReplace={() => onReplace(d)}
+                  onDownload={() => onDownload(d)}
                 />
               ))}
             </tbody>

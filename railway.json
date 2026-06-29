@@ -1,7 +1,7 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "buildCommand": "npm run build"
+    "buildCommand": "rm -rf public/admin && npm run build"
   },
   "deploy": {
     "startCommand": "node server.js",

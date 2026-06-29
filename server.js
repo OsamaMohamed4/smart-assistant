@@ -13,6 +13,7 @@ const { db, sql } = require('./db');
 const { loadCompany, listCompaniesFull, invalidateCache, buildSystemPromptWithRAG, fillGlobals } = require('./companies');
 const { summarize, chatToTranscript } = require('./summarize');
 const { ingestDocument, retrieve } = require('./lib/rag');
+const { END_CALL_TOOL_RULE } = require('./lib/master-prompt');
 const loopchat = require('./lib/loopchat');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
@@ -1320,9 +1321,15 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
     systemContent += kbBlock;
   }
 
-  // (Removed) — used to append a "## قواعد المكالمة الصوتية" block here, but
-  // it duplicated rules the scenario already owns. The scenario is now the
-  // single source of truth; if rules need changing, edit the scenario.
+  // The scenario stays the single source of truth for CONTENT (tone, closing
+  // wording, flow). But the `endCall` tool below is attached to every assistant
+  // and no business-written scenario references it — so the model speaks a
+  // goodbye and never hangs up, looping on each customer "مع السلامة". Append a
+  // minimal, purely-technical block that wires the scenario's own closing
+  // phrase to the actual hang-up. This is NOT the old "## قواعد المكالمة
+  // الصوتية" block (that duplicated tone/closure rules the scenario owns) — it
+  // only connects existing behavior to the tool, so it can't conflict.
+  systemContent += END_CALL_TOOL_RULE;
 
   // ELEVENLABS_VOICE_ID is the source of truth for the agent's voice. We
   // ignore company.voice_id here because it gets stamped at seed time and
@@ -1369,7 +1376,16 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
     firstMessageMode : 'assistant-speaks-first',
     backgroundDenoisingEnabled: true,
     maxDurationSeconds: 600,
-    endCallPhrases   : ['شكراً مع السلامة', 'باي باي', 'goodbye'],
+    // Vapi-side safety net: ends the call when the CUSTOMER utters one of these,
+    // independent of whether the model decides to invoke endCall. The old list
+    // required the exact phrase "شكراً مع السلامة" together, so a bare
+    // "مع السلامة" (what callers actually say) never matched and the call hung
+    // open. Cover the common Saudi farewells and both ة/ه spellings. Kept to
+    // genuine sign-offs only — no bare "شكراً", which callers say mid-call.
+    endCallPhrases   : [
+      'مع السلامة', 'مع السلامه', 'في أمان الله', 'بأمان الله',
+      'باي باي', 'باي', 'goodbye', 'bye',
+    ],
     // Silence handling: after 8s of customer silence the agent prompts them
     // with an idle line ("are you still with me?"), then again up to 2 more
     // times. If the total session silence ever hits silenceTimeoutSeconds

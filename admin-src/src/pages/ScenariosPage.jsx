@@ -606,6 +606,8 @@ function ScenarioEditPage({ id, onBack }) {
   const [tab, setTab]           = useState('scenario');
   const [saving, setSaving]     = useState(false);
   const [dirty, setDirty]       = useState(false);
+  const [testOpen, setTestOpen]       = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   useEffect(() => {
     api.getScenario(id)
@@ -651,6 +653,12 @@ function ScenarioEditPage({ id, onBack }) {
             <Button variant="ghost" onClick={onBack} className="gap-1.5">
               <ArrowLeft className="w-3.5 h-3.5" /> رجوع
             </Button>
+            <Button variant="secondary" onClick={() => setPreviewOpen(true)} className="gap-1.5">
+              <Eye className="w-3.5 h-3.5" /> معاينة البرومبت
+            </Button>
+            <Button variant="secondary" onClick={() => setTestOpen(true)} className="gap-1.5">
+              <MessageSquare className="w-3.5 h-3.5" /> اختبار
+            </Button>
             <Button variant="brand" onClick={save} loading={saving} disabled={!dirty} className="gap-1.5">
               <Save className="w-3.5 h-3.5" /> حفظ التغييرات
             </Button>
@@ -686,7 +694,120 @@ function ScenarioEditPage({ id, onBack }) {
         {tab === 'scenario'      && <ScenarioTab scenario={scenario} update={update} />}
         {tab === 'configuration' && <ConfigurationTab scenario={scenario} update={update} />}
       </div>
+
+      <DraftTestModal
+        open={testOpen}
+        onClose={() => setTestOpen(false)}
+        companyId={scenario.companyId}
+        instructionPrompt={scenario.instructionPrompt}
+      />
+      <PromptPreviewModal
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        companyId={scenario.companyId}
+        instructionPrompt={scenario.instructionPrompt}
+      />
     </div>
+  );
+}
+
+// Test the unsaved draft (not the published assistant) against the model + KB.
+function DraftTestModal({ open, onClose, companyId, instructionPrompt }) {
+  const { push } = useToast();
+  const [messages, setMessages] = useState([]);
+  const [input, setInput]       = useState('');
+  const [busy, setBusy]         = useState(false);
+  const scrollRef = useRef(null);
+
+  useEffect(() => { if (open) { setMessages([]); setInput(''); } }, [open]);
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [messages, busy]);
+
+  const send = async () => {
+    const msg = input.trim();
+    if (!msg || busy) return;
+    setInput('');
+    const next = [...messages, { role: 'user', content: msg }];
+    setMessages(next);
+    setBusy(true);
+    try {
+      const r = await api.testDraftScenario(companyId, {
+        instructionPrompt,
+        message: msg,
+        history: next.slice(0, -1),
+      });
+      setMessages((m) => [...m, { role: 'assistant', content: r.reply }]);
+    } catch (e) {
+      setMessages((m) => [...m, { role: 'assistant', content: e.message, error: true }]);
+      push(e.message, 'error');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} size="lg" title="اختبار المسودّة"
+      description="جرّب السيناريو الحالي (غير المنشور) قبل النشر — نفس النص + قاعدة المعرفة.">
+      <div ref={scrollRef} className="max-h-[50vh] overflow-y-auto space-y-3 mb-3 pr-1">
+        {messages.length === 0 ? (
+          <div className="text-center py-8 text-[12.5px] text-ink-400">اكتب رسالة عميل لتجربة رد المساعد.</div>
+        ) : messages.map((m, i) => (
+          <div key={i} className={cn('flex', m.role === 'user' ? 'justify-start' : 'justify-end')}>
+            <div className={cn(
+              'max-w-[80%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap',
+              m.role === 'user' ? 'bg-ink-900 text-white'
+                : m.error ? 'bg-rose-50 text-rose-800 ring-1 ring-rose-200'
+                : 'bg-white text-ink-800 ring-1 ring-ink-100',
+            )}>{m.content}</div>
+          </div>
+        ))}
+        {busy && <div className="flex justify-end"><div className="bg-white ring-1 ring-ink-100 rounded-2xl px-4 py-3 text-ink-400 text-[13px]">…</div></div>}
+      </div>
+      <div className="flex items-center gap-2">
+        <Input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); send(); } }}
+          placeholder="رسالة العميل…"
+          disabled={busy}
+        />
+        <Button variant="brand" onClick={send} loading={busy} disabled={!input.trim()}>إرسال</Button>
+      </div>
+    </Modal>
+  );
+}
+
+// Show the exact composed system prompt (scenario + KB + endCall) the assistant
+// runs on — removes the "I edit the scenario but Vapi shows something else"
+// confusion.
+function PromptPreviewModal({ open, onClose, companyId, instructionPrompt }) {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setBusy(true); setData(null);
+    api.previewPrompt(companyId, { instructionPrompt })
+      .then(setData)
+      .catch((e) => setData({ error: e.message }))
+      .finally(() => setBusy(false));
+  }, [open, companyId, instructionPrompt]);
+
+  return (
+    <Modal open={open} onClose={onClose} size="lg" title="معاينة البرومبت النهائي"
+      description="ده بالظبط اللي بيوصل للمساعد على Vapi — السيناريو + قاعدة المعرفة + قاعدة الإغلاق.">
+      {busy && <div className="text-center py-8 text-ink-400 text-[13px]">جارٍ التحميل…</div>}
+      {data?.error && <div className="bg-rose-50 text-rose-700 rounded-xl p-3 text-[13px]">{data.error}</div>}
+      {data?.prompt && (
+        <div>
+          <div className="flex items-center gap-2 mb-2 text-[11.5px] text-ink-500">
+            <Badge tone="brand">{data.length} حرف</Badge>
+            <Badge tone="neutral">{data.kbChunks} مقطع KB</Badge>
+            {data.kbCapped && <Badge tone="warning">قاعدة المعرفة مقصوصة (الحد {data.capChars})</Badge>}
+          </div>
+          <pre className="max-h-[55vh] overflow-y-auto bg-ink-50 border border-ink-100 rounded-xl p-3.5 text-[12px] leading-relaxed whitespace-pre-wrap font-arabic" dir="rtl">{data.prompt}</pre>
+        </div>
+      )}
+    </Modal>
   );
 }
 

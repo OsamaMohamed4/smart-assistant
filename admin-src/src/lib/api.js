@@ -122,6 +122,14 @@ export const api = {
   lintScenario      : (text) => request('/api/scenarios/lint', {
     method: 'POST', body: JSON.stringify({ text }),
   }),
+  // Test an unsaved draft scenario against the model (+ company KB).
+  testDraftScenario : (companyId, body) => request(`/api/companies/${companyId}/scenarios/test-draft`, {
+    method: 'POST', body: JSON.stringify(body),
+  }),
+  // Preview the exact composed system prompt (scenario + KB + endCall).
+  previewPrompt     : (companyId, body) => request(`/api/companies/${companyId}/scenarios/preview-prompt`, {
+    method: 'POST', body: JSON.stringify(body || {}),
+  }),
 
   // RAG: documents
   listDocuments     : (companyId) => request(`/api/companies/${companyId}/documents`),

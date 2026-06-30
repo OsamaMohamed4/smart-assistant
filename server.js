@@ -413,6 +413,29 @@ async function askGPT(company, message, history, vars) {
   return { reply: completion.choices[0].message.content, ms: Date.now() - t0, usage: completion.usage };
 }
 
+// Compose the EXACT system prompt an assistant runs on for a given company +
+// instruction prompt: scenario text (globals filled) + KB dump (capped) + the
+// technical endCall wiring. Single source of truth shared by syncVapi (voice),
+// the draft tester, and the prompt preview — so what you test == what ships.
+const KB_INJECT_CAP = 10000; // chars
+function composeSystemPrompt(company, instructionPrompt) {
+  let systemContent = fillGlobals(instructionPrompt || '', company);
+  const chunks = sql.listAllChunksForCompany.all(company.id);
+  if (chunks.length) {
+    let kbBlock = '\n\n---\n\n## قاعدة معرفة الشركة\n\nاستخدم المعلومات التالية كمصدر حقائق رسمي. لا تختلق أسعاراً أو معلومات غير موجودة هنا:\n\n';
+    let used = kbBlock.length;
+    for (const ch of chunks) {
+      const seg = `\n### ${ch.filename} — مقطع ${ch.chunk_index}\n${ch.text}\n`;
+      if (used + seg.length > KB_INJECT_CAP) break;
+      kbBlock += seg;
+      used += seg.length;
+    }
+    systemContent += kbBlock;
+  }
+  systemContent += END_CALL_TOOL_RULE;
+  return systemContent;
+}
+
 function ttsStream(text, voiceId) {
   return axios.post(
     `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
@@ -1294,43 +1317,9 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   }
   const scenario = shapeScenario(scenarioRow);
 
-  // Apply globals to the instruction prompt so {{date}}/{{time}}/{{agent_name}}
-  // get sensible defaults baked in. Per-call vars (customer_name, etc) stay
-  // as placeholders — Vapi interpolates them from variableValues at call time.
-  // The scenario is the SOLE source of truth: no MASTER prefix, no rules
-  // appendix. What the user sees in Admin == what Vapi receives (plus the KB
-  // dump below). Eliminates the prior duplicate-rules conflict where MASTER
-  // and the scenario disagreed on tone/closures and the model wavered.
-  let systemContent = fillGlobals(scenario.instructionPrompt, c);
-
-  // Vapi can't query our DB during a call, so any company documents the user
-  // expects the agent to know about have to be baked into the system prompt
-  // at sync time. Cap the dump so we don't blow past the model's context.
-  // Tightened from 30K → 10K: most companies have a few key docs, and a
-  // smaller prompt directly reduces per-turn LLM latency.
-  const KB_INJECT_CAP = 10000;   // chars
-  const chunks = sql.listAllChunksForCompany.all(c.id);
-  if (chunks.length) {
-    let kbBlock = '\n\n---\n\n## قاعدة معرفة الشركة\n\nاستخدم المعلومات التالية كمصدر حقائق رسمي. لا تختلق أسعاراً أو معلومات غير موجودة هنا:\n\n';
-    let used = kbBlock.length;
-    for (const ch of chunks) {
-      const seg = `\n### ${ch.filename} — مقطع ${ch.chunk_index}\n${ch.text}\n`;
-      if (used + seg.length > KB_INJECT_CAP) break;
-      kbBlock += seg;
-      used += seg.length;
-    }
-    systemContent += kbBlock;
-  }
-
-  // The scenario stays the single source of truth for CONTENT (tone, closing
-  // wording, flow). But the `endCall` tool below is attached to every assistant
-  // and no business-written scenario references it — so the model speaks a
-  // goodbye and never hangs up, looping on each customer "مع السلامة". Append a
-  // minimal, purely-technical block that wires the scenario's own closing
-  // phrase to the actual hang-up. This is NOT the old "## قواعد المكالمة
-  // الصوتية" block (that duplicated tone/closure rules the scenario owns) — it
-  // only connects existing behavior to the tool, so it can't conflict.
-  systemContent += END_CALL_TOOL_RULE;
+  // Compose the exact prompt the assistant runs on. Shared with the draft
+  // tester and the prompt preview so all three are identical.
+  let systemContent = composeSystemPrompt(c, scenario.instructionPrompt);
 
   // ELEVENLABS_VOICE_ID is the source of truth for the agent's voice. We
   // ignore company.voice_id here because it gets stamped at seed time and
@@ -2030,6 +2019,61 @@ app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
 app.post('/api/scenarios/lint', requireAuth, (req, res) => {
   const text = String(req.body?.text || '').slice(0, 30000);
   res.json({ warnings: lintScenario(text) });
+});
+
+// Test a DRAFT scenario before publishing — runs the unsaved prompt text
+// (composed exactly like a real call: + KB + endCall rule) through the model
+// and returns the reply. Lets a company verify behaviour before pressing نشر.
+app.post('/api/companies/:id/scenarios/test-draft', chatLimiter, requireCompanyAccess, async (req, res) => {
+  const c = loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  const draft   = String(req.body?.instructionPrompt || '').slice(0, 30000);
+  const message = String(req.body?.message || '').trim();
+  if (!draft.trim()) return res.status(400).json({ error: 'اكتب نص السيناريو أولاً' });
+  if (!message)      return res.status(400).json({ error: 'message required' });
+  if (message.length > MAX_USER_MSG_CHARS) return res.status(413).json({ error: 'message too long' });
+
+  const rawHistory = Array.isArray(req.body?.history) ? req.body.history : [];
+  const history = rawHistory
+    .slice(-MAX_HISTORY)
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_MSG_CHARS) }));
+
+  const systemContent = composeSystemPrompt(c, draft);
+  try {
+    const t0 = Date.now();
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini', temperature: 0.6, max_tokens: 250,
+      messages: [{ role: 'system', content: systemContent }, ...history, { role: 'user', content: message }],
+    });
+    res.json({ reply: completion.choices[0].message.content, ms: Date.now() - t0 });
+  } catch (e) {
+    req.log.error('test-draft error', { err: e.message, companyId: c.id });
+    res.status(502).json({ error: 'تعذّر تشغيل الاختبار. حاول مرة ثانية.' });
+  }
+});
+
+// Preview the EXACT system prompt the assistant will run on — scenario text +
+// KB dump (capped) + endCall wiring — so a company can see what Vapi actually
+// receives (eliminates the "hidden layers" confusion). Pass ?draft=... to
+// preview unsaved text, otherwise uses the active scenario.
+app.post('/api/companies/:id/scenarios/preview-prompt', requireCompanyAccess, (req, res) => {
+  const c = loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  let prompt = req.body?.instructionPrompt;
+  if (prompt === undefined) {
+    const row = sql.getActiveScenarioForCompany.get(c.id);
+    prompt = row?.instruction_prompt || '';
+  }
+  const composed = composeSystemPrompt(c, String(prompt).slice(0, 30000));
+  const chunks = sql.listAllChunksForCompany.all(c.id);
+  res.json({
+    prompt    : composed,
+    length    : composed.length,
+    kbChunks  : chunks.length,
+    kbCapped  : composed.length >= KB_INJECT_CAP, // KB likely truncated
+    capChars  : KB_INJECT_CAP,
+  });
 });
 
 app.post('/api/scenarios/:id/activate', requireAuth, (req, res) => {

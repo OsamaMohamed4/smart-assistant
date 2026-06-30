@@ -118,6 +118,10 @@ export const api = {
   generateScenario  : (companyId, body) => request(`/api/companies/${companyId}/scenarios/generate`, {
     method: 'POST', body: JSON.stringify(body),
   }),
+  // Live scenario linter — returns TTS/prompt warnings for the given text.
+  lintScenario      : (text) => request('/api/scenarios/lint', {
+    method: 'POST', body: JSON.stringify({ text }),
+  }),
 
   // RAG: documents
   listDocuments     : (companyId) => request(`/api/companies/${companyId}/documents`),

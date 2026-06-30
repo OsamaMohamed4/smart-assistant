@@ -15,6 +15,7 @@ const { summarize, chatToTranscript } = require('./summarize');
 const { ingestDocument, retrieve } = require('./lib/rag');
 const { END_CALL_TOOL_RULE } = require('./lib/master-prompt');
 const loopchat = require('./lib/loopchat');
+const { lintScenario } = require('./lib/scenario-lint');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
 const { requireAuth, requireCompanyAccess, requireCompanyAdmin, canChatWithCompany, startSessionCleanup } = require('./lib/auth');
@@ -1978,7 +1979,10 @@ app.post('/api/companies/:id/scenarios', requireCompanyAccess, (req, res) => {
   });
   if (wantActive) activateExclusively(req.params.id, r.lastInsertRowid);
   audit(req, 'scenario.create', `scenarios/${r.lastInsertRowid}`, { name });
-  res.status(201).json(shapeScenario(sql.getScenario.get(r.lastInsertRowid)));
+  res.status(201).json({
+    ...shapeScenario(sql.getScenario.get(r.lastInsertRowid)),
+    warnings: lintScenario(instructionPrompt),
+  });
 });
 
 app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
@@ -2015,7 +2019,17 @@ app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
   // still satisfy the one-active-per-company invariant.
   if (nextIsActive === 1) activateExclusively(existing.company_id, existing.id);
   audit(req, 'scenario.update', `scenarios/${existing.id}`, Object.keys(b));
-  res.json(shapeScenario(sql.getScenario.get(existing.id)));
+  res.json({
+    ...shapeScenario(sql.getScenario.get(existing.id)),
+    warnings: lintScenario(instructionPrompt),
+  });
+});
+
+// Live lint — the editor calls this (debounced) so a company sees TTS/prompt
+// problems as it types, before saving or publishing. Stateless + auth-gated.
+app.post('/api/scenarios/lint', requireAuth, (req, res) => {
+  const text = String(req.body?.text || '').slice(0, 30000);
+  res.json({ warnings: lintScenario(text) });
 });
 
 app.post('/api/scenarios/:id/activate', requireAuth, (req, res) => {

@@ -777,6 +777,7 @@ function ScenarioTab({ scenario, update }) {
           rows={16}
           className="font-mono text-[12.5px] leading-relaxed"
         />
+        <LintWarnings text={scenario.instructionPrompt} />
       </Card>
 
       {/* ─── Template variables ─── */}
@@ -956,6 +957,66 @@ function Card({ children }) {
   return (
     <div className="bg-white border border-ink-100 rounded-2xl p-5 shadow-card">
       {children}
+    </div>
+  );
+}
+
+// Live linter shown under the Prompt textarea. Debounces calls to the server
+// so a company sees TTS-breaking issues (tashkeel, digits, markdown, English,
+// missing endCall) as it types — the same checks that turned "وَكَنْ" into
+// "وكنسلاتيا" on a real call.
+function LintWarnings({ text }) {
+  const [warnings, setWarnings] = useState([]);
+  const [checked, setChecked]   = useState(false);
+
+  useEffect(() => {
+    if (!text || !text.trim()) { setWarnings([]); setChecked(true); return; }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      api.lintScenario(text)
+        .then((r) => { if (!cancelled) { setWarnings(r.warnings || []); setChecked(true); } })
+        .catch(() => { if (!cancelled) setChecked(true); });
+    }, 600);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [text]);
+
+  if (!checked) return null;
+  if (!warnings.length) {
+    return (
+      <div className="mt-3 flex items-center gap-2 text-[12px] text-emerald-700">
+        <CheckCircle2 className="w-3.5 h-3.5" />
+        لا توجد مشاكل في النص — جاهز للنطق الصوتي.
+      </div>
+    );
+  }
+
+  const TONE = {
+    error: 'bg-rose-50 text-rose-800 ring-rose-200',
+    warn : 'bg-amber-50 text-amber-900 ring-amber-200',
+    info : 'bg-sky-50 text-sky-800 ring-sky-200',
+  };
+  const errorCount = warnings.filter((w) => w.level === 'error').length;
+
+  return (
+    <div className="mt-3 space-y-2">
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-500">
+        فحص النص ({warnings.length}){errorCount ? ' · يوجد خطأ يكسر الصوت' : ''}
+      </div>
+      {warnings.map((w, i) => (
+        <div
+          key={i}
+          className={cn('flex items-start gap-2 px-3 py-2 rounded-xl ring-1 text-[12.5px] leading-relaxed', TONE[w.level] || TONE.info)}
+        >
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <div>
+            <span>{w.message}</span>
+            {w.count ? <span className="opacity-70"> ({w.count})</span> : null}
+            {w.samples?.length ? (
+              <span className="opacity-70"> — {w.samples.join('، ')}</span>
+            ) : null}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

@@ -86,6 +86,8 @@ function fillRuntimeVars(text, vars) {
 
 function toCompany(row) {
   if (!row) return null;
+  let settings = {};
+  try { if (row.settings) settings = JSON.parse(row.settings) || {}; } catch {}
   return {
     id            : row.id,
     userId        : row.user_id || null,
@@ -96,6 +98,7 @@ function toCompany(row) {
     assistantId   : row.assistant_id,
     lastSyncedAt  : row.last_synced_at || null,
     hasKB         : !!row.kb_text,
+    settings,
     systemPrompt  : buildBaseSystemPrompt(row.system_prompt, row.kb_text),
     raw           : { systemPrompt: row.system_prompt, kbText: row.kb_text },
   };

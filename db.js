@@ -332,6 +332,13 @@ runMigration(15, 'create_scenario_versions', `
   CREATE INDEX IF NOT EXISTS idx_scenario_versions_sc ON scenario_versions(scenario_id, created_at DESC);
 `);
 
+// Migration 16: per-company settings (voice + model overrides) as JSON, so a
+// company can tune its agent without code/env changes. NULL = use defaults.
+if (!hasColumn('companies', 'settings')) {
+  runMigration(16, 'companies_add_settings',
+    `ALTER TABLE companies ADD COLUMN settings TEXT`);
+}
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users
@@ -439,6 +446,9 @@ const sql = {
     INSERT INTO companies (id, user_id, name, language, voice_id, phone_number, assistant_id, system_prompt, kb_text)
     VALUES (@id, @user_id, @name, @language, @voice_id, @phone_number, @assistant_id, @system_prompt, @kb_text)
   `),
+  updateCompanySettings: db.prepare(
+    `UPDATE companies SET settings = @settings, updated_at = datetime('now') WHERE id = @id`
+  ),
   updateCompany      : db.prepare(`
     UPDATE companies SET
       name           = @name,

@@ -1114,6 +1114,7 @@ function CriterionAdder({ onAdd }) {
 function ConfigurationTab({ scenario, update }) {
   return (
     <div className="space-y-5">
+      <VoiceSettingsCard companyId={scenario.companyId} />
       <Card>
         <h3 className="text-[14px] font-semibold text-ink-900 mb-3">اللغات المُعدّة</h3>
         <div className="flex flex-wrap items-center gap-2">
@@ -1185,6 +1186,71 @@ function Card({ children }) {
   return (
     <div className="bg-white border border-ink-100 rounded-2xl p-5 shadow-card">
       {children}
+    </div>
+  );
+}
+
+// Company-level voice + model tuning. Saved to the company (not the scenario);
+// applied on the next نشر. All values are clamped server-side.
+function VoiceSettingsCard({ companyId }) {
+  const { push } = useToast();
+  const [s, setS]       = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.getCompany(companyId)
+      .then((c) => setS({
+        model: 'gpt-4o-mini', temperature: 0.6, maxTokens: 200,
+        stability: 0.45, optimizeStreamingLatency: 3,
+        ...(c.settings || {}),
+      }))
+      .catch(() => setS({}));
+  }, [companyId]);
+
+  const save = async () => {
+    setSaving(true);
+    try { await api.updateCompanySettings(companyId, s); push('تم حفظ الإعدادات — تظهر بعد النشر', 'success'); }
+    catch (e) { push(e.message, 'error'); }
+    finally { setSaving(false); }
+  };
+
+  if (!s) return null;
+  const num = (k) => (e) => setS((x) => ({ ...x, [k]: Number(e.target.value) }));
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-[14px] font-semibold text-ink-900">إعدادات الصوت والموديل</h3>
+        <Button variant="brand" size="sm" onClick={save} loading={saving}>حفظ</Button>
+      </div>
+      <p className="text-[11.5px] text-ink-500 mb-4">إعدادات على مستوى الشركة — تُطبّق بعد الضغط على نشر.</p>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <Label>الموديل</Label>
+          <select value={s.model} onChange={(e) => setS((x) => ({ ...x, model: e.target.value }))}
+            className="w-full h-10 px-3 bg-white border border-ink-200 rounded-xl text-[13px] focus-ring">
+            <option value="gpt-4o-mini">gpt-4o-mini (أسرع)</option>
+            <option value="gpt-4.1-mini">gpt-4.1-mini (أدق للعربي)</option>
+          </select>
+        </div>
+        <RangeField label="ثبات الصوت (stability)" value={s.stability ?? 0.45} min={0} max={1} step={0.05} onChange={num('stability')} />
+        <RangeField label="حرارة الردود (temperature)" value={s.temperature ?? 0.6} min={0} max={1} step={0.05} onChange={num('temperature')} />
+        <RangeField label="سرعة البث (latency 0-4)" value={s.optimizeStreamingLatency ?? 3} min={0} max={4} step={1} onChange={num('optimizeStreamingLatency')} />
+        <RangeField label="أقصى طول للرد (tokens)" value={s.maxTokens ?? 200} min={50} max={500} step={10} onChange={num('maxTokens')} />
+      </div>
+    </Card>
+  );
+}
+
+function RangeField({ label, value, min, max, step, onChange }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <Label>{label}</Label>
+        <span className="text-[11.5px] font-mono text-ink-600 tabular-nums">{value}</span>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={value} onChange={onChange}
+        className="w-full accent-brand-500" />
     </div>
   );
 }

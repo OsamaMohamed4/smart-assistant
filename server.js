@@ -418,18 +418,33 @@ async function askGPT(company, message, history, vars) {
 // instruction prompt: scenario text (globals filled) + KB dump (capped) + the
 // technical endCall wiring. Single source of truth shared by syncVapi (voice),
 // the draft tester, and the prompt preview — so what you test == what ships.
-const KB_INJECT_CAP = 10000; // chars
+const KB_INJECT_CAP = 15000; // chars — headroom for a few docs of real content
+// Chunks likely to carry the facts a caller asks about (prices, warranties,
+// phone numbers). Kept first when the KB overflows the cap so key info isn't
+// the part that gets truncated.
+const KB_PRIORITY_RE = /[0-9٠-٩]|ريال|سعر|أسعار|السعر|ضمان|هاتف|جوال|رقم|مساحة|متر|نسبة|بالمئة|٪|%/;
 function composeSystemPrompt(company, instructionPrompt) {
   let systemContent = fillGlobals(instructionPrompt || '', company);
   const chunks = sql.listAllChunksForCompany.all(company.id);
   if (chunks.length) {
-    let kbBlock = '\n\n---\n\n## قاعدة معرفة الشركة\n\nاستخدم المعلومات التالية كمصدر حقائق رسمي. لا تختلق أسعاراً أو معلومات غير موجودة هنا:\n\n';
+    const header = '\n\n---\n\n## قاعدة معرفة الشركة\n\nاستخدم المعلومات التالية كمصدر حقائق رسمي. لا تختلق أسعاراً أو معلومات غير موجودة هنا:\n\n';
+    const segs = chunks.map((ch, i) => ({
+      order: i,
+      priority: KB_PRIORITY_RE.test(ch.text) ? 1 : 0,
+      text: `\n### ${ch.filename} — مقطع ${ch.chunk_index}\n${ch.text}\n`,
+    }));
+    const totalLen = header.length + segs.reduce((n, s) => n + s.text.length, 0);
+    // Only reorder when we'd otherwise truncate — keeps natural doc order when
+    // everything fits, but protects price/fact chunks when it doesn't.
+    const ordered = totalLen <= KB_INJECT_CAP
+      ? segs
+      : segs.slice().sort((a, b) => (b.priority - a.priority) || (a.order - b.order));
+    let kbBlock = header;
     let used = kbBlock.length;
-    for (const ch of chunks) {
-      const seg = `\n### ${ch.filename} — مقطع ${ch.chunk_index}\n${ch.text}\n`;
-      if (used + seg.length > KB_INJECT_CAP) break;
-      kbBlock += seg;
-      used += seg.length;
+    for (const s of ordered) {
+      if (used + s.text.length > KB_INJECT_CAP) continue; // skip, keep scanning smaller ones
+      kbBlock += s.text;
+      used += s.text.length;
     }
     systemContent += kbBlock;
   }
@@ -1143,6 +1158,24 @@ app.get('/api/companies/:id', requireCompanyAccess, (req, res) => {
   res.json({ ...c, systemPrompt: row.system_prompt, kbText: row.kb_text });
 });
 
+// Per-company voice + model settings. Whitelist keys so a client can't inject
+// arbitrary config; values are re-clamped at sync time regardless.
+app.patch('/api/companies/:id/settings', requireCompanyAccess, (req, res) => {
+  const row = sql.getCompany.get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  const clean = {};
+  if (typeof b.voiceId === 'string')          clean.voiceId = b.voiceId.slice(0, 60);
+  if (['gpt-4o-mini', 'gpt-4.1-mini'].includes(b.model)) clean.model = b.model;
+  for (const k of ['temperature', 'maxTokens', 'stability', 'similarityBoost', 'optimizeStreamingLatency']) {
+    if (b[k] !== undefined && Number.isFinite(Number(b[k]))) clean[k] = Number(b[k]);
+  }
+  sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify(clean) });
+  invalidateCache(row.id);
+  audit(req, 'company.settings', `companies/${row.id}`, Object.keys(clean));
+  res.json({ settings: clean });
+});
+
 app.post('/api/companies', (req, res) => {
   const b = req.body || {};
   // systemPrompt + kbText are legacy — Scenarios replaced them. Kept for old
@@ -1325,34 +1358,33 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   // ELEVENLABS_VOICE_ID is the source of truth for the agent's voice. We
   // ignore company.voice_id here because it gets stamped at seed time and
   // becomes stale the moment you change voices globally. There's no admin
-  // UI for per-company voice overrides, so deferring to env is simplest.
-  const voiceId = process.env.ELEVENLABS_VOICE_ID || c.voiceId;
+  // Per-company overrides (c.settings) fall back to these tuned defaults.
+  // Everything is clamped so a bad value can't produce an invalid assistant.
+  const s = c.settings || {};
+  const clamp = (v, lo, hi, dflt) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt);
+  const voiceId       = s.voiceId || process.env.ELEVENLABS_VOICE_ID || c.voiceId;
+  const model         = ['gpt-4o-mini', 'gpt-4.1-mini'].includes(s.model) ? s.model : 'gpt-4o-mini';
+  const temperature   = clamp(s.temperature, 0, 1, 0.6);
+  const maxTokens     = clamp(s.maxTokens, 50, 500, 200);
+  const stability     = clamp(s.stability, 0, 1, 0.45);
+  const similarity    = clamp(s.similarityBoost, 0, 1, 0.8);
+  const streamLatency = clamp(s.optimizeStreamingLatency, 0, 4, 3);
 
   const cfg = {
     name: `smart-assistant:${c.id}`,
     model: {
-      // gpt-4o-mini (Vapi cluster routing): lowest-latency OpenAI option that
-      // still handles Saudi Arabic + instruction-following cleanly. 0.6 temp
-      // + 200 maxTokens balance brevity with natural flow.
-      provider   : 'openai', model: 'gpt-4o-mini', temperature: 0.6, maxTokens: 200,
-      // endCall tool lets the model actually hang up by calling a function —
-      // without this, writing "end call" in the prompt does nothing because
-      // there's no tool to invoke. The scenario prompt instructs the agent
-      // to use this tool when the conversation is done.
+      // gpt-4o-mini default (lowest-latency, good Saudi Arabic). Overridable
+      // per-company via settings. endCall tool wired so the model can hang up.
+      provider   : 'openai', model, temperature, maxTokens,
       tools      : [{ type: 'endCall' }],
       messages   : [{ role: 'system', content: systemContent }],
     },
     voice: {
       provider: '11labs', voiceId,
       model: 'eleven_flash_v2_5',
-      // stability 0.55 → 0.45: more variation across syllables, less of a
-      // monotone "report" cadence. similarityBoost 0.8 keeps the speaker
-      // identity tight despite the wider variation.
-      stability: 0.45, similarityBoost: 0.8,
+      stability, similarityBoost: similarity,
       useSpeakerBoost: true,
-      // 4 (max) streamed audio in tiny chunks → sounded chopped, "word by
-      // word". 3 keeps the start-time low but joins phonemes more smoothly.
-      optimizeStreamingLatency: 3,
+      optimizeStreamingLatency: streamLatency,
     },
     // Azure ar-SA is specifically tuned for Saudi Arabic — better word
     // accuracy on Saudi vocab (شقق/مكتب/إيجار) than the multilingual model.

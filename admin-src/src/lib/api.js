@@ -71,6 +71,7 @@ export const api = {
   updateCompany     : (id, body) => request(`/api/companies/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteCompany     : (id) => request(`/api/companies/${id}`, { method: 'DELETE' }),
   syncVapi          : (id) => request(`/api/companies/${id}/sync-vapi`, { method: 'POST', body: '{}' }),
+  updateCompanySettings: (id, settings) => request(`/api/companies/${id}/settings`, { method: 'PATCH', body: JSON.stringify(settings) }),
   bindPhone         : (id) => request(`/api/companies/${id}/bind-phone`, { method: 'POST', body: '{}' }),
 
   // sessions

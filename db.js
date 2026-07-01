@@ -315,6 +315,23 @@ if (!hasColumn('kb_documents', 'raw_data')) {
   );
 }
 
+// Migration 15: scenario version history. Every edit snapshots the PREVIOUS
+// state here first, so a company can roll back a bad edit — the safety net
+// that lets non-technical users edit scenarios without fear.
+runMigration(15, 'create_scenario_versions', `
+  CREATE TABLE IF NOT EXISTS scenario_versions (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    scenario_id            INTEGER NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
+    name                   TEXT,
+    first_message          TEXT,
+    first_message_inbound  TEXT,
+    instruction_prompt     TEXT,
+    edited_by              TEXT,
+    created_at             TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_scenario_versions_sc ON scenario_versions(scenario_id, created_at DESC);
+`);
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users
@@ -619,6 +636,33 @@ const sql = {
   `),
   restoreScenario    : db.prepare(`
     UPDATE scenarios SET deleted_at = NULL WHERE id = ?
+  `),
+
+  // ─── Scenario version history (rollback) ────────────────────
+  insertScenarioVersion: db.prepare(`
+    INSERT INTO scenario_versions
+      (scenario_id, name, first_message, first_message_inbound, instruction_prompt, edited_by)
+    VALUES
+      (@scenario_id, @name, @first_message, @first_message_inbound, @instruction_prompt, @edited_by)
+  `),
+  listScenarioVersions : db.prepare(`
+    SELECT id, name, edited_by, created_at,
+           length(instruction_prompt) AS prompt_len
+      FROM scenario_versions
+     WHERE scenario_id = ?
+     ORDER BY created_at DESC, id DESC
+     LIMIT 30
+  `),
+  getScenarioVersion   : db.prepare(`SELECT * FROM scenario_versions WHERE id = ?`),
+  pruneScenarioVersions: db.prepare(`
+    DELETE FROM scenario_versions
+     WHERE scenario_id = ?
+       AND id NOT IN (
+         SELECT id FROM scenario_versions
+          WHERE scenario_id = ?
+          ORDER BY created_at DESC, id DESC
+          LIMIT 30
+       )
   `),
 
   // ─── WhatsApp sessions ──────────────────────────────────────

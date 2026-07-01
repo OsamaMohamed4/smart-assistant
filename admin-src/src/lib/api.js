@@ -130,6 +130,11 @@ export const api = {
   previewPrompt     : (companyId, body) => request(`/api/companies/${companyId}/scenarios/preview-prompt`, {
     method: 'POST', body: JSON.stringify(body || {}),
   }),
+  // Scenario version history + rollback.
+  listScenarioVersions : (id) => request(`/api/scenarios/${id}/versions`),
+  rollbackScenario     : (id, versionId) => request(`/api/scenarios/${id}/rollback/${versionId}`, {
+    method: 'POST', body: '{}',
+  }),
 
   // RAG: documents
   listDocuments     : (companyId) => request(`/api/companies/${companyId}/documents`),

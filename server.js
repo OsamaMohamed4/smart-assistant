@@ -1999,6 +1999,27 @@ app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
     return res.status(404).json({ error: 'not found' });
   }
   const b = req.body || {};
+
+  // Snapshot the CURRENT state before overwriting it, so a bad edit can be
+  // rolled back. Only snapshot when the prompt/messages actually change, and
+  // keep the last 30 per scenario.
+  const contentChanged = (b.instructionPrompt !== undefined && b.instructionPrompt !== existing.instruction_prompt)
+    || (b.firstMessage !== undefined && b.firstMessage !== existing.first_message)
+    || (b.firstMessageInbound !== undefined && b.firstMessageInbound !== (existing.first_message_inbound || ''));
+  if (contentChanged) {
+    try {
+      sql.insertScenarioVersion.run({
+        scenario_id           : existing.id,
+        name                  : existing.name,
+        first_message         : existing.first_message,
+        first_message_inbound : existing.first_message_inbound || '',
+        instruction_prompt    : existing.instruction_prompt,
+        edited_by             : req.user?.email || null,
+      });
+      sql.pruneScenarioVersions.run(existing.id, existing.id);
+    } catch (e) { req.log.error('scenario version snapshot failed', { err: e.message }); }
+  }
+
   const firstMessage         = b.firstMessage         !== undefined ? String(b.firstMessage).slice(0, 2000)         : existing.first_message;
   const firstMessageInbound  = b.firstMessageInbound  !== undefined ? String(b.firstMessageInbound).slice(0, 2000)  : (existing.first_message_inbound || '');
   const instructionPrompt    = b.instructionPrompt    !== undefined ? String(b.instructionPrompt).slice(0, 30000)   : existing.instruction_prompt;
@@ -2030,6 +2051,62 @@ app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
     ...shapeScenario(sql.getScenario.get(existing.id)),
     warnings: lintScenario(instructionPrompt),
   });
+});
+
+// Version history for a scenario (last 30 edits).
+function ensureScenarioAccess(req, res) {
+  const row = sql.getScenario.get(req.params.id);
+  if (!row) { res.status(404).json({ error: 'not found' }); return null; }
+  if (req.user.role !== 'superadmin' && req.user.companyId !== row.company_id) {
+    res.status(404).json({ error: 'not found' }); return null;
+  }
+  return row;
+}
+
+app.get('/api/scenarios/:id/versions', requireAuth, (req, res) => {
+  if (!ensureScenarioAccess(req, res)) return;
+  res.json(sql.listScenarioVersions.all(req.params.id));
+});
+
+// Roll back a scenario to a previous version. Snapshots the current state
+// first (so rollback is itself undoable), then restores the chosen version.
+app.post('/api/scenarios/:id/rollback/:versionId', requireAuth, (req, res) => {
+  const existing = ensureScenarioAccess(req, res);
+  if (!existing) return;
+  const version = sql.getScenarioVersion.get(req.params.versionId);
+  if (!version || version.scenario_id !== existing.id) {
+    return res.status(404).json({ error: 'version not found' });
+  }
+  try {
+    sql.insertScenarioVersion.run({
+      scenario_id           : existing.id,
+      name                  : existing.name,
+      first_message         : existing.first_message,
+      first_message_inbound : existing.first_message_inbound || '',
+      instruction_prompt    : existing.instruction_prompt,
+      edited_by             : req.user?.email || null,
+    });
+  } catch {}
+  const variables = detectVariables(
+    parseVariables(existing.variables),
+    version.first_message, version.first_message_inbound, version.instruction_prompt,
+  );
+  sql.updateScenario.run({
+    id                    : existing.id,
+    name                  : version.name || existing.name,
+    description           : existing.description || '',
+    first_message         : version.first_message || '',
+    first_message_inbound : version.first_message_inbound || '',
+    instruction_prompt    : version.instruction_prompt || '',
+    success_criteria      : existing.success_criteria || '[]',
+    variables             : JSON.stringify(variables),
+    is_active             : existing.is_active,
+    language              : existing.language || 'ar',
+    knowledge_base_ids    : existing.knowledge_base_ids || '[]',
+  });
+  sql.pruneScenarioVersions.run(existing.id, existing.id);
+  audit(req, 'scenario.rollback', `scenarios/${existing.id}`, { versionId: version.id });
+  res.json(shapeScenario(sql.getScenario.get(existing.id)));
 });
 
 // Live lint — the editor calls this (debounced) so a company sees TTS/prompt

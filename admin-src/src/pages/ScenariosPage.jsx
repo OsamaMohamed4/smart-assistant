@@ -608,6 +608,7 @@ function ScenarioEditPage({ id, onBack }) {
   const [dirty, setDirty]       = useState(false);
   const [testOpen, setTestOpen]       = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [versionsOpen, setVersionsOpen] = useState(false);
 
   useEffect(() => {
     api.getScenario(id)
@@ -652,6 +653,9 @@ function ScenarioEditPage({ id, onBack }) {
           <div className="flex items-center gap-2">
             <Button variant="ghost" onClick={onBack} className="gap-1.5">
               <ArrowLeft className="w-3.5 h-3.5" /> رجوع
+            </Button>
+            <Button variant="secondary" onClick={() => setVersionsOpen(true)} className="gap-1.5">
+              <RefreshCw className="w-3.5 h-3.5" /> السجل
             </Button>
             <Button variant="secondary" onClick={() => setPreviewOpen(true)} className="gap-1.5">
               <Eye className="w-3.5 h-3.5" /> معاينة البرومبت
@@ -707,7 +711,65 @@ function ScenarioEditPage({ id, onBack }) {
         companyId={scenario.companyId}
         instructionPrompt={scenario.instructionPrompt}
       />
+      <VersionsModal
+        open={versionsOpen}
+        onClose={() => setVersionsOpen(false)}
+        scenarioId={id}
+        onRestored={(sc) => { setScenario(sc); setDirty(false); setVersionsOpen(false); push('تم الاسترجاع', 'success'); }}
+      />
     </div>
+  );
+}
+
+// Version history: list the last edits and restore any of them (rollback is
+// itself snapshotted, so it's safe/undoable). The safety net that lets
+// companies edit freely.
+function VersionsModal({ open, onClose, scenarioId, onRestored }) {
+  const { push } = useToast();
+  const [versions, setVersions] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setVersions(null);
+    api.listScenarioVersions(scenarioId)
+      .then(setVersions)
+      .catch((e) => { push(e.message, 'error'); setVersions([]); });
+  }, [open, scenarioId]);
+
+  const restore = async (v) => {
+    if (!confirm('استرجاع هذه النسخة؟ سيتم حفظ النص الحالي في السجل أولاً.')) return;
+    setBusy(true);
+    try {
+      const sc = await api.rollbackScenario(scenarioId, v.id);
+      onRestored(sc);
+    } catch (e) { push(e.message, 'error'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} size="md" title="سجل الإصدارات"
+      description="كل تعديل يُحفظ هنا تلقائياً — تقدر ترجع لأي نسخة سابقة.">
+      {!versions ? (
+        <div className="text-center py-8 text-ink-400 text-[13px]">جارٍ التحميل…</div>
+      ) : versions.length === 0 ? (
+        <div className="text-center py-8 text-ink-500 text-[13px]">لا توجد نسخ سابقة بعد. أول تعديل سيُحفظ هنا.</div>
+      ) : (
+        <div className="space-y-2 max-h-[55vh] overflow-y-auto">
+          {versions.map((v) => (
+            <div key={v.id} className="flex items-center justify-between gap-3 border border-ink-100 rounded-xl px-3.5 py-2.5">
+              <div className="min-w-0">
+                <div className="text-[12.5px] font-medium text-ink-800 truncate">{v.name || 'سيناريو'}</div>
+                <div className="text-[11px] text-ink-500">
+                  {fmtDate(v.created_at)}{v.edited_by ? ` · ${v.edited_by}` : ''} · {v.prompt_len} حرف
+                </div>
+              </div>
+              <Button variant="secondary" size="sm" onClick={() => restore(v)} disabled={busy}>استرجاع</Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }
 

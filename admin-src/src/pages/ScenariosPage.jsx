@@ -902,7 +902,7 @@ function PromptPreviewModal({ open, onClose, companyId, instructionPrompt }) {
 
   return (
     <Modal open={open} onClose={onClose} size="lg" title="معاينة البرومبت النهائي"
-      description="ده بالظبط اللي بيوصل للمساعد على Vapi — السيناريو + قاعدة المعرفة + قاعدة الإغلاق.">
+      description="هذا بالضبط ما يصل إلى المساعد على Vapi — السيناريو + قاعدة المعرفة + قاعدة الإنهاء.">
       {busy && <div className="text-center py-8 text-ink-400 text-[13px]">جارٍ التحميل…</div>}
       {data?.error && <div className="bg-rose-50 text-rose-700 rounded-xl p-3 text-[13px]">{data.error}</div>}
       {data?.prompt && (
@@ -1239,7 +1239,7 @@ function InboundPromptCard({ scenario, update }) {
         <div>
           <h3 className="text-[14px] font-semibold text-ink-900">تعليمات المكالمات الواردة (اختياري)</h3>
           <p className="text-[11.5px] text-ink-500 mt-0.5 leading-relaxed">
-            لو عبّيتها، النشر بيبني مساعد منفصل للمكالمات الواردة. اربط الرقم الوارد به. لو فاضية، الوارد يستخدم نفس تعليمات الصادر.
+            عند تعبئتها، يبني النشر مساعداً منفصلاً للمكالمات الواردة، فاربط الرقم الوارد به. وإن تُركت فارغة، تستخدم المكالمات الواردة نفس تعليمات الصادرة.
           </p>
         </div>
         {!open && !scenario.instructionPromptInbound && (

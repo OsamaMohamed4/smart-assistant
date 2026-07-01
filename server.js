@@ -1510,6 +1510,7 @@ app.post('/api/companies/:id/documents', requireCompanyAccess, upload.single('fi
       chunkCount  : result.chunkCount,
       textLength  : result.textLength,
       sizeBytes   : req.file.size,
+      quality     : extractionQuality(result.chunkCount, result.textLength, req.file.size),
     });
   } catch (e) {
     req.log.error('ingest error', { err: e.message, companyId: c.id });
@@ -1517,8 +1518,25 @@ app.post('/api/companies/:id/documents', requireCompanyAccess, upload.single('fi
   }
 });
 
+// Rate how well text was extracted from an uploaded file. A big file that
+// yields almost no chunks is almost always image-only (scanned brochure) —
+// the agent would then "know" nothing from it. Surfaced in the UI so a
+// company fixes it before relying on it.
+function extractionQuality(chunkCount, textLength, sizeBytes) {
+  if (!chunkCount || textLength < 50) {
+    return { level: 'empty', message: 'لم يُستخرج نص من الملف — على الأرجح صور بالكامل. المساعد لن يعرف محتواه. ارفع نسخة نصية.' };
+  }
+  if (chunkCount <= 2 && sizeBytes > 200 * 1024) {
+    return { level: 'low', message: 'استُخرج نص قليل جداً من ملف كبير — غالباً معظمه صور. تحقق أن الأسعار والبيانات مكتوبة كنص.' };
+  }
+  return { level: 'ok', message: '' };
+}
+
 app.get('/api/companies/:id/documents', requireCompanyAccess, (req, res) => {
-  res.json(sql.listDocuments.all(req.params.id));
+  res.json(sql.listDocuments.all(req.params.id).map((d) => ({
+    ...d,
+    quality: extractionQuality(d.chunk_count, (d.chunk_count || 0) * 200, d.size_bytes),
+  })));
 });
 
 app.delete('/api/companies/:id/documents/:docId', requireCompanyAccess, (req, res) => {

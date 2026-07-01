@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Upload, FileText, Trash2, Sparkles, X, Loader2, Download, RefreshCw } from 'lucide-react';
+import { Upload, FileText, Trash2, Sparkles, X, Loader2, Download, RefreshCw, AlertTriangle } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
@@ -36,7 +36,12 @@ export function DocumentsManager({ companyId, companyName }) {
       setUploading(true);
       try {
         const r = await api.uploadDocument(companyId, file);
-        push(`${file.name}: ${fmtNumber(r.chunkCount)} مقطع`, 'success');
+        if (r.quality && r.quality.level !== 'ok') {
+          // Big/empty extraction — warn instead of a plain success toast.
+          push(`${file.name}: ${r.quality.message}`, r.quality.level === 'empty' ? 'error' : 'warning');
+        } else {
+          push(`${file.name}: ${fmtNumber(r.chunkCount)} مقطع`, 'success');
+        }
       } catch (e) {
         push(`${file.name}: ${e.message}`, 'error');
       } finally {
@@ -223,6 +228,15 @@ function DocRow({ doc, onDelete, onReplace, onDownload }) {
         <div className="text-[13.5px] font-medium text-ink-900 truncate">
           <bdi>{doc.filename}</bdi>
         </div>
+        {doc.quality && doc.quality.level !== 'ok' && (
+          <div className={cn(
+            'mt-1 inline-flex items-center gap-1 text-[11px] font-medium rounded-md px-1.5 py-0.5',
+            doc.quality.level === 'empty' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-800',
+          )} title={doc.quality.message}>
+            <AlertTriangle className="w-2.5 h-2.5" />
+            {doc.quality.level === 'empty' ? 'لم يُستخرج نص' : 'نص قليل — غالباً صور'}
+          </div>
+        )}
       </td>
       <td className="py-3 px-4 text-[13px] text-ink-600 font-mono whitespace-nowrap">
         {uploadDate}

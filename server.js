@@ -12,7 +12,7 @@ const multer = require('multer');
 const { db, sql } = require('./db');
 const { loadCompany, listCompaniesFull, invalidateCache, buildSystemPromptWithRAG, fillGlobals } = require('./companies');
 const { summarize, chatToTranscript } = require('./summarize');
-const { ingestDocument, retrieve } = require('./lib/rag');
+const { ingestDocument, retrieve, repairMojibake } = require('./lib/rag');
 const { END_CALL_TOOL_RULE } = require('./lib/master-prompt');
 const loopchat = require('./lib/loopchat');
 const { lintScenario } = require('./lib/scenario-lint');
@@ -2004,12 +2004,15 @@ app.get('/api/scenarios/:id', requireAuth, (req, res) => {
 app.post('/api/companies/:id/scenarios', requireCompanyAccess, (req, res) => {
   const b = req.body || {};
   const name = String(b.name || '').trim().slice(0, 200);
-  const instructionPrompt = String(b.instructionPrompt || '').trim();
+  // repairMojibake: if the user pastes text that was saved in a broken
+  // encoding (Arabic UTF-8 read as Latin1), fix it on save so the scenario
+  // reads correctly — same protection the KB upload has. No-op on clean text.
+  const instructionPrompt = repairMojibake(String(b.instructionPrompt || '').trim());
   if (!name || !instructionPrompt) {
     return res.status(400).json({ error: 'name and instructionPrompt are required' });
   }
-  const firstMessage        = String(b.firstMessage || '').slice(0, 2000);
-  const firstMessageInbound = String(b.firstMessageInbound || '').slice(0, 2000);
+  const firstMessage        = repairMojibake(String(b.firstMessage || '')).slice(0, 2000);
+  const firstMessageInbound = repairMojibake(String(b.firstMessageInbound || '')).slice(0, 2000);
   const criteria     = Array.isArray(b.successCriteria) ? b.successCriteria : [];
   const variables    = detectVariables(b.variables, firstMessage, firstMessageInbound, instructionPrompt);
   const kbIds        = Array.isArray(b.knowledgeBaseIds) ? b.knowledgeBaseIds : [];
@@ -2063,9 +2066,10 @@ app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
     } catch (e) { req.log.error('scenario version snapshot failed', { err: e.message }); }
   }
 
-  const firstMessage         = b.firstMessage         !== undefined ? String(b.firstMessage).slice(0, 2000)         : existing.first_message;
-  const firstMessageInbound  = b.firstMessageInbound  !== undefined ? String(b.firstMessageInbound).slice(0, 2000)  : (existing.first_message_inbound || '');
-  const instructionPrompt    = b.instructionPrompt    !== undefined ? String(b.instructionPrompt).slice(0, 30000)   : existing.instruction_prompt;
+  // repairMojibake on save — fixes pasted broken-encoding Arabic; no-op on clean text.
+  const firstMessage         = b.firstMessage         !== undefined ? repairMojibake(String(b.firstMessage)).slice(0, 2000)         : existing.first_message;
+  const firstMessageInbound  = b.firstMessageInbound  !== undefined ? repairMojibake(String(b.firstMessageInbound)).slice(0, 2000)  : (existing.first_message_inbound || '');
+  const instructionPrompt    = b.instructionPrompt    !== undefined ? repairMojibake(String(b.instructionPrompt)).slice(0, 30000)   : existing.instruction_prompt;
   const prevVars             = parseVariables(existing.variables);
   const variables            = b.variables !== undefined
     ? (Array.isArray(b.variables) ? b.variables : detectVariables(prevVars, firstMessage, firstMessageInbound, instructionPrompt))
@@ -2092,7 +2096,7 @@ app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
   // Optional inbound prompt (Phase 3) — saved separately so the core update
   // statement + its other call-sites stay untouched.
   if (b.instructionPromptInbound !== undefined) {
-    sql.setScenarioInboundPrompt.run({ id: existing.id, v: String(b.instructionPromptInbound).slice(0, 30000) });
+    sql.setScenarioInboundPrompt.run({ id: existing.id, v: repairMojibake(String(b.instructionPromptInbound)).slice(0, 30000) });
   }
   audit(req, 'scenario.update', `scenarios/${existing.id}`, Object.keys(b));
   res.json({

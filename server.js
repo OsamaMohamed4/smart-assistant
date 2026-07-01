@@ -1445,7 +1445,12 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
         'ممكن أكون فقدت الصوت عندك، إذا تسمعني أنا معك.',
       ],
       idleMessageMaxSpokenCount: 2,
-      idleTimeoutSeconds: 7,
+      // 7 → 15s. On an OUTBOUND call the line is connecting/ringing for a few
+      // seconds before the callee answers; a short idle timer fired the
+      // "ألو معاي؟" check-in BEFORE the opening message. 15s lets the call
+      // connect + the first message play first, and still checks in if the
+      // customer genuinely goes silent mid-call.
+      idleTimeoutSeconds: 15,
     },
     silenceTimeoutSeconds: 30,
     // 0.4 → 0.3s: the agent jumps in faster after the user stops talking.

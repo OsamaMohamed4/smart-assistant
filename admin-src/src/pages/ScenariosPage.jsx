@@ -1000,6 +1000,11 @@ function ScenarioTab({ scenario, update }) {
       {/* ─── Instruction prompt ─── */}
       <Card>
         <Label hint="تعليمات السلوك بالتفصيل — أقسام، نبرة، خطوات الحوار">Prompt</Label>
+        <SectionInserter
+          onInsert={(header) => update({
+            instructionPrompt: (scenario.instructionPrompt || '').replace(/\s*$/, '') + `\n\n${header}\n`,
+          })}
+        />
         <Textarea
           value={scenario.instructionPrompt}
           onChange={(e) => update({ instructionPrompt: e.target.value })}
@@ -1190,6 +1195,35 @@ function Card({ children }) {
   return (
     <div className="bg-white border border-ink-100 rounded-2xl p-5 shadow-card">
       {children}
+    </div>
+  );
+}
+
+// Lightweight structure helper (Phase 1b) — insert labelled section headers so
+// companies write a well-organised prompt without a risky schema split. The
+// lint + test + preview + versioning already de-risk free-text editing.
+const PROMPT_SECTIONS = [
+  '═══ الهوية والدور ═══',
+  '═══ أسلوب الحديث ═══',
+  '═══ تدفّق الحوار ═══',
+  '═══ التعامل مع الاعتراضات ═══',
+  '═══ الإغلاق (استدعِ endCall) ═══',
+  '═══ قواعد عامة ═══',
+];
+function SectionInserter({ onInsert }) {
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap mb-2">
+      <span className="text-[11px] text-ink-400">إدراج قسم:</span>
+      {PROMPT_SECTIONS.map((h) => (
+        <button
+          key={h}
+          type="button"
+          onClick={() => onInsert(h)}
+          className="h-6 px-2 rounded-md bg-ink-50 border border-ink-200 hover:border-ink-300 text-[10.5px] text-ink-600 transition-colors"
+        >
+          {h.replace(/═/g, '').trim()}
+        </button>
+      ))}
     </div>
   );
 }

@@ -16,6 +16,7 @@ const { ingestDocument, retrieve } = require('./lib/rag');
 const { END_CALL_TOOL_RULE } = require('./lib/master-prompt');
 const loopchat = require('./lib/loopchat');
 const { lintScenario } = require('./lib/scenario-lint');
+const { TEMPLATES: SCENARIO_TEMPLATES } = require('./lib/scenario-templates');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
 const { requireAuth, requireCompanyAccess, requireCompanyAdmin, canChatWithCompany, startSessionCleanup } = require('./lib/auth');
@@ -2114,6 +2115,11 @@ app.post('/api/scenarios/:id/rollback/:versionId', requireAuth, (req, res) => {
 app.post('/api/scenarios/lint', requireAuth, (req, res) => {
   const text = String(req.body?.text || '').slice(0, 30000);
   res.json({ warnings: lintScenario(text) });
+});
+
+// Vetted, lint-clean starting templates a company can build from.
+app.get('/api/scenario-templates', requireAuth, (_req, res) => {
+  res.json(SCENARIO_TEMPLATES);
 });
 
 // Test a DRAFT scenario before publishing — runs the unsaved prompt text

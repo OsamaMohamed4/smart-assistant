@@ -130,6 +130,8 @@ export const api = {
   previewPrompt     : (companyId, body) => request(`/api/companies/${companyId}/scenarios/preview-prompt`, {
     method: 'POST', body: JSON.stringify(body || {}),
   }),
+  // Vetted starting templates.
+  scenarioTemplates : () => request('/api/scenario-templates'),
   // Scenario version history + rollback.
   listScenarioVersions : (id) => request(`/api/scenarios/${id}/versions`),
   rollbackScenario     : (id, versionId) => request(`/api/scenarios/${id}/rollback/${versionId}`, {

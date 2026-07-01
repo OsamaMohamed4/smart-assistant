@@ -52,6 +52,7 @@ export function ScenariosPage({ user, pinnedCompanyId }) {
         companyId={companyId}
         onBack={() => setView({ name: 'list' })}
         onGenerating={(description, language) => setView({ name: 'generating', description, language })}
+        onCreated={(scenario) => setView({ name: 'edit', id: scenario.id })}
       />
     );
   }
@@ -338,11 +339,32 @@ const INCLUDE_HINTS = [
   { icon: Wrench,     label: 'الأدوات',       hint: 'إنهاء المكالمة، تذاكر، تحويلات.' },
 ];
 
-function ScenarioCreatePage({ companyId, onBack, onGenerating }) {
+function ScenarioCreatePage({ companyId, onBack, onGenerating, onCreated }) {
+  const { push } = useToast();
   const [description, setDescription] = useState('');
   const [language, setLanguage]       = useState('ar');
+  const [templates, setTemplates]     = useState([]);
+  const [creating, setCreating]       = useState(false);
   const remaining = 10000 - description.length;
   const ready = description.trim().length >= 20;
+
+  useEffect(() => { api.scenarioTemplates().then(setTemplates).catch(() => {}); }, []);
+
+  const useTemplate = async (t) => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      const sc = await api.createScenario(companyId, {
+        name                : t.name,
+        description         : t.description,
+        firstMessage        : t.firstMessage,
+        firstMessageInbound : t.firstMessageInbound,
+        instructionPrompt   : t.instructionPrompt,
+        isActive            : false,
+      });
+      onCreated(sc);
+    } catch (e) { push(e.message, 'error'); setCreating(false); }
+  };
 
   return (
     <div>
@@ -366,6 +388,29 @@ function ScenarioCreatePage({ companyId, onBack, onGenerating }) {
             صف المهمة، والـ AI يولّد سيناريو كاملاً: رسالة افتتاحية، تعليمات، ومعايير نجاح.
           </p>
         </div>
+
+        {/* ─── Vetted templates (clean, lint-safe starting points) ─── */}
+        {templates.length > 0 && (
+          <div className="mb-6">
+            <div className="text-[12px] text-ink-500 mb-2 text-center">أو ابدأ من قالب جاهز (نضيف وجاهز للنطق الصوتي):</div>
+            <div className="grid grid-cols-2 gap-3 max-w-3xl mx-auto">
+              {templates.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => useTemplate(t)}
+                  disabled={creating}
+                  className="text-right p-3.5 rounded-xl border border-ink-200 bg-white hover:border-brand-400 hover:bg-brand-50/40 transition-all disabled:opacity-60"
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <BookOpen className="w-3.5 h-3.5 text-brand-500" />
+                    <span className="text-[13px] font-semibold text-ink-900">{t.name}</span>
+                  </div>
+                  <p className="text-[11.5px] text-ink-500 leading-relaxed">{t.description}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ─── Quick start chips ─── */}
         <div className="flex items-center justify-center gap-2 flex-wrap mb-6">

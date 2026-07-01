@@ -96,6 +96,7 @@ function toCompany(row) {
     voiceId       : row.voice_id,
     phoneNumber   : row.phone_number,
     assistantId   : row.assistant_id,
+    assistantIdInbound : row.assistant_id_inbound || null,
     lastSyncedAt  : row.last_synced_at || null,
     hasKB         : !!row.kb_text,
     settings,

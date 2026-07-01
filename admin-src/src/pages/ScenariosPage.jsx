@@ -674,6 +674,7 @@ function ScenarioEditPage({ id, onBack }) {
         firstMessage        : scenario.firstMessage,
         firstMessageInbound : scenario.firstMessageInbound,
         instructionPrompt   : scenario.instructionPrompt,
+        instructionPromptInbound : scenario.instructionPromptInbound || '',
         successCriteria     : scenario.successCriteria,
         isActive            : scenario.isActive,
         language            : scenario.language,
@@ -1008,6 +1009,9 @@ function ScenarioTab({ scenario, update }) {
         <LintWarnings text={scenario.instructionPrompt} />
       </Card>
 
+      {/* ─── Optional: separate inbound prompt (Phase 3) ─── */}
+      <InboundPromptCard scenario={scenario} update={update} />
+
       {/* ─── Template variables ─── */}
       <Card>
         <div className="flex items-center justify-between mb-3">
@@ -1187,6 +1191,40 @@ function Card({ children }) {
     <div className="bg-white border border-ink-100 rounded-2xl p-5 shadow-card">
       {children}
     </div>
+  );
+}
+
+// Optional per-direction inbound prompt. When filled, publishing builds a
+// SECOND Vapi assistant for inbound calls (bind the inbound number to it).
+// Empty = inbound uses the same prompt as outbound (default).
+function InboundPromptCard({ scenario, update }) {
+  const [open, setOpen] = useState(!!scenario.instructionPromptInbound);
+  return (
+    <Card>
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-[14px] font-semibold text-ink-900">تعليمات المكالمات الواردة (اختياري)</h3>
+          <p className="text-[11.5px] text-ink-500 mt-0.5 leading-relaxed">
+            لو عبّيتها، النشر بيبني مساعد منفصل للمكالمات الواردة. اربط الرقم الوارد به. لو فاضية، الوارد يستخدم نفس تعليمات الصادر.
+          </p>
+        </div>
+        {!open && !scenario.instructionPromptInbound && (
+          <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>إضافة</Button>
+        )}
+      </div>
+      {(open || scenario.instructionPromptInbound) && (
+        <div className="mt-3">
+          <Textarea
+            value={scenario.instructionPromptInbound || ''}
+            onChange={(e) => update({ instructionPromptInbound: e.target.value })}
+            rows={12}
+            placeholder="تعليمات خاصة بالمكالمات الواردة فقط…"
+            className="font-mono text-[12.5px] leading-relaxed"
+          />
+          <LintWarnings text={scenario.instructionPromptInbound || ''} />
+        </div>
+      )}
+    </Card>
   );
 }
 

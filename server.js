@@ -452,6 +452,28 @@ function composeSystemPrompt(company, instructionPrompt) {
   return systemContent;
 }
 
+// Create-or-update a Vapi assistant from a config. Verifies a stored id still
+// exists (clears if 404), recovers by name, then PATCH/POST. Returns the id.
+// Shared by the primary and the optional inbound assistant.
+async function upsertVapiAssistant(cfg, existingId, vapiOpts, log) {
+  let id = existingId;
+  if (id) {
+    try {
+      await axios.get(`https://api.vapi.ai/assistant/${id}`, vapiOpts);
+    } catch (e) {
+      if (e.response?.status === 404) { log?.warn?.('vapi: stored assistant gone, recreating', { id }); id = null; }
+      else throw e;
+    }
+  }
+  if (!id) {
+    const list = (await axios.get('https://api.vapi.ai/assistant', vapiOpts)).data || [];
+    id = list.find((a) => a.name === cfg.name)?.id || null;
+  }
+  if (id) await axios.patch(`https://api.vapi.ai/assistant/${id}`, cfg, vapiOpts);
+  else { const r = await axios.post('https://api.vapi.ai/assistant', cfg, vapiOpts); id = r.data.id; }
+  return id;
+}
+
 function ttsStream(text, voiceId) {
   return axios.post(
     `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
@@ -744,7 +766,7 @@ async function processVapiEvent(msg) {
   const call = msg.call || {};
   const assistantId = call.assistantId || msg.assistant?.id;
   const companyRow = assistantId
-    ? db.prepare('SELECT id FROM companies WHERE assistant_id = ?').get(assistantId)
+    ? db.prepare('SELECT id FROM companies WHERE assistant_id = ? OR assistant_id_inbound = ?').get(assistantId, assistantId)
     : null;
 
   if (msg.type === 'end-of-call-report') {
@@ -1023,7 +1045,7 @@ function upsertVapiCall(v) {
   if (!v || !v.id) return null;
   const assistantId = v.assistantId || v.assistant?.id || null;
   const companyRow = assistantId
-    ? db.prepare('SELECT id FROM companies WHERE assistant_id = ?').get(assistantId)
+    ? db.prepare('SELECT id FROM companies WHERE assistant_id = ? OR assistant_id_inbound = ?').get(assistantId, assistantId)
     : null;
   const startedAt = v.startedAt || null;
   const endedAt   = v.endedAt || null;
@@ -1441,38 +1463,24 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   const headers = { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' };
   const vapiOpts = { headers, timeout: VAPI_TIMEOUT_MS };
   try {
-    let assistantId = c.assistantId;
+    // Primary (outbound/default) assistant.
+    const assistantId = await upsertVapiAssistant(cfg, c.assistantId, vapiOpts, req.log);
 
-    // If we have a saved id, confirm it still exists on Vapi. The user could
-    // have deleted it from the Vapi dashboard, leaving our DB pointing at a
-    // dead UUID. PATCH would silently 404 and the user would think their
-    // config changes "aren't reaching Vapi". Verify first and clear if dead.
-    if (assistantId) {
-      try {
-        await axios.get(`https://api.vapi.ai/assistant/${assistantId}`, vapiOpts);
-      } catch (e) {
-        if (e.response?.status === 404) {
-          req.log.warn('vapi sync: stored assistant gone, recreating', { assistantId, companyId: c.id });
-          assistantId = null;
-        } else {
-          throw e;
-        }
-      }
+    // Optional inbound assistant (Phase 3) — only when the scenario defines a
+    // separate inbound prompt. Otherwise inbound uses the primary assistant,
+    // so existing companies are completely unaffected.
+    let inboundAssistantId = null;
+    const inboundPrompt = (scenario.instructionPromptInbound || '').trim();
+    if (inboundPrompt) {
+      const inboundCfg = {
+        ...cfg,
+        name: `smart-assistant:${c.id}:inbound`,
+        model: { ...cfg.model, messages: [{ role: 'system', content: composeSystemPrompt(c, inboundPrompt) }] },
+        firstMessage: scenario.firstMessageInbound || cfg.firstMessage,
+      };
+      inboundAssistantId = await upsertVapiAssistant(inboundCfg, c.assistantIdInbound, vapiOpts, req.log);
     }
 
-    // Still no id: try to find an existing one by name (lets us recover after
-    // a manual rename or a DB wipe), otherwise create from scratch.
-    if (!assistantId) {
-      const list = (await axios.get('https://api.vapi.ai/assistant', vapiOpts)).data || [];
-      const found = list.find((a) => a.name === cfg.name);
-      assistantId = found?.id || null;
-    }
-    if (assistantId) {
-      await axios.patch(`https://api.vapi.ai/assistant/${assistantId}`, cfg, vapiOpts);
-    } else {
-      const r = await axios.post('https://api.vapi.ai/assistant', cfg, vapiOpts);
-      assistantId = r.data.id;
-    }
     // Stamp last_synced_at so the UI can show "unpublished changes" when
     // the active scenario gets edited after a sync.
     db.prepare(`
@@ -1482,8 +1490,9 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
              updated_at      = datetime('now')
        WHERE id = ?
     `).run(assistantId, c.id);
+    sql.setCompanyInboundAssistant.run({ id: c.id, aid: inboundAssistantId });
     invalidateCache(c.id);
-    res.json({ assistantId, scenarioId: scenario.id, scenarioName: scenario.name });
+    res.json({ assistantId, inboundAssistantId, scenarioId: scenario.id, scenarioName: scenario.name });
   } catch (e) {
     req.log.error('vapi sync error', { err: e.response?.data || e.message, companyId: c.id });
     res.status(500).json({ error: e.response?.data?.message || e.message });
@@ -1910,6 +1919,7 @@ function shapeScenario(row) {
     // Inbound (customer calls us; identity unknown until later).
     firstMessageInbound : row.first_message_inbound || '',
     instructionPrompt   : row.instruction_prompt || '',
+    instructionPromptInbound : row.instruction_prompt_inbound || '',
     successCriteria     : parseCriteria(row.success_criteria),
     variables           : parseVariables(row.variables),
     isActive            : !!row.is_active,
@@ -2079,6 +2089,11 @@ app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
   // If this PATCH flipped isActive ON, deactivate the other scenarios so we
   // still satisfy the one-active-per-company invariant.
   if (nextIsActive === 1) activateExclusively(existing.company_id, existing.id);
+  // Optional inbound prompt (Phase 3) — saved separately so the core update
+  // statement + its other call-sites stay untouched.
+  if (b.instructionPromptInbound !== undefined) {
+    sql.setScenarioInboundPrompt.run({ id: existing.id, v: String(b.instructionPromptInbound).slice(0, 30000) });
+  }
   audit(req, 'scenario.update', `scenarios/${existing.id}`, Object.keys(b));
   res.json({
     ...shapeScenario(sql.getScenario.get(existing.id)),

@@ -339,6 +339,20 @@ if (!hasColumn('companies', 'settings')) {
     `ALTER TABLE companies ADD COLUMN settings TEXT`);
 }
 
+// Migration 17: optional per-direction inbound assistant. When a scenario has
+// a non-empty instruction_prompt_inbound, syncVapi builds a SECOND assistant
+// (companies.assistant_id_inbound) so inbound calls behave differently from
+// outbound. Fully opt-in — empty means inbound uses the primary assistant, so
+// existing companies are unchanged.
+if (!hasColumn('companies', 'assistant_id_inbound')) {
+  runMigration(17, 'companies_add_assistant_id_inbound',
+    `ALTER TABLE companies ADD COLUMN assistant_id_inbound TEXT`);
+}
+if (!hasColumn('scenarios', 'instruction_prompt_inbound')) {
+  runMigration(18, 'scenarios_add_instruction_prompt_inbound',
+    `ALTER TABLE scenarios ADD COLUMN instruction_prompt_inbound TEXT`);
+}
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users
@@ -587,6 +601,15 @@ const sql = {
       updated_at              = datetime('now')
     WHERE id = @id AND deleted_at IS NULL
   `),
+  // Set only the optional inbound prompt (additive — avoids touching the main
+  // insert/update statements and their many call sites).
+  setScenarioInboundPrompt: db.prepare(`
+    UPDATE scenarios SET instruction_prompt_inbound = @v, updated_at = datetime('now')
+     WHERE id = @id AND deleted_at IS NULL
+  `),
+  setCompanyInboundAssistant: db.prepare(
+    `UPDATE companies SET assistant_id_inbound = @aid, updated_at = datetime('now') WHERE id = @id`
+  ),
   listScenarios      : db.prepare(`
     SELECT id, company_id, name, description, language, is_active,
            created_at, updated_at,

@@ -571,6 +571,13 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
   if (activeScenario?.first_message) {
     overrides.firstMessage = activeScenario.first_message;
   }
+  // On OUTBOUND, the assistant otherwise starts the greeting while the line is
+  // still ringing, so the callee misses the start ("السلام عليكم… معك ناصر")
+  // and only hears the middle. Waiting for the callee to speak first (their
+  // "ألو/هلا" on answering) means the full opening plays after they've picked
+  // up. Inbound is unaffected — this override is outbound-only. If the callee
+  // answers silently, the idle message prompts them.
+  overrides.firstMessageMode = 'assistant-waits-for-user';
 
   try {
     const r = await axios.post(

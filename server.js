@@ -740,6 +740,8 @@ function verifyVapiSignature(req) {
     req.get('VAPI_WEBHOOK_SECRET'),
     req.get('x-vapi-secret'),
     req.get('x-vapi-webhook-secret'),
+    req.get('x-secret-webhook'),   // tolerate common alternate names
+    req.get('x-webhook-secret'),
   ];
   const authHeader = req.get('authorization') || '';
   const m = /^Bearer\s+(.+)$/i.exec(authHeader);

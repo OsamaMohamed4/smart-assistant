@@ -1532,13 +1532,13 @@ app.post('/api/companies/:id/bind-phone', requireCompanyAdmin, async (req, res) 
   const headers = { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' };
   const vapiOpts = { headers, timeout: VAPI_TIMEOUT_MS };
 
-  // Inbound number for THIS company (from settings), falling back to the
-  // platform env. Bind it to the inbound assistant so calls to that number
-  // reach the inbound behaviour; if the company has no inbound assistant,
-  // fall back to the primary one.
-  const phoneId = c.settings?.inboundPhoneNumberId || process.env.VAPI_PHONE_NUMBER_ID;
+  // Inbound number for THIS company — MUST come from the company's own
+  // settings. We deliberately do NOT fall back to the platform env var: with
+  // multiple companies that fallback would bind another company's number
+  // (e.g. Maheer grabbing Wakan's outbound number). Require it explicitly.
+  const phoneId = c.settings?.inboundPhoneNumberId;
   if (!phoneId) {
-    return res.status(400).json({ error: 'اضبط معرّف الرقم الوارد في إعدادات الصوت أولاً.' });
+    return res.status(400).json({ error: 'اضبط معرّف الرقم الوارد لهذه الشركة في إعدادات الصوت أولاً (حتى لا يُربط رقم شركة أخرى).' });
   }
   const targetAssistant = c.assistantIdInbound || c.assistantId;
   try {

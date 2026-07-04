@@ -767,6 +767,32 @@ function verifyVapiSignature(req) {
   return false;
 }
 
+// Resolve which company a Vapi call belongs to. Primary key is the assistant
+// ID (matches assistant_id OR assistant_id_inbound). But assistant IDs change
+// whenever an assistant is recreated on re-sync, which orphans older calls.
+// Phone-number IDs never change, so we fall back to matching the call's
+// phoneNumberId against the inbound/outbound number IDs stored per company in
+// settings JSON. This keeps call logging correct across assistant churn.
+function matchCompanyForCall(assistantId, phoneNumberId) {
+  if (assistantId) {
+    const byAssistant = db
+      .prepare('SELECT id FROM companies WHERE assistant_id = ? OR assistant_id_inbound = ?')
+      .get(assistantId, assistantId);
+    if (byAssistant) return byAssistant;
+  }
+  if (phoneNumberId) {
+    const byPhone = db
+      .prepare(
+        `SELECT id FROM companies
+         WHERE json_extract(settings,'$.inboundPhoneNumberId')  = ?
+            OR json_extract(settings,'$.outboundPhoneNumberId') = ?`,
+      )
+      .get(phoneNumberId, phoneNumberId);
+    if (byPhone) return byPhone;
+  }
+  return null;
+}
+
 // Process a single Vapi event row from the inbox. Idempotent: upsertCall is
 // keyed by call.id, and we no-op if a duplicate event_id was already inserted.
 async function processVapiEvent(msg) {
@@ -775,9 +801,8 @@ async function processVapiEvent(msg) {
 
   const call = msg.call || {};
   const assistantId = call.assistantId || msg.assistant?.id;
-  const companyRow = assistantId
-    ? db.prepare('SELECT id FROM companies WHERE assistant_id = ? OR assistant_id_inbound = ?').get(assistantId, assistantId)
-    : null;
+  const phoneNumberId = call.phoneNumberId || msg.phoneNumber?.id || null;
+  const companyRow = matchCompanyForCall(assistantId, phoneNumberId);
 
   if (msg.type === 'end-of-call-report') {
     const transcript = msg.artifact?.transcript || msg.transcript || '';
@@ -1054,9 +1079,7 @@ app.post(
 function upsertVapiCall(v) {
   if (!v || !v.id) return null;
   const assistantId = v.assistantId || v.assistant?.id || null;
-  const companyRow = assistantId
-    ? db.prepare('SELECT id FROM companies WHERE assistant_id = ? OR assistant_id_inbound = ?').get(assistantId, assistantId)
-    : null;
+  const companyRow = matchCompanyForCall(assistantId, v.phoneNumberId || null);
   const startedAt = v.startedAt || null;
   const endedAt   = v.endedAt || null;
   const duration  = startedAt && endedAt

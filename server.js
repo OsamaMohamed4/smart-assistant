@@ -1527,13 +1527,22 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
 app.post('/api/companies/:id/bind-phone', requireCompanyAdmin, async (req, res) => {
   const c = loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
-  if (!c.assistantId) return res.status(400).json({ error: 'sync to Vapi first' });
+  if (!c.assistantId) return res.status(400).json({ error: 'انشر الشركة على Vapi أولاً.' });
 
   const headers = { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' };
   const vapiOpts = { headers, timeout: VAPI_TIMEOUT_MS };
-  const phoneId = process.env.VAPI_PHONE_NUMBER_ID;
+
+  // Inbound number for THIS company (from settings), falling back to the
+  // platform env. Bind it to the inbound assistant so calls to that number
+  // reach the inbound behaviour; if the company has no inbound assistant,
+  // fall back to the primary one.
+  const phoneId = c.settings?.inboundPhoneNumberId || process.env.VAPI_PHONE_NUMBER_ID;
+  if (!phoneId) {
+    return res.status(400).json({ error: 'اضبط معرّف الرقم الوارد في إعدادات الصوت أولاً.' });
+  }
+  const targetAssistant = c.assistantIdInbound || c.assistantId;
   try {
-    const r = await axios.patch(`https://api.vapi.ai/phone-number/${phoneId}`, { assistantId: c.assistantId }, vapiOpts);
+    const r = await axios.patch(`https://api.vapi.ai/phone-number/${phoneId}`, { assistantId: targetAssistant }, vapiOpts);
     const newNumber = r.data.number;
     // Vapi succeeded — now reflect the move in DB atomically.
     db.transaction(() => {
@@ -1541,8 +1550,8 @@ app.post('/api/companies/:id/bind-phone', requireCompanyAdmin, async (req, res) 
       db.prepare("UPDATE companies SET phone_number = ?, updated_at = datetime('now') WHERE id = ?").run(newNumber, c.id);
     })();
     invalidateCache();
-    audit(req, 'vapi.phone_bind', `companies/${c.id}`, { phoneNumber: newNumber });
-    res.json({ phoneNumber: newNumber, assistantId: c.assistantId });
+    audit(req, 'vapi.phone_bind', `companies/${c.id}`, { phoneNumber: newNumber, assistantId: targetAssistant });
+    res.json({ phoneNumber: newNumber, assistantId: targetAssistant });
   } catch (e) {
     req.log.error('phone bind error', { err: e.response?.data || e.message, companyId: c.id });
     res.status(500).json({ error: e.response?.data?.message || e.message });

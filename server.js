@@ -575,9 +575,9 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
     overrides.firstMessage = activeScenario.first_message;
   }
   // assistant-speaks-first: greet immediately when the callee picks up, then
-  // continue the conversation (the operator prefers this over waiting for the
-  // callee to speak first). If the opening still gets clipped at the very
-  // start, that's outbound answer-supervision on the carrier/3CX side.
+  // continue. Delivering the FULL opening from its start (with no clipping)
+  // depends on the carrier/3CX sending the SIP answer (200 OK) only when the
+  // callee actually picks up — otherwise the assistant speaks during ringing.
   overrides.firstMessageMode = 'assistant-speaks-first';
 
   try {

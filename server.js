@@ -545,8 +545,11 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
   if (!c.assistantId) {
     return res.status(409).json({ error: 'انشر الشركة على Vapi أولاً.', code: 'NOT_PUBLISHED' });
   }
-  if (!process.env.VAPI_PHONE_NUMBER_ID) {
-    return res.status(503).json({ error: 'VAPI_PHONE_NUMBER_ID مش متضبط في .env' });
+  // Per-company outbound number lets each company call from its OWN number.
+  // Falls back to the platform-wide env var for single-tenant setups.
+  const outboundPhoneId = c.settings?.outboundPhoneNumberId || process.env.VAPI_PHONE_NUMBER_ID;
+  if (!outboundPhoneId) {
+    return res.status(503).json({ error: 'رقم صادر غير مضبوط لهذه الشركة (إعدادات الصوت) ولا VAPI_PHONE_NUMBER_ID.' });
   }
   const phoneNumber = String(req.body?.phoneNumber || '').trim();
   // E.164 format: +<country><number>, total 8–15 digits after the plus.
@@ -571,20 +574,18 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
   if (activeScenario?.first_message) {
     overrides.firstMessage = activeScenario.first_message;
   }
-  // On OUTBOUND, the assistant otherwise starts the greeting while the line is
-  // still ringing, so the callee misses the start ("السلام عليكم… معك ناصر")
-  // and only hears the middle. Waiting for the callee to speak first (their
-  // "ألو/هلا" on answering) means the full opening plays after they've picked
-  // up. Inbound is unaffected — this override is outbound-only. If the callee
-  // answers silently, the idle message prompts them.
-  overrides.firstMessageMode = 'assistant-waits-for-user';
+  // assistant-speaks-first: greet immediately when the callee picks up, then
+  // continue the conversation (the operator prefers this over waiting for the
+  // callee to speak first). If the opening still gets clipped at the very
+  // start, that's outbound answer-supervision on the carrier/3CX side.
+  overrides.firstMessageMode = 'assistant-speaks-first';
 
   try {
     const r = await axios.post(
       'https://api.vapi.ai/call',
       {
         assistantId       : c.assistantId,
-        phoneNumberId     : process.env.VAPI_PHONE_NUMBER_ID,
+        phoneNumberId     : outboundPhoneId,
         customer          : { number: phoneNumber },
         assistantOverrides: overrides,
       },
@@ -1198,6 +1199,11 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, (req, res) => {
   if (['gpt-4o-mini', 'gpt-4.1-mini'].includes(b.model)) clean.model = b.model;
   for (const k of ['temperature', 'maxTokens', 'stability', 'similarityBoost', 'optimizeStreamingLatency']) {
     if (b[k] !== undefined && Number.isFinite(Number(b[k]))) clean[k] = Number(b[k]);
+  }
+  // Per-company Vapi phone-number IDs (outbound is used to place calls;
+  // inbound is stored for reference — inbound routing is bound in Vapi).
+  for (const k of ['outboundPhoneNumberId', 'inboundPhoneNumberId']) {
+    if (typeof b[k] === 'string') clean[k] = b[k].trim().slice(0, 80);
   }
   sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify(clean) });
   invalidateCache(row.id);

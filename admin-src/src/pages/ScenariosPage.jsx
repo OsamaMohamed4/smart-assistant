@@ -1298,6 +1298,24 @@ function VoiceSettingsCard({ companyId }) {
       <p className="text-[11.5px] text-ink-500 mb-4">إعدادات على مستوى الشركة — تُطبّق بعد الضغط على نشر.</p>
       <div className="grid grid-cols-2 gap-4">
         <div>
+          <Label>معرّف الرقم الصادر (Vapi)</Label>
+          <Input
+            value={s.outboundPhoneNumberId || ''}
+            onChange={(e) => setS((x) => ({ ...x, outboundPhoneNumberId: e.target.value }))}
+            placeholder="Phone Number ID للمكالمات الصادرة"
+            dir="ltr"
+          />
+        </div>
+        <div>
+          <Label>معرّف الرقم الوارد (Vapi)</Label>
+          <Input
+            value={s.inboundPhoneNumberId || ''}
+            onChange={(e) => setS((x) => ({ ...x, inboundPhoneNumberId: e.target.value }))}
+            placeholder="للتوثيق — الربط يتم في Vapi"
+            dir="ltr"
+          />
+        </div>
+        <div>
           <Label>الموديل</Label>
           <select value={s.model} onChange={(e) => setS((x) => ({ ...x, model: e.target.value }))}
             className="w-full h-10 px-3 bg-white border border-ink-200 rounded-xl text-[13px] focus-ring">

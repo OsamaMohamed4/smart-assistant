@@ -1226,7 +1226,7 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, (req, res) => {
   const b = req.body || {};
   const clean = {};
   if (typeof b.voiceId === 'string')          clean.voiceId = b.voiceId.slice(0, 60);
-  if (['gpt-4o-mini', 'gpt-4.1-mini'].includes(b.model)) clean.model = b.model;
+  if (['gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4o-mini'].includes(b.model)) clean.model = b.model;
   for (const k of ['temperature', 'maxTokens', 'stability', 'similarityBoost', 'optimizeStreamingLatency']) {
     if (b[k] !== undefined && Number.isFinite(Number(b[k]))) clean[k] = Number(b[k]);
   }
@@ -1429,9 +1429,15 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   const s = c.settings || {};
   const clamp = (v, lo, hi, dflt) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt);
   const voiceId       = s.voiceId || DEFAULT_VOICE_ID;
-  const model         = ['gpt-4o-mini', 'gpt-4.1-mini'].includes(s.model) ? s.model : 'gpt-4o-mini';
-  const temperature   = clamp(s.temperature, 0, 1, 0.6);
-  const maxTokens     = clamp(s.maxTokens, 50, 500, 200);
+  // Quality-first defaults (real-estate call center): full gpt-4.1 is far more
+  // faithful to the KB and hallucinates less in Arabic than the mini models.
+  // Legacy mini selections are honored if a company explicitly picked one.
+  const ALLOWED_MODELS = ['gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4o-mini'];
+  const model         = ALLOWED_MODELS.includes(s.model) ? s.model : 'gpt-4.1';
+  // Lower temperature → sticks to facts, invents fewer details. 0.3 default.
+  const temperature   = clamp(s.temperature, 0, 1, 0.3);
+  // Roomier cap so property explanations aren't cut off mid-sentence.
+  const maxTokens     = clamp(s.maxTokens, 50, 800, 400);
   const stability     = clamp(s.stability, 0, 1, 0.45);
   const similarity    = clamp(s.similarityBoost, 0, 1, 0.8);
   const streamLatency = clamp(s.optimizeStreamingLatency, 0, 4, 3);
@@ -1439,7 +1445,7 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   const cfg = {
     name: `smart-assistant:${c.id}`,
     model: {
-      // gpt-4o-mini default (lowest-latency, good Saudi Arabic). Overridable
+      // gpt-4.1 default (quality-first, most faithful Saudi Arabic). Overridable
       // per-company via settings. endCall tool wired so the model can hang up.
       provider   : 'openai', model, temperature, maxTokens,
       tools      : [{ type: 'endCall' }],
@@ -1447,14 +1453,17 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
     },
     voice: {
       provider: '11labs', voiceId,
-      model: 'eleven_flash_v2_5',
+      // Quality-first: turbo v2.5 is a clear quality step up from flash while
+      // keeping latency low enough for live phone conversation.
+      model: 'eleven_turbo_v2_5',
       stability, similarityBoost: similarity,
       useSpeakerBoost: true,
       optimizeStreamingLatency: streamLatency,
     },
-    // Azure ar-SA is specifically tuned for Saudi Arabic — better word
-    // accuracy on Saudi vocab (شقق/مكتب/إيجار) than the multilingual model.
-    transcriber: { provider: 'azure', language: 'ar-SA' },
+    // Google Gemini multilingual STT: markedly better on Saudi dialect than
+    // Azure ar-SA (which mishears colloquial vocab and injects wrong words,
+    // making the model answer the wrong question). Accuracy > latency here.
+    transcriber: { provider: 'google', model: 'gemini-2.5-flash', language: 'Multilingual' },
     // Inbound default: the assistant-level firstMessage is what an unknown
     // caller hears, so it must NOT depend on customer_name. We use the
     // scenario's inbound variant, falling back to the outbound version

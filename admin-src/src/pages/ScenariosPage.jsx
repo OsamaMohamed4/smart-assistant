@@ -1272,7 +1272,7 @@ function VoiceSettingsCard({ companyId }) {
   useEffect(() => {
     api.getCompany(companyId)
       .then((c) => setS({
-        model: 'gpt-4o-mini', temperature: 0.6, maxTokens: 200,
+        model: 'gpt-4.1', temperature: 0.3, maxTokens: 400,
         stability: 0.45, optimizeStreamingLatency: 3,
         ...(c.settings || {}),
       }))
@@ -1319,8 +1319,10 @@ function VoiceSettingsCard({ companyId }) {
           <Label>الموديل</Label>
           <select value={s.model} onChange={(e) => setS((x) => ({ ...x, model: e.target.value }))}
             className="w-full h-10 px-3 bg-white border border-ink-200 rounded-xl text-[13px] focus-ring">
-            <option value="gpt-4o-mini">gpt-4o-mini (أسرع)</option>
-            <option value="gpt-4.1-mini">gpt-4.1-mini (أدق للعربي)</option>
+            <option value="gpt-4.1">gpt-4.1 (أعلى جودة — موصى به)</option>
+            <option value="gpt-4o">gpt-4o (جودة عالية)</option>
+            <option value="gpt-4.1-mini">gpt-4.1-mini (أسرع/أرخص)</option>
+            <option value="gpt-4o-mini">gpt-4o-mini (الأسرع)</option>
           </select>
         </div>
         <RangeField label="ثبات الصوت (stability)" value={s.stability ?? 0.45} min={0} max={1} step={0.05} onChange={num('stability')} />

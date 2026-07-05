@@ -526,8 +526,13 @@ app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
 // Playground voice catalog. Whitelist — only these IDs can be requested from
 // /chat-voice, so a tampered client can't bill an arbitrary ElevenLabs voice.
 // All three are Saudi-Arabic male voices already on the account.
+// Global default voice for every agent. Code is the source of truth (not the
+// Railway env var) so a stale ELEVENLABS_VOICE_ID can't silently override it.
+// Per-company overrides still win via settings.voiceId (set in the admin UI).
+const DEFAULT_VOICE_ID = 'eSnyWr75HATSuTTwQlAs'; // خالد — صوت سعودي
+
 const PLAYGROUND_VOICES = [
-  { id: 'cFUFIbKkO2iZFwS8cRnY', name: 'Nasser', label: 'ناصر', description: 'صوت سعودي طبيعي', gender: 'male', accent: 'saudi' },
+  { id: 'eSnyWr75HATSuTTwQlAs', name: 'Khalid', label: 'خالد', description: 'صوت سعودي طبيعي', gender: 'male', accent: 'saudi' },
 ];
 const PLAYGROUND_VOICE_IDS = new Set(PLAYGROUND_VOICES.map((v) => v.id));
 
@@ -1252,7 +1257,7 @@ app.post('/api/companies', (req, res) => {
     user_id       : req.user.id,
     name          : b.name,
     language      : b.language || 'ar-SA',
-    voice_id      : b.voiceId || process.env.ELEVENLABS_VOICE_ID || null,
+    voice_id      : b.voiceId || DEFAULT_VOICE_ID,
     phone_number  : b.phoneNumber || null,
     assistant_id  : null,
     system_prompt : b.systemPrompt || '',
@@ -1415,14 +1420,15 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   // tester and the prompt preview so all three are identical.
   let systemContent = composeSystemPrompt(c, scenario.instructionPrompt);
 
-  // ELEVENLABS_VOICE_ID is the source of truth for the agent's voice. We
-  // ignore company.voice_id here because it gets stamped at seed time and
-  // becomes stale the moment you change voices globally. There's no admin
+  // DEFAULT_VOICE_ID is the source of truth for the agent's voice. We ignore
+  // company.voice_id here because it gets stamped at seed time and becomes
+  // stale the moment you change voices globally. A company can still override
+  // the voice via settings.voiceId (admin UI), which takes precedence.
   // Per-company overrides (c.settings) fall back to these tuned defaults.
   // Everything is clamped so a bad value can't produce an invalid assistant.
   const s = c.settings || {};
   const clamp = (v, lo, hi, dflt) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt);
-  const voiceId       = s.voiceId || process.env.ELEVENLABS_VOICE_ID || c.voiceId;
+  const voiceId       = s.voiceId || DEFAULT_VOICE_ID;
   const model         = ['gpt-4o-mini', 'gpt-4.1-mini'].includes(s.model) ? s.model : 'gpt-4o-mini';
   const temperature   = clamp(s.temperature, 0, 1, 0.6);
   const maxTokens     = clamp(s.maxTokens, 50, 500, 200);

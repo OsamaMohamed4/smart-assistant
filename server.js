@@ -1506,10 +1506,12 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
       idleTimeoutSeconds: 15,
     },
     silenceTimeoutSeconds: 30,
-    // 0.4 → 0.3s: the agent jumps in faster after the user stops talking.
-    // smartEndpointingEnabled tells Vapi to detect real end-of-speech via
-    // LiveKit's ML model rather than relying on raw silence.
-    startSpeakingPlan: { waitSeconds: 0.3, smartEndpointingEnabled: 'livekit' },
+    // 0.3 → 0.15s: the agent starts responding sooner after the user stops
+    // talking, cutting perceived latency without touching answer quality.
+    // smartEndpointingEnabled ('livekit' ML end-of-speech detection) still
+    // guards against cutting the customer off mid-sentence, so the lower
+    // waitSeconds only trims the dead pause at the tail of their turn.
+    startSpeakingPlan: { waitSeconds: 0.15, smartEndpointingEnabled: 'livekit' },
     // Aggressive interrupt: stop the agent the instant the user starts
     // speaking. numWords 1 (vs 2) means a single syllable triggers a stop;
     // voiceSeconds 0.1 (vs 0.2) shortens the voice-activity confirmation;

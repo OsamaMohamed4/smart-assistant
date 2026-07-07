@@ -1441,9 +1441,9 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   const stability     = clamp(s.stability, 0, 1, 0.45);
   const similarity    = clamp(s.similarityBoost, 0, 1, 0.8);
   const streamLatency = clamp(s.optimizeStreamingLatency, 0, 4, 3);
-  // Speaking pace. 1.0 = ElevenLabs default; below 1.0 is slower. 0.9 gives a
-  // slightly calmer delivery for a call center without sounding sluggish.
-  const voiceSpeed    = clamp(s.voiceSpeed, 0.7, 1.2, 0.9);
+  // Speaking pace. 1.0 = ElevenLabs default; below 1.0 is slower. 0.95 is a
+  // touch calmer than default without sounding sluggish.
+  const voiceSpeed    = clamp(s.voiceSpeed, 0.7, 1.2, 0.95);
 
   const cfg = {
     name: `smart-assistant:${c.id}`,

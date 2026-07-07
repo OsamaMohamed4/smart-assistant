@@ -529,10 +529,10 @@ app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
 // Global default voice for every agent. Code is the source of truth (not the
 // Railway env var) so a stale ELEVENLABS_VOICE_ID can't silently override it.
 // Per-company overrides still win via settings.voiceId (set in the admin UI).
-const DEFAULT_VOICE_ID = 'eSnyWr75HATSuTTwQlAs'; // خالد — صوت سعودي
+const DEFAULT_VOICE_ID = 'cFUFIbKkO2iZFwS8cRnY'; // Nasser — صوت سعودي احترافي
 
 const PLAYGROUND_VOICES = [
-  { id: 'eSnyWr75HATSuTTwQlAs', name: 'Khalid', label: 'خالد', description: 'صوت سعودي طبيعي', gender: 'male', accent: 'saudi' },
+  { id: 'cFUFIbKkO2iZFwS8cRnY', name: 'Nasser', label: 'ناصر', description: 'صوت سعودي طبيعي', gender: 'male', accent: 'saudi' },
 ];
 const PLAYGROUND_VOICE_IDS = new Set(PLAYGROUND_VOICES.map((v) => v.id));
 
@@ -1227,7 +1227,7 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, (req, res) => {
   const clean = {};
   if (typeof b.voiceId === 'string')          clean.voiceId = b.voiceId.slice(0, 60);
   if (['gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4o-mini'].includes(b.model)) clean.model = b.model;
-  for (const k of ['temperature', 'maxTokens', 'stability', 'similarityBoost', 'optimizeStreamingLatency']) {
+  for (const k of ['temperature', 'maxTokens', 'stability', 'similarityBoost', 'optimizeStreamingLatency', 'voiceSpeed']) {
     if (b[k] !== undefined && Number.isFinite(Number(b[k]))) clean[k] = Number(b[k]);
   }
   // Per-company Vapi phone-number IDs (outbound is used to place calls;
@@ -1441,6 +1441,9 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   const stability     = clamp(s.stability, 0, 1, 0.45);
   const similarity    = clamp(s.similarityBoost, 0, 1, 0.8);
   const streamLatency = clamp(s.optimizeStreamingLatency, 0, 4, 3);
+  // Speaking pace. 1.0 = ElevenLabs default; below 1.0 is slower. 0.9 gives a
+  // slightly calmer delivery for a call center without sounding sluggish.
+  const voiceSpeed    = clamp(s.voiceSpeed, 0.7, 1.2, 0.9);
 
   const cfg = {
     name: `smart-assistant:${c.id}`,
@@ -1458,6 +1461,7 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
       model: 'eleven_turbo_v2_5',
       stability, similarityBoost: similarity,
       useSpeakerBoost: true,
+      speed: voiceSpeed,
       optimizeStreamingLatency: streamLatency,
     },
     // Google Gemini multilingual STT: markedly better on Saudi dialect than

@@ -21,6 +21,9 @@ const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
 const { requireAuth, requireCompanyAccess, requireCompanyAdmin, canChatWithCompany, startSessionCleanup } = require('./lib/auth');
 const { logger } = require('./lib/logger');
+const { initMonitoring, captureError } = require('./lib/monitoring');
+
+initMonitoring(logger);
 
 // Allow only the document types our RAG pipeline can actually parse.
 // pdf-parse, mammoth, and plain text are the supported readers.
@@ -571,7 +574,32 @@ function getOrMakeSessionId(req) {
 
 // ─── Public routes ───────────────────────────────────────────────
 app.get('/', (_req, res) => res.redirect('/admin/'));
-app.get('/health', (_req, res) => res.json({ ok: true }));
+
+// Health check that actually checks. 503 only on hard DB failure (so a
+// platform health-gate restarts us); soft issues (webhook backlog) are
+// reported in the body for the uptime monitor to alert on. Deliberately no
+// secrets/config details — this endpoint is unauthenticated.
+const BOOTED_AT = Date.now();
+app.get('/health', (_req, res) => {
+  const out = {
+    ok        : true,
+    uptime_sec: Math.round((Date.now() - BOOTED_AT) / 1000),
+    version   : (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'dev',
+  };
+  try {
+    db.prepare('SELECT 1').get();
+    out.db = 'ok';
+  } catch (e) {
+    logger.error('health: db check failed', { err: e.message });
+    return res.status(503).json({ ok: false, db: 'fail' });
+  }
+  try {
+    out.webhook_pending = db.prepare("SELECT COUNT(*) AS n FROM webhook_events WHERE status = 'pending'").get().n;
+    out.webhook_failed  = db.prepare("SELECT COUNT(*) AS n FROM webhook_events WHERE status = 'failed'").get().n;
+    if (out.webhook_pending > 50) out.degraded = 'webhook backlog';
+  } catch {}
+  res.json(out);
+});
 
 app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
   const ctx = resolveCompany(req, res);
@@ -2584,6 +2612,19 @@ app.post('/api/companies/:id/rag-test', requireCompanyAccess, async (req, res) =
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// Last-resort error handler: anything a route threw (or passed to next())
+// that nothing else handled. Without this, Express prints an HTML stack
+// trace — leaking internals and bypassing our logging/Sentry entirely.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, _next) => {
+  const isClientErr = err instanceof multer.MulterError || err.status === 400 || err.type === 'entity.too.large';
+  const status = err.status || (isClientErr ? 400 : 500);
+  (req.log || logger).error('unhandled route error', { err: err.message, path: req.path, status });
+  if (status >= 500) captureError(err, { path: req.path, requestId: req.id });
+  if (res.headersSent) return;
+  res.status(status).json({ error: status >= 500 ? 'internal error' : err.message });
 });
 
 const PORT = process.env.PORT || 3000;

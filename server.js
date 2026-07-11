@@ -886,6 +886,14 @@ async function drainWebhookInbox(limit = 5) {
   }
 }
 
+// Background drain every 60s. Without this, a failed event only got retried
+// when the NEXT webhook arrived — an evening failure could sit unprocessed
+// until the next morning's first call. unref() so it never blocks shutdown.
+const drainTimer = setInterval(() => {
+  drainWebhookInbox(10).catch((e) => logger.error('scheduled drain failed', { err: e.message }));
+}, 60_000);
+drainTimer.unref();
+
 app.post('/webhook/vapi', async (req, res) => {
   // Capture every attempt so the operator can inspect what Vapi actually sent
   // when verification fails (header names + sanitized values, body type).

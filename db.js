@@ -353,6 +353,16 @@ if (!hasColumn('scenarios', 'instruction_prompt_inbound')) {
     `ALTER TABLE scenarios ADD COLUMN instruction_prompt_inbound TEXT`);
 }
 
+// Migration 19: time-range indexes. Every dashboard aggregation filters on
+// created_at BETWEEN @from AND @to (optionally per company) — without these
+// each dashboard load was a full table scan on calls + chats.
+runMigration(19, 'add_created_at_indexes', `
+  CREATE INDEX IF NOT EXISTS idx_calls_created          ON calls(created_at);
+  CREATE INDEX IF NOT EXISTS idx_chats_created          ON chats(created_at);
+  CREATE INDEX IF NOT EXISTS idx_calls_company_created  ON calls(company_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_chats_company_created  ON chats(company_id, created_at);
+`);
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users

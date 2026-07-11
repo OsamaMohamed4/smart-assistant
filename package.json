@@ -12,7 +12,8 @@
     "dev:ui": "vite",
     "build:ui": "vite build",
     "build": "vite build",
-    "test:apis": "node --use-system-ca test-apis.js"
+    "test:apis": "node --use-system-ca test-apis.js",
+    "test:smoke": "node scripts/smoke-test.js"
   },
   "keywords": [],
   "author": "",

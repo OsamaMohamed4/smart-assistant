@@ -22,8 +22,10 @@ const clientsRoutes = require('./routes/clients');
 const { requireAuth, requireCompanyAccess, requireCompanyAdmin, canChatWithCompany, startSessionCleanup } = require('./lib/auth');
 const { logger } = require('./lib/logger');
 const { initMonitoring, captureError } = require('./lib/monitoring');
+const { startBackupScheduler, runBackup, getBackupStatus } = require('./lib/backup');
 
 initMonitoring(logger);
+startBackupScheduler(logger);
 
 // Allow only the document types our RAG pipeline can actually parse.
 // pdf-parse, mammoth, and plain text are the supported readers.
@@ -598,6 +600,16 @@ app.get('/health', (_req, res) => {
     out.webhook_failed  = db.prepare("SELECT COUNT(*) AS n FROM webhook_events WHERE status = 'failed'").get().n;
     if (out.webhook_pending > 50) out.degraded = 'webhook backlog';
   } catch {}
+  // Backup signal for the uptime monitor: 'off' (not configured), 'ok',
+  // 'stale' (configured but no successful run in 2 intervals), 'error'.
+  const bk = getBackupStatus();
+  if (!bk.configured) out.backup = 'off';
+  else if (bk.lastError && !bk.lastOkAt) out.backup = 'error';
+  else if (!bk.lastOkAt) out.backup = 'pending';
+  else {
+    const intervalMs = Math.max(1, Number(process.env.BACKUP_INTERVAL_HOURS) || 24) * 3600 * 1000;
+    out.backup = (Date.now() - new Date(bk.lastOkAt).getTime()) > 2 * intervalMs ? 'stale' : 'ok';
+  }
   res.json(out);
 });
 
@@ -1275,6 +1287,23 @@ app.get('/api/_admin/backup', (req, res) => {
   } catch (e) {
     req.log.error('backup failed', { err: e.message });
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Admin: offsite backup status + manual trigger ───────────────
+app.get('/api/_admin/backup-status', (req, res) => {
+  if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  res.json(getBackupStatus());
+});
+
+app.post('/api/_admin/backup-now', async (req, res) => {
+  if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  try {
+    const r = await runBackup(req.log);
+    audit(req, 'admin.backup_offsite', null, r);
+    res.json({ success: true, ...r });
+  } catch (e) {
+    res.status(503).json({ success: false, error: e.message });
   }
 });
 

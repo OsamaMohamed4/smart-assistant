@@ -71,13 +71,17 @@ const app = express();
 
 // Trust proxy hops in front of Node. Misconfiguration here lets attackers
 // spoof X-Forwarded-For and bypass per-IP rate limits + lockout. Set to:
-//   0  — Node is exposed directly (no proxy). DEFAULT, safest.
-//   1  — exactly one trusted proxy (e.g. nginx OR Cloudflare).
+//   0  — Node is exposed directly (no proxy). Safest bare default.
+//   1  — exactly one trusted proxy (e.g. Railway edge, nginx, Cloudflare).
 //   2+ — chained proxies (e.g. Cloudflare → nginx).
-// Configure via `TRUST_PROXY` env var to match your real deployment.
+// On Railway there is ALWAYS one proxy in front of us; with trust=0 every
+// request reports the proxy's IP, so all users share one rate-limit bucket
+// (one abuser exhausts login attempts for everyone). Auto-detect Railway
+// and default to 1 there; the TRUST_PROXY env var still overrides.
+const ON_RAILWAY = !!(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_STATIC_URL);
 const TRUST_PROXY = Number.isFinite(Number(process.env.TRUST_PROXY))
   ? Number(process.env.TRUST_PROXY)
-  : 0;
+  : (ON_RAILWAY ? 1 : 0);
 app.set('trust proxy', TRUST_PROXY);
 
 // Strict CSP for the SPA. `unsafe-inline` on style is required by Tailwind's
@@ -152,6 +156,41 @@ const chatLimiter = rateLimit({
   message : { error: 'too many requests' },
 });
 
+// Server-to-server Agent API limiter. Keyed per company (not per IP) so one
+// busy tenant can't starve the others behind a shared BSP egress IP.
+const agentLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max     : Number(process.env.AGENT_RATE_PER_MIN) || 120,
+  standardHeaders: true,
+  legacyHeaders  : false,
+  keyGenerator: (req) => `co:${String(req.body?.company_id || 'none')}`,
+  message : { success: false, error: 'too many requests' },
+});
+
+// ─── Daily usage caps (cost control) ─────────────────────────────
+// The usage_counters table existed since day one but nothing enforced it —
+// a runaway integration loop could burn OpenAI/Vapi budget for days. Caps
+// are generous (normal operation never hits them); they're a circuit
+// breaker, not a billing feature. Per-company override via settings
+// (dailyMessageCap / dailyOutboundCap), platform default via env.
+function dailyCap(company, settingsKey, envKey, dflt) {
+  const s = Number(company?.settings?.[settingsKey]);
+  if (Number.isFinite(s) && s > 0) return s;
+  const e = Number(process.env[envKey]);
+  if (Number.isFinite(e) && e > 0) return e;
+  return dflt;
+}
+
+// Atomically consume `amount` from a company's daily budget for `kind`.
+// Returns false (without consuming) when the cap would be exceeded.
+function checkAndBumpUsage(companyId, kind, cap, amount = 1) {
+  const day = new Date().toISOString().slice(0, 10);
+  const used = sql.getUsage.get(companyId, day, kind)?.amount || 0;
+  if (used + amount > cap) return false;
+  sql.bumpUsage.run({ company_id: companyId, day, kind, amount });
+  return true;
+}
+
 // CSRF defense for cookie-authenticated endpoints: the SPA always sends
 // `X-Requested-With: XMLHttpRequest`, which a cross-origin form-style attacker
 // cannot set without triggering a CORS preflight. Pairs with SameSite=Lax.
@@ -204,7 +243,7 @@ app.get('/api/public/companies/:id', (req, res) => {
 // from the whatsapp_sessions table — but exposed as a server-to-server
 // REST endpoint authenticated via a Bearer API key (env: AGENT_API_KEY).
 // Mounted before requireAuth so callers don't need a logged-in session.
-app.post('/api/v1/agent/chat', async (req, res) => {
+app.post('/api/v1/agent/chat', agentLimiter, async (req, res) => {
   const expected = (process.env.AGENT_API_KEY || '').trim();
   if (!expected) {
     return res.status(503).json({ success: false, error: 'AGENT_API_KEY not configured on server' });
@@ -245,6 +284,9 @@ app.post('/api/v1/agent/chat', async (req, res) => {
   }
   if (!company.assistantId) {
     return res.status(409).json({ success: false, error: 'company not published to Vapi' });
+  }
+  if (!checkAndBumpUsage(company.id, 'agent_msgs', dailyCap(company, 'dailyMessageCap', 'DAILY_MSG_CAP', 2000))) {
+    return res.status(429).json({ success: false, error: 'daily message limit reached for this company' });
   }
 
   // Per-call variable substitutions (optional).
@@ -503,6 +545,9 @@ app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
   if (!canChatWithCompany(req.user, ctx.company.id)) {
     return res.status(403).json({ error: 'لا تملك صلاحية محادثة هذه الشركة' });
   }
+  if (!checkAndBumpUsage(ctx.company.id, 'chat_msgs', dailyCap(ctx.company, 'dailyMessageCap', 'DAILY_MSG_CAP', 2000))) {
+    return res.status(429).json({ error: 'تم بلوغ الحد اليومي للرسائل لهذه الشركة. حاول غداً أو ارفع الحد من الإعدادات.' });
+  }
   const sessionId = getOrMakeSessionId(req);
   try {
     const r = await askGPT(ctx.company, ctx.message, ctx.history, ctx.vars);
@@ -555,6 +600,9 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
   const outboundPhoneId = c.settings?.outboundPhoneNumberId || process.env.VAPI_PHONE_NUMBER_ID;
   if (!outboundPhoneId) {
     return res.status(503).json({ error: 'رقم صادر غير مضبوط لهذه الشركة (إعدادات الصوت) ولا VAPI_PHONE_NUMBER_ID.' });
+  }
+  if (!checkAndBumpUsage(c.id, 'outbound_calls', dailyCap(c, 'dailyOutboundCap', 'DAILY_OUTBOUND_CAP', 200))) {
+    return res.status(429).json({ error: 'تم بلوغ الحد اليومي للمكالمات الصادرة لهذه الشركة.' });
   }
   const phoneNumber = String(req.body?.phoneNumber || '').trim();
   // E.164 format: +<country><number>, total 8–15 digits after the plus.
@@ -1237,7 +1285,7 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, (req, res) => {
   const clean = {};
   if (typeof b.voiceId === 'string')          clean.voiceId = b.voiceId.slice(0, 60);
   if (['gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4o-mini'].includes(b.model)) clean.model = b.model;
-  for (const k of ['temperature', 'maxTokens', 'stability', 'similarityBoost', 'optimizeStreamingLatency', 'voiceSpeed']) {
+  for (const k of ['temperature', 'maxTokens', 'stability', 'similarityBoost', 'optimizeStreamingLatency', 'voiceSpeed', 'dailyMessageCap', 'dailyOutboundCap']) {
     if (b[k] !== undefined && Number.isFinite(Number(b[k]))) clean[k] = Number(b[k]);
   }
   // Per-company Vapi phone-number IDs (outbound is used to place calls;

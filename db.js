@@ -363,6 +363,13 @@ runMigration(19, 'add_created_at_indexes', `
   CREATE INDEX IF NOT EXISTS idx_chats_company_created  ON chats(company_id, created_at);
 `);
 
+// Migration 20: call recording URL. Vapi's end-of-call report has carried
+// artifact.recordingUrl all along — we were discarding it.
+if (!hasColumn('calls', 'recording_url')) {
+  runMigration(20, 'calls_add_recording_url',
+    `ALTER TABLE calls ADD COLUMN recording_url TEXT`);
+}
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users
@@ -511,8 +518,8 @@ const sql = {
 
   // calls
   upsertCall         : db.prepare(`
-    INSERT INTO calls (id, company_id, assistant_id, caller_number, duration_sec, started_at, ended_at, ended_reason, transcript, summary, cost_usd, direction)
-    VALUES (@id, @company_id, @assistant_id, @caller_number, @duration_sec, @started_at, @ended_at, @ended_reason, @transcript, @summary, @cost_usd, @direction)
+    INSERT INTO calls (id, company_id, assistant_id, caller_number, duration_sec, started_at, ended_at, ended_reason, transcript, summary, cost_usd, direction, recording_url)
+    VALUES (@id, @company_id, @assistant_id, @caller_number, @duration_sec, @started_at, @ended_at, @ended_reason, @transcript, @summary, @cost_usd, @direction, @recording_url)
     ON CONFLICT(id) DO UPDATE SET
       company_id    = excluded.company_id,
       assistant_id  = excluded.assistant_id,
@@ -524,7 +531,8 @@ const sql = {
       transcript    = COALESCE(excluded.transcript, calls.transcript),
       summary       = COALESCE(excluded.summary, calls.summary),
       cost_usd      = excluded.cost_usd,
-      direction     = COALESCE(excluded.direction, calls.direction)
+      direction     = COALESCE(excluded.direction, calls.direction),
+      recording_url = COALESCE(excluded.recording_url, calls.recording_url)
   `),
   // Stub row written when we initiate an outbound call so the attempt is
   // visible in the Conversations table even before Vapi's end-of-call webhook

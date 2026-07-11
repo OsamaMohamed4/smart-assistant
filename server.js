@@ -834,6 +834,7 @@ async function processVapiEvent(msg) {
       summary       : msg.summary || null,
       cost_usd      : msg.cost || call.cost || null,
       direction,
+      recording_url : msg.artifact?.recordingUrl || msg.recordingUrl || call.artifact?.recordingUrl || null,
     });
 
     if (transcript && (!msg.summary || msg.summary.length < 20)) {
@@ -1111,6 +1112,7 @@ function upsertVapiCall(v) {
     summary       : v.analysis?.summary || v.summary || null,
     cost_usd      : v.cost ?? null,
     direction,
+    recording_url : v.artifact?.recordingUrl || v.recordingUrl || null,
   });
   return companyRow?.id || null;
 }
@@ -1381,6 +1383,7 @@ app.get('/api/calls/:id', ensureCallOwned, async (req, res) => {
         summary       : v.summary || call.summary || null,
         cost_usd      : v.cost ?? call.cost_usd ?? null,
         direction,
+        recording_url : v.artifact?.recordingUrl || v.recordingUrl || call.recording_url || null,
       });
       call = sql.getCall.get(call.id);
     } catch (e) {

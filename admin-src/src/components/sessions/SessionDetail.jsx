@@ -38,6 +38,18 @@ export function SessionDetail({ open, onClose, kind, data, companyName, onResumm
             <MetaCard icon={User} label="من" value={data.caller_number || 'مجهول'} mono />
           </div>
 
+          {data.recording_url && (
+            <div className="rounded-2xl bg-white ring-1 ring-ink-100 p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-6 h-6 rounded-md bg-brand-500 flex items-center justify-center">
+                  <Mic className="w-3 h-3 text-white" strokeWidth={2.5} />
+                </div>
+                <span className="text-[12px] font-semibold text-ink-700 uppercase tracking-wider">تسجيل المكالمة</span>
+              </div>
+              <audio controls preload="none" src={data.recording_url} className="w-full h-10" />
+            </div>
+          )}
+
           {data.summary && (
             <div className="rounded-2xl bg-gradient-to-br from-amber-50 to-white border border-amber-200/60 p-4">
               <div className="flex items-center gap-2 mb-2">

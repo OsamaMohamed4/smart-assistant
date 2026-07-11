@@ -156,14 +156,17 @@ const chatLimiter = rateLimit({
   message : { error: 'too many requests' },
 });
 
-// Server-to-server Agent API limiter. Keyed per company (not per IP) so one
-// busy tenant can't starve the others behind a shared BSP egress IP.
+// Server-to-server Agent API limiter. Keyed per credential (not per IP) so
+// one busy tenant can't starve the others behind a shared BSP egress IP.
 const agentLimiter = rateLimit({
   windowMs: 60 * 1000,
   max     : Number(process.env.AGENT_RATE_PER_MIN) || 120,
   standardHeaders: true,
   legacyHeaders  : false,
-  keyGenerator: (req) => `co:${String(req.body?.company_id || 'none')}`,
+  keyGenerator: (req) => {
+    const cred = req.get('authorization') || req.get('x-api-key') || req.ip || '';
+    return 'k:' + crypto.createHash('sha256').update(String(cred)).digest('hex').slice(0, 16);
+  },
   message : { success: false, error: 'too many requests' },
 });
 
@@ -243,26 +246,57 @@ app.get('/api/public/companies/:id', (req, res) => {
 // from the whatsapp_sessions table — but exposed as a server-to-server
 // REST endpoint authenticated via a Bearer API key (env: AGENT_API_KEY).
 // Mounted before requireAuth so callers don't need a logged-in session.
-app.post('/api/v1/agent/chat', agentLimiter, async (req, res) => {
-  const expected = (process.env.AGENT_API_KEY || '').trim();
-  if (!expected) {
-    return res.status(503).json({ success: false, error: 'AGENT_API_KEY not configured on server' });
-  }
+// Resolve the caller's API key to a company scope.
+//  1. Per-company key (api_keys table, sha256 lookup) — the correct path.
+//     The key itself IS the tenant scope; a body company_id that disagrees
+//     is rejected so a leaked key can never reach another tenant.
+//  2. Legacy global AGENT_API_KEY — kept so existing integrations (LoopChat)
+//     keep working during migration; logs a deprecation warning. Scope is
+//     whatever company_id the body claims (the historical, unsafe behavior).
+function resolveAgentApiAuth(req) {
   const authHeader = req.get('authorization') || '';
   const m = /^Bearer\s+(.+)$/i.exec(authHeader);
   const provided = (m?.[1] || req.get('x-api-key') || '').trim();
-  if (!provided) {
-    return res.status(401).json({ success: false, error: 'missing api key' });
-  }
-  let ok = false;
-  try {
-    const a = Buffer.from(provided);
-    const b = Buffer.from(expected);
-    ok = a.length === b.length && crypto.timingSafeEqual(a, b);
-  } catch {}
-  if (!ok) return res.status(401).json({ success: false, error: 'invalid api key' });
+  if (!provided) return { error: 'missing api key', status: 401 };
 
-  const companyId     = String(req.body?.company_id || '').trim();
+  const hash = crypto.createHash('sha256').update(provided).digest('hex');
+  const keyRow = sql.getApiKeyByHash.get(hash);
+  if (keyRow) {
+    sql.touchApiKey.run(keyRow.id);
+    return { companyId: keyRow.company_id, keyId: keyRow.id };
+  }
+
+  const globalKey = (process.env.AGENT_API_KEY || '').trim();
+  if (globalKey) {
+    try {
+      const a = Buffer.from(provided);
+      const b = Buffer.from(globalKey);
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+        return { companyId: null, legacyGlobal: true };
+      }
+    } catch {}
+  }
+  return { error: 'invalid api key', status: 401 };
+}
+
+app.post('/api/v1/agent/chat', agentLimiter, async (req, res) => {
+  const auth = resolveAgentApiAuth(req);
+  if (auth.error) return res.status(auth.status).json({ success: false, error: auth.error });
+
+  const bodyCompanyId = String(req.body?.company_id || '').trim();
+  let companyId;
+  if (auth.companyId) {
+    // Company-scoped key: the key decides the tenant. A mismatched body
+    // company_id is an integration bug or an attack — refuse loudly.
+    if (bodyCompanyId && bodyCompanyId !== auth.companyId) {
+      return res.status(403).json({ success: false, error: 'api key does not belong to this company' });
+    }
+    companyId = auth.companyId;
+  } else {
+    req.log.warn('agent api: legacy global AGENT_API_KEY used — migrate to per-company keys');
+    companyId = bodyCompanyId;
+  }
+
   const customerPhone = String(req.body?.customer_phone || '').trim();
   const message       = String(req.body?.message || '').trim();
   if (!COMPANY_ID_RE.test(companyId)) {
@@ -1297,6 +1331,33 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, (req, res) => {
   invalidateCache(row.id);
   audit(req, 'company.settings', `companies/${row.id}`, Object.keys(clean));
   res.json({ settings: clean });
+});
+
+// ─── Per-company API keys (public Agent API) ─────────────────────
+// Superadmin-only. The plaintext key is returned ONCE at creation; only its
+// SHA-256 hash is stored, so there is no way to re-display it later.
+app.post('/api/companies/:id/api-keys', requireCompanyAdmin, (req, res) => {
+  const name = String(req.body?.name || '').trim().slice(0, 80) || 'default';
+  const raw = 'sa_' + crypto.randomBytes(24).toString('hex');
+  const keyHash = crypto.createHash('sha256').update(raw).digest('hex');
+  const prefix = raw.slice(0, 10);
+  const r = sql.insertApiKey.run({ company_id: req.params.id, name, key_hash: keyHash, prefix });
+  audit(req, 'apikey.create', `companies/${req.params.id}`, { keyId: Number(r.lastInsertRowid), name });
+  res.status(201).json({
+    id: Number(r.lastInsertRowid), name, prefix,
+    key: raw,   // shown once — the UI must tell the user to copy it now
+  });
+});
+
+app.get('/api/companies/:id/api-keys', requireCompanyAdmin, (req, res) => {
+  res.json(sql.listApiKeysForCompany.all(req.params.id));
+});
+
+app.delete('/api/companies/:id/api-keys/:keyId', requireCompanyAdmin, (req, res) => {
+  const r = sql.revokeApiKey.run(Number(req.params.keyId), req.params.id);
+  if (!r.changes) return res.status(404).json({ error: 'key not found or already revoked' });
+  audit(req, 'apikey.revoke', `companies/${req.params.id}`, { keyId: Number(req.params.keyId) });
+  res.json({ ok: true });
 });
 
 app.post('/api/companies', (req, res) => {

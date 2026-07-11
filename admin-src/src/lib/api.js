@@ -74,6 +74,11 @@ export const api = {
   updateCompanySettings: (id, settings) => request(`/api/companies/${id}/settings`, { method: 'PATCH', body: JSON.stringify(settings) }),
   bindPhone         : (id) => request(`/api/companies/${id}/bind-phone`, { method: 'POST', body: '{}' }),
 
+  // API keys (public Agent API)
+  listApiKeys       : (id) => request(`/api/companies/${id}/api-keys`),
+  createApiKey      : (id, name) => request(`/api/companies/${id}/api-keys`, { method: 'POST', body: JSON.stringify({ name }) }),
+  revokeApiKey      : (id, keyId) => request(`/api/companies/${id}/api-keys/${keyId}`, { method: 'DELETE' }),
+
   // sessions
   listSessions      : (companyId, limit = 50) => request(`/api/companies/${companyId}/sessions?limit=${limit}`),
   getSession        : (sessionId) => request(`/api/sessions/${sessionId}`),

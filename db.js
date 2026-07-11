@@ -370,6 +370,24 @@ if (!hasColumn('calls', 'recording_url')) {
     `ALTER TABLE calls ADD COLUMN recording_url TEXT`);
 }
 
+// Migration 21: per-company API keys for the public Agent API. Replaces the
+// single global AGENT_API_KEY (which let any holder talk to EVERY company's
+// agent). Only the SHA-256 hash is stored; the plaintext is shown once at
+// creation. Revocation is a soft flag so audit history survives.
+runMigration(21, 'create_api_keys', `
+  CREATE TABLE IF NOT EXISTS api_keys (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id   TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    name         TEXT,
+    key_hash     TEXT NOT NULL UNIQUE,
+    prefix       TEXT NOT NULL,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    last_used_at TEXT,
+    revoked_at   TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_api_keys_company ON api_keys(company_id);
+`);
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users
@@ -714,6 +732,28 @@ const sql = {
           ORDER BY created_at DESC, id DESC
           LIMIT 30
        )
+  `),
+
+  // ─── API keys (public Agent API, per company) ───────────────
+  insertApiKey       : db.prepare(`
+    INSERT INTO api_keys (company_id, name, key_hash, prefix)
+    VALUES (@company_id, @name, @key_hash, @prefix)
+  `),
+  listApiKeysForCompany: db.prepare(`
+    SELECT id, name, prefix, created_at, last_used_at, revoked_at
+      FROM api_keys WHERE company_id = ? ORDER BY created_at DESC
+  `),
+  getApiKeyByHash    : db.prepare(`
+    SELECT k.*, c.id AS company_exists
+      FROM api_keys k JOIN companies c ON c.id = k.company_id
+     WHERE k.key_hash = ? AND k.revoked_at IS NULL
+  `),
+  touchApiKey        : db.prepare(`
+    UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?
+  `),
+  revokeApiKey       : db.prepare(`
+    UPDATE api_keys SET revoked_at = datetime('now')
+     WHERE id = ? AND company_id = ? AND revoked_at IS NULL
   `),
 
   // ─── WhatsApp sessions ──────────────────────────────────────

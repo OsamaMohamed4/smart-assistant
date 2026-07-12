@@ -14,7 +14,6 @@ const { loadCompany, listCompaniesFull, invalidateCache, buildSystemPromptWithRA
 const { summarize, chatToTranscript } = require('./summarize');
 const { ingestDocument, retrieve, repairMojibake } = require('./lib/rag');
 const { END_CALL_TOOL_RULE } = require('./lib/master-prompt');
-const loopchat = require('./lib/loopchat');
 const { lintScenario } = require('./lib/scenario-lint');
 const { TEMPLATES: SCENARIO_TEMPLATES } = require('./lib/scenario-templates');
 const authRoutes = require('./routes/auth');
@@ -245,19 +244,18 @@ app.get('/api/public/companies/:id', (req, res) => {
 });
 
 // ─── Public Agent HTTP API (/api/v1/agent/chat) ──────────────────
-// External integrations (e.g. LoopChat for WhatsApp) POST a customer
-// message here and get the AI agent's text reply. Same pipeline as the
-// Twilio WhatsApp webhook — calls Vapi /chat with previousChatId resumed
-// from the whatsapp_sessions table — but exposed as a server-to-server
-// REST endpoint authenticated via a Bearer API key (env: AGENT_API_KEY).
-// Mounted before requireAuth so callers don't need a logged-in session.
+// External integrations POST a customer message here and get the AI agent's
+// text reply. Calls Vapi /chat with previousChatId resumed from the
+// whatsapp_sessions table (keyed by customer phone) so a returning customer
+// continues the same conversation. Server-to-server; mounted before
+// requireAuth so callers don't need a logged-in session.
 // Resolve the caller's API key to a company scope.
 //  1. Per-company key (api_keys table, sha256 lookup) — the correct path.
 //     The key itself IS the tenant scope; a body company_id that disagrees
 //     is rejected so a leaked key can never reach another tenant.
-//  2. Legacy global AGENT_API_KEY — kept so existing integrations (LoopChat)
-//     keep working during migration; logs a deprecation warning. Scope is
-//     whatever company_id the body claims (the historical, unsafe behavior).
+//  2. Legacy global AGENT_API_KEY — kept for compatibility during
+//     migration; logs a deprecation warning. Scope is whatever company_id
+//     the body claims (the historical, unsafe behavior).
 function resolveAgentApiAuth(req) {
   const authHeader = req.get('authorization') || '';
   const m = /^Bearer\s+(.+)$/i.exec(authHeader);
@@ -392,7 +390,7 @@ app.post('/api/v1/agent/chat', agentLimiter, async (req, res) => {
       session_id     : 'api-' + customerPhone.replace(/[^0-9]/g, ''),
       user_message   : message,
       assistant_reply: reply || '',
-      channel        : 'whatsapp',
+      channel        : 'api',
       latency_ms     : Date.now() - t0,
       user_id        : null,
     });
@@ -963,33 +961,6 @@ async function processVapiEvent(msg) {
       const ours = await summarize(transcript);
       if (ours) sql.setCallSummary.run(ours, call.id);
     }
-
-    // Post-call WhatsApp template via LoopChat. Skipped silently when the
-    // template UUID isn't configured (so the integration is opt-in per env).
-    // Only fires for real conversations (>=30s) and when we have a customer
-    // number to message. Fire-and-forget — failures are logged, never raised.
-    const tplUuid    = process.env.LOOPCHAT_TEMPLATE_UUID_CALL_SUMMARY;
-    const recipient  = call.customer?.number || msg.customer?.number || null;
-    if (tplUuid && recipient && (duration || 0) >= 30) {
-      const company    = companyRow ? loadCompany(companyRow.id) : null;
-      const companyNm  = company?.name || 'فريق المبيعات';
-      const finalSummary = msg.summary || sql.getCall.get(call.id)?.summary || '';
-      const summaryShort = String(finalSummary).slice(0, 240) || 'تم استلام طلبك';
-      loopchat.sendTemplateBestEffort(
-        {
-          recipient,
-          templateUuid : tplUuid,
-          // Keys are template placeholder numbers ({{1}}, {{2}}, ...). The
-          // user defines the template body in LoopChat's dashboard; make
-          // sure the placeholders line up with the order below.
-          bodyVariables: {
-            '1': companyNm,
-            '2': summaryShort,
-          },
-        },
-        { companyId: companyRow?.id || null, callId: call.id },
-      );
-    }
   }
 }
 
@@ -1060,151 +1031,6 @@ app.post('/webhook/vapi', async (req, res) => {
   // 4. Best-effort: pick up older failures while we're already on a worker thread.
   try { await drainWebhookInbox(5); } catch (e) { req.log.error('drain failed', { err: e.message }); }
 });
-
-// ─── Twilio WhatsApp webhook ─────────────────────────────────────
-// Receives inbound WhatsApp messages from Twilio, runs them through the
-// same Vapi assistant the phone calls use, and replies via the Twilio
-// Messages API. The Twilio sandbox URL should be set to:
-//   POST https://<host>/webhook/twilio-whatsapp
-//
-// Body comes as application/x-www-form-urlencoded (Twilio's default), so
-// we mount a urlencoded parser scoped to this route only.
-
-// Twilio's signature scheme: HMAC-SHA1(authToken, URL + concat(sortedParams))
-// base64-encoded. Reject anything that doesn't match unless we're in dev
-// without an auth token configured (so local sandbox testing isn't blocked).
-function verifyTwilioSignature(req, fullUrl) {
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  if (!token) return process.env.NODE_ENV !== 'production';
-  const sig = req.get('x-twilio-signature') || '';
-  if (!sig) return false;
-  const params = req.body || {};
-  const sorted = Object.keys(params).sort();
-  const payload = fullUrl + sorted.map((k) => k + params[k]).join('');
-  const expected = crypto.createHmac('sha1', token).update(payload).digest('base64');
-  try {
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sig));
-  } catch { return false; }
-}
-
-// Reply over the Twilio Messages API. Returns the message SID or throws.
-async function sendWhatsappReply(to, body) {
-  const sid   = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  const from  = process.env.TWILIO_WHATSAPP_FROM;
-  if (!sid || !token || !from) throw new Error('Twilio WhatsApp not configured');
-  const form = new URLSearchParams({ From: from, To: to, Body: body }).toString();
-  const r = await axios.post(
-    `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
-    form,
-    {
-      auth   : { username: sid, password: token },
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      timeout: 15_000,
-    },
-  );
-  return r.data?.sid;
-}
-
-app.post(
-  '/webhook/twilio-whatsapp',
-  express.urlencoded({ extended: false, limit: '1mb' }),
-  async (req, res) => {
-    // Reconstruct the URL Twilio signed (must match what's set in the console).
-    const fullUrl = (req.protocol + '://' + req.get('host') + req.originalUrl).split('?')[0];
-    if (!verifyTwilioSignature(req, fullUrl)) {
-      req.log.warn('twilio: bad signature', { url: fullUrl });
-      return res.status(403).send('bad signature');
-    }
-
-    const from = String(req.body.From || '');         // e.g. whatsapp:+9665XXXXXXXX
-    const body = String(req.body.Body || '').trim();
-    if (!from || !body) return res.status(200).send('');  // ignore status callbacks etc.
-
-    // Sandbox: every message routes to one configured company. Production
-    // would map each WhatsApp number to its own company.
-    const companyId = process.env.TWILIO_DEFAULT_COMPANY_ID;
-    if (!companyId) {
-      req.log.error('twilio: TWILIO_DEFAULT_COMPANY_ID not set');
-      return res.status(200).send('');
-    }
-    const company = loadCompany(companyId);
-    if (!company?.assistantId) {
-      req.log.error('twilio: company not published', { companyId });
-      try { await sendWhatsappReply(from, 'الخدمة غير متاحة حالياً. حاول لاحقاً.'); } catch {}
-      return res.status(200).send('');
-    }
-
-    // Resume the existing Vapi chat thread for this customer if we have one.
-    const prev = sql.getWhatsappSession.get(company.id, from);
-    const previousChatId = prev?.vapi_chat_id || undefined;
-
-    const t0 = Date.now();
-    let reply = '';
-    let newChatId = previousChatId;
-    try {
-      const r = await axios.post(
-        'https://api.vapi.ai/chat',
-        { assistantId: company.assistantId, input: body, previousChatId },
-        {
-          headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' },
-          timeout: VAPI_TIMEOUT_MS,
-        },
-      );
-      reply = (r.data.output || []).map((m) => m.content).filter(Boolean).join('\n').trim();
-      newChatId = r.data.id || newChatId;
-    } catch (e) {
-      // Vapi chat IDs expire — if the previous one is gone, retry without it.
-      if (previousChatId && /not found|invalid/i.test(e.response?.data?.message || '')) {
-        try {
-          const r = await axios.post(
-            'https://api.vapi.ai/chat',
-            { assistantId: company.assistantId, input: body },
-            {
-              headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' },
-              timeout: VAPI_TIMEOUT_MS,
-            },
-          );
-          reply = (r.data.output || []).map((m) => m.content).filter(Boolean).join('\n').trim();
-          newChatId = r.data.id;
-        } catch (e2) {
-          req.log.error('twilio: vapi chat (retry) failed', { err: e2.message });
-        }
-      } else {
-        req.log.error('twilio: vapi chat failed', { err: e.message, status: e.response?.status });
-      }
-    }
-
-    if (!reply) reply = 'تعذّر الرد حالياً. جرّب بعد دقيقة.';
-    const latency = Date.now() - t0;
-
-    // Persist the session id so the next inbound message resumes the thread.
-    sql.upsertWhatsappSession.run({
-      company_id: company.id, customer_phone: from, vapi_chat_id: newChatId || null,
-    });
-
-    // Log to the chats table so it shows up in the Conversations + Dashboard
-    // alongside voice/Vapi chats.
-    try {
-      sql.insertChat.run({
-        company_id     : company.id,
-        session_id     : 'wa-' + from.replace(/[^0-9]/g, ''),
-        user_message   : body,
-        assistant_reply: reply,
-        channel        : 'whatsapp',
-        latency_ms     : latency,
-        user_id        : null,
-      });
-    } catch (e) { req.log.error('twilio: chat insert failed', { err: e.message }); }
-
-    // Send the reply (best-effort — Twilio will retry the webhook if we 5xx).
-    try { await sendWhatsappReply(from, reply); }
-    catch (e) { req.log.error('twilio: send reply failed', { err: e.message }); }
-
-    // Twilio expects 200 + empty body (we already replied via the API).
-    res.type('text/xml').send('<Response></Response>');
-  },
-);
 
 // Upsert a single Vapi call object (from the REST list/get API) into our
 // calls table. Mirrors the mapping in processVapiEvent but works on the

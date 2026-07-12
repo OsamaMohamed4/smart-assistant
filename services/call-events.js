@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { db, sql } = require('../db');
 const { summarize } = require('../summarize');
 const { logger } = require('../lib/logger');
+const { sendCallCompleted } = require('./outbound-webhook');
 
 // Resolve which company a Vapi call belongs to. Primary key is the assistant
 // ID (matches assistant_id OR assistant_id_inbound). But assistant IDs change
@@ -75,6 +76,19 @@ async function processVapiEvent(msg) {
     if (transcript && (!msg.summary || msg.summary.length < 20)) {
       const ours = await summarize(transcript);
       if (ours) sql.setCallSummary.run(ours, call.id);
+    }
+
+    // Outgoing webhook (opt-in per company). Read the row back so the
+    // payload carries the final summary, then fire-and-forget.
+    if (companyRow) {
+      try {
+        const { loadCompany } = require('../companies'); // lazy: avoids require cycle at module load
+        const company = loadCompany(companyRow.id);
+        const finalRow = sql.getCall.get(call.id);
+        if (company && finalRow) sendCallCompleted(company, finalRow);
+      } catch (e) {
+        logger.warn('outbound webhook dispatch skipped', { err: e.message });
+      }
     }
   }
 }

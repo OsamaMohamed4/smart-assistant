@@ -87,6 +87,13 @@ const app = express();
 // (one abuser exhausts login attempts for everyone). Auto-detect Railway
 // and default to 1 there; the TRUST_PROXY env var still overrides.
 const ON_RAILWAY = !!(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_STATIC_URL);
+
+// Public base URL of THIS server (no trailing slash). Needed when we hand
+// Vapi a callback URL (the in-call KB search tool). Railway exposes the
+// public domain as RAILWAY_PUBLIC_DOMAIN; PUBLIC_BASE_URL env overrides.
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL
+  || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')
+).replace(/\/+$/, '');
 const TRUST_PROXY = Number.isFinite(Number(process.env.TRUST_PROXY))
   ? Number(process.env.TRUST_PROXY)
   : (ON_RAILWAY ? 1 : 0);
@@ -924,10 +931,28 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, (req, res) => {
   for (const k of ['outboundPhoneNumberId', 'inboundPhoneNumberId']) {
     if (typeof b[k] === 'string') clean[k] = b[k].trim().slice(0, 80);
   }
-  sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify(clean) });
+  // Human-transfer number (E.164, e.g. +9665xxxxxxxx). Empty string clears it.
+  if (typeof b.transferPhoneNumber === 'string') {
+    const t = b.transferPhoneNumber.trim();
+    if (t === '' || /^\+[0-9]{8,15}$/.test(t)) clean.transferPhoneNumber = t;
+    else return res.status(400).json({ error: 'رقم التحويل يجب أن يكون بصيغة دولية مثل +9665xxxxxxxx' });
+  }
+  // Outgoing webhook (call.completed). Empty string clears.
+  if (typeof b.webhookUrl === 'string') {
+    const u = b.webhookUrl.trim();
+    if (u === '' || /^https?:\/\/.{4,300}$/i.test(u)) clean.webhookUrl = u.slice(0, 300);
+    else return res.status(400).json({ error: 'رابط الـ webhook غير صالح' });
+  }
+  if (typeof b.webhookSecret === 'string') clean.webhookSecret = b.webhookSecret.trim().slice(0, 128);
+  // Merge over the existing settings: a partial PATCH (one key) must not
+  // wipe the rest (phone-number IDs, caps...).
+  let existing = {};
+  try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
+  const merged = { ...existing, ...clean };
+  sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify(merged) });
   invalidateCache(row.id);
   audit(req, 'company.settings', `companies/${row.id}`, Object.keys(clean));
-  res.json({ settings: clean });
+  res.json({ settings: merged });
 });
 
 // ─── Per-company API keys (public Agent API) ─────────────────────
@@ -1240,6 +1265,46 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
     // after being cut off.
     stopSpeakingPlan : { numWords: 1, voiceSeconds: 0.1, backoffSeconds: 0.5 },
   };
+
+  // ── Optional tools (added by capability, never by wording — when/why to
+  // use them is the operator's scenario text, untouched by us) ─────────
+  // Human transfer: settings.transferPhoneNumber gives the model a
+  // transferCall tool with the company's escalation number.
+  const transferNumber = String(s.transferPhoneNumber || '').trim();
+  if (/^\+[0-9]{8,15}$/.test(transferNumber)) {
+    cfg.model.tools.push({
+      type: 'transferCall',
+      destinations: [{ type: 'number', number: transferNumber }],
+    });
+  }
+
+  // Live KB retrieval: when the company has KB chunks and our public URL is
+  // known, add a function tool that searches the KB mid-call. The static KB
+  // bake in the system prompt stays (fast path); the tool covers what the
+  // KB_INJECT_CAP truncation dropped — the main voice-hallucination source.
+  const kbChunkCount = sql.countCompanyChunks.get(c.id)?.n || 0;
+  if (kbChunkCount > 0 && PUBLIC_BASE_URL) {
+    cfg.model.tools.push({
+      type: 'function',
+      async: false,
+      function: {
+        name: 'search_knowledge_base',
+        description: 'البحث في قاعدة معرفة الشركة عن معلومة محددة (أسعار، مشاريع، مواصفات، عروض) عندما لا تكون المعلومة متوفرة في تعليماتك. استخدمها قبل أن تقول إن المعلومة غير متوفرة.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'نص السؤال أو الكلمات المفتاحية للبحث' },
+          },
+          required: ['query'],
+        },
+      },
+      server: {
+        url: `${PUBLIC_BASE_URL}/webhook/vapi`,
+        secret: (process.env.VAPI_WEBHOOK_SECRET || '').trim() || undefined,
+        timeoutSeconds: 10,
+      },
+    });
+  }
 
   const headers = { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' };
   const vapiOpts = { headers, timeout: VAPI_TIMEOUT_MS };

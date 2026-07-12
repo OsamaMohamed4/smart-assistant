@@ -4,7 +4,7 @@ const express = require('express');
 const crypto = require('crypto');
 const { sql } = require('../db');
 const { logger } = require('../lib/logger');
-const { processVapiEvent, drainWebhookInbox } = require('../services/call-events');
+const { processVapiEvent, drainWebhookInbox, matchCompanyForCall } = require('../services/call-events');
 
 const router = express.Router();
 
@@ -92,6 +92,53 @@ function verifyVapiSignature(req) {
   return false;
 }
 
+// ─── In-call tools ────────────────────────────────────────────────
+// Vapi invokes the assistant's custom function tools by POSTing a
+// `tool-calls` message here and WAITING for the response — unlike call
+// reports, this is synchronous request/response, so no inbox involved.
+async function searchKb(companyId, query, log) {
+  if (!companyId) return 'لا تتوفر قاعدة معرفة لهذه المكالمة.';
+  if (!query) return 'لم يصل نص للبحث.';
+  try {
+    const { retrieve } = require('../lib/rag');
+    const chunks = await retrieve(companyId, query, { topK: 3 });
+    if (!chunks.length) return 'لا توجد معلومات مطابقة في قاعدة المعرفة.';
+    // Plain text back to the model; keep it inside a safe token budget.
+    return chunks.map((c) => c.text.slice(0, 1200)).join('\n---\n').slice(0, 3800);
+  } catch (e) {
+    log?.error?.('kb tool: search failed', { err: e.message, companyId });
+    return 'تعذر البحث في قاعدة المعرفة حالياً.';
+  }
+}
+
+async function handleToolCalls(req, res) {
+  const msg = req.body?.message || {};
+  const call = msg.call || {};
+  const companyRow = matchCompanyForCall(
+    call.assistantId || msg.assistant?.id || null,
+    call.phoneNumberId || msg.phoneNumber?.id || null,
+  );
+
+  // Vapi has shipped both `toolCallList` and `toolCalls`; arguments arrive
+  // as an object or a JSON string depending on version. Accept all shapes.
+  const list = msg.toolCallList || msg.toolCalls || [];
+  const results = [];
+  for (const tc of list) {
+    const id = tc.id || tc.toolCallId;
+    const name = tc.function?.name || tc.name;
+    let args = tc.function?.arguments ?? tc.arguments ?? {};
+    if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
+
+    let result = 'أداة غير معروفة.';
+    if (name === 'search_knowledge_base') {
+      result = await searchKb(companyRow?.id, String(args.query || '').trim(), req.log);
+    }
+    results.push({ toolCallId: id, result });
+  }
+  req.log.info('tool-calls handled', { companyId: companyRow?.id || null, tools: list.length });
+  res.json({ results });
+}
+
 // ─── POST /webhook/vapi ──────────────────────────────────────────
 router.post('/vapi', async (req, res) => {
   const captured = captureWebhookAttempt(req);
@@ -103,6 +150,9 @@ router.post('/vapi', async (req, res) => {
   captured.verified = true;
 
   const msg = req.body?.message;
+
+  // In-call tool invocation: answer synchronously, skip the inbox.
+  if (msg?.type === 'tool-calls') return handleToolCalls(req, res);
 
   // 1. Persist the raw payload before doing anything else. If processing or
   // the process itself dies, the event survives in the inbox for retry.

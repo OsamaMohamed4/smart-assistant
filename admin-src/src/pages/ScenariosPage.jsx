@@ -1329,6 +1329,32 @@ function VoiceSettingsCard({ companyId }) {
         <RangeField label="حرارة الردود (temperature)" value={s.temperature ?? 0.6} min={0} max={1} step={0.05} onChange={num('temperature')} />
         <RangeField label="سرعة البث (latency 0-4)" value={s.optimizeStreamingLatency ?? 3} min={0} max={4} step={1} onChange={num('optimizeStreamingLatency')} />
         <RangeField label="أقصى طول للرد (tokens)" value={s.maxTokens ?? 200} min={50} max={500} step={10} onChange={num('maxTokens')} />
+        <div>
+          <Label>رقم التحويل لموظف بشري</Label>
+          <Input
+            value={s.transferPhoneNumber || ''}
+            onChange={(e) => setS((x) => ({ ...x, transferPhoneNumber: e.target.value }))}
+            placeholder="+9665xxxxxxxx — فارغ = بدون تحويل"
+            dir="ltr"
+          />
+          <p className="text-[10.5px] text-ink-400 mt-1">عند ضبطه، يقدر الوكيل يحوّل المكالمة لهذا الرقم. حدّد في السيناريو متى يحوّل.</p>
+        </div>
+        <div>
+          <Label>Webhook (call.completed)</Label>
+          <Input
+            value={s.webhookUrl || ''}
+            onChange={(e) => setS((x) => ({ ...x, webhookUrl: e.target.value }))}
+            placeholder="https://... — يُرسل له ملخص كل مكالمة"
+            dir="ltr"
+          />
+          <Input
+            value={s.webhookSecret || ''}
+            onChange={(e) => setS((x) => ({ ...x, webhookSecret: e.target.value }))}
+            placeholder="Secret اختياري — توقيع X-Signature"
+            dir="ltr"
+            className="mt-2"
+          />
+        </div>
       </div>
     </Card>
   );

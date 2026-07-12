@@ -18,6 +18,10 @@ const { lintScenario } = require('./lib/scenario-lint');
 const { TEMPLATES: SCENARIO_TEMPLATES } = require('./lib/scenario-templates');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
+const { router: webhookRoutes, getRecentWebhookAttempts } = require('./routes/webhook');
+const { upsertVapiCall, startDrainTimer } = require('./services/call-events');
+const { dailyCap, checkAndBumpUsage } = require('./services/usage');
+const { audit } = require('./lib/audit');
 const { requireAuth, requireCompanyAccess, requireCompanyAdmin, canChatWithCompany, startSessionCleanup } = require('./lib/auth');
 const { logger } = require('./lib/logger');
 const { initMonitoring, captureError } = require('./lib/monitoring');
@@ -174,29 +178,7 @@ const agentLimiter = rateLimit({
   message : { success: false, error: 'too many requests' },
 });
 
-// ─── Daily usage caps (cost control) ─────────────────────────────
-// The usage_counters table existed since day one but nothing enforced it —
-// a runaway integration loop could burn OpenAI/Vapi budget for days. Caps
-// are generous (normal operation never hits them); they're a circuit
-// breaker, not a billing feature. Per-company override via settings
-// (dailyMessageCap / dailyOutboundCap), platform default via env.
-function dailyCap(company, settingsKey, envKey, dflt) {
-  const s = Number(company?.settings?.[settingsKey]);
-  if (Number.isFinite(s) && s > 0) return s;
-  const e = Number(process.env[envKey]);
-  if (Number.isFinite(e) && e > 0) return e;
-  return dflt;
-}
-
-// Atomically consume `amount` from a company's daily budget for `kind`.
-// Returns false (without consuming) when the cap would be exceeded.
-function checkAndBumpUsage(companyId, kind, cap, amount = 1) {
-  const day = new Date().toISOString().slice(0, 10);
-  const used = sql.getUsage.get(companyId, day, kind)?.amount || 0;
-  if (used + amount > cap) return false;
-  sql.bumpUsage.run({ company_id: companyId, day, kind, amount });
-  return true;
-}
+// Daily usage caps live in services/usage.js (dailyCap, checkAndBumpUsage).
 
 // CSRF defense for cookie-authenticated endpoints: the SPA always sends
 // `X-Requested-With: XMLHttpRequest`, which a cross-origin form-style attacker
@@ -458,26 +440,7 @@ function resolveCompany(req, res) {
   return { company, message, history, vars };
 }
 
-// Today's date in YYYY-MM-DD (UTC) — used as the bucket key for usage counters.
-function todayUtc() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function audit(req, action, resource, metadata) {
-  try {
-    sql.logAuditEvent.run({
-      actor_id    : req.user?.id || null,
-      actor_email : req.user?.email || null,
-      action,
-      resource    : resource || null,
-      metadata    : metadata ? JSON.stringify(metadata) : null,
-      ip          : req.ip || req.socket?.remoteAddress || null,
-      user_agent  : (req.get('user-agent') || '').slice(0, 255),
-    });
-  } catch (e) {
-    logger.error('audit log error', { err: e.message });
-  }
-}
+// audit() lives in lib/audit.js.
 
 async function askGPT(company, message, history, vars) {
   const systemContent = await buildSystemPromptWithRAG(company, message, vars);
@@ -811,259 +774,10 @@ app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, 
 // Web SDK now handles audio in the Playground, so these routes are gone.
 // The /chat (text) endpoint above stays for non-voice scenarios + tests.
 
-// ─── Vapi webhook debug capture ──────────────────────────────────
-// In-memory ring buffer of the last 10 webhook attempts so the operator
-// can hit /api/_debug/recent-webhooks and see EXACTLY what Vapi is sending
-// when verification keeps failing. Values longer than 24 chars are masked
-// (first 8 + last 4 + length) so secrets never leak verbatim into the UI.
-const RECENT_WEBHOOK_MAX = 10;
-const recentWebhookAttempts = [];
-
-function maskHeaderValue(v) {
-  const s = String(v ?? '');
-  if (s.length <= 24) return s;
-  return `${s.slice(0, 8)}…${s.slice(-4)} (len=${s.length})`;
-}
-
-function captureWebhookAttempt(req) {
-  const headers = {};
-  for (const [k, v] of Object.entries(req.headers || {})) {
-    headers[k] = maskHeaderValue(v);
-  }
-  const entry = {
-    at      : new Date().toISOString(),
-    ip      : req.ip || null,
-    bodyType: req.body?.message?.type || req.body?.type || null,
-    headers,
-    verified: null,
-  };
-  recentWebhookAttempts.push(entry);
-  if (recentWebhookAttempts.length > RECENT_WEBHOOK_MAX) recentWebhookAttempts.shift();
-  return entry;
-}
-
-// ─── Vapi webhook ────────────────────────────────────────────────
-// Verify the request was sent by Vapi. Vapi supports several auth modes
-// configured per organization in its dashboard:
-//   1. Custom HTTP Headers — Vapi forwards exactly what you configured.
-//      Common names: VAPI_WEBHOOK_SECRET (the one we use), X-Vapi-Secret,
-//      Authorization: Bearer ...
-//   2. Legacy HMAC-SHA256 over the raw body, sent in `x-vapi-signature`.
-// We accept any of the above so the user can pick whichever header survives
-// their reverse-proxy filtering. timingSafeEqual on every candidate.
-function verifyVapiSignature(req) {
-  // Trim defensively: a single trailing newline or space pasted into the
-  // Railway env var makes timingSafeEqual return false even when the values
-  // look identical at a glance. Cheap insurance.
-  const secret = (process.env.VAPI_WEBHOOK_SECRET || '').trim();
-  if (!secret) {
-    // Unset secret is fatal in production; tolerated only in development.
-    return process.env.NODE_ENV !== 'production';
-  }
-  const candidates = [
-    req.get('vapi_webhook_secret'),
-    req.get('VAPI_WEBHOOK_SECRET'),
-    req.get('x-vapi-secret'),
-    req.get('x-vapi-webhook-secret'),
-    req.get('x-secret-webhook'),   // tolerate common alternate names
-    req.get('x-webhook-secret'),
-  ];
-  const authHeader = req.get('authorization') || '';
-  const m = /^Bearer\s+(.+)$/i.exec(authHeader);
-  if (m) candidates.push(m[1]);
-  const secretBuf = Buffer.from(secret);
-  for (const v of candidates) {
-    if (!v) continue;
-    try {
-      const b = Buffer.from(String(v).trim());
-      if (b.length === secretBuf.length && crypto.timingSafeEqual(b, secretBuf)) return true;
-    } catch {}
-  }
-  // Legacy HMAC-SHA256 fallback.
-  const sig = req.get('x-vapi-signature') || '';
-  if (sig && req.rawBody) {
-    const expected = crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
-    try {
-      const a = Buffer.from(sig);
-      const b = Buffer.from(expected);
-      if (a.length === b.length && crypto.timingSafeEqual(a, b)) return true;
-    } catch {}
-  }
-  return false;
-}
-
-// Resolve which company a Vapi call belongs to. Primary key is the assistant
-// ID (matches assistant_id OR assistant_id_inbound). But assistant IDs change
-// whenever an assistant is recreated on re-sync, which orphans older calls.
-// Phone-number IDs never change, so we fall back to matching the call's
-// phoneNumberId against the inbound/outbound number IDs stored per company in
-// settings JSON. This keeps call logging correct across assistant churn.
-function matchCompanyForCall(assistantId, phoneNumberId) {
-  if (assistantId) {
-    const byAssistant = db
-      .prepare('SELECT id FROM companies WHERE assistant_id = ? OR assistant_id_inbound = ?')
-      .get(assistantId, assistantId);
-    if (byAssistant) return byAssistant;
-  }
-  if (phoneNumberId) {
-    const byPhone = db
-      .prepare(
-        `SELECT id FROM companies
-         WHERE json_extract(settings,'$.inboundPhoneNumberId')  = ?
-            OR json_extract(settings,'$.outboundPhoneNumberId') = ?`,
-      )
-      .get(phoneNumberId, phoneNumberId);
-    if (byPhone) return byPhone;
-  }
-  return null;
-}
-
-// Process a single Vapi event row from the inbox. Idempotent: upsertCall is
-// keyed by call.id, and we no-op if a duplicate event_id was already inserted.
-async function processVapiEvent(msg) {
-  if (!msg) return;
-  if (msg.type !== 'end-of-call-report' && msg.type !== 'status-update') return;
-
-  const call = msg.call || {};
-  const assistantId = call.assistantId || msg.assistant?.id;
-  const phoneNumberId = call.phoneNumberId || msg.phoneNumber?.id || null;
-  const companyRow = matchCompanyForCall(assistantId, phoneNumberId);
-
-  if (msg.type === 'end-of-call-report') {
-    const transcript = msg.artifact?.transcript || msg.transcript || '';
-    const startedAt = call.startedAt || msg.startedAt;
-    const endedAt   = call.endedAt || msg.endedAt;
-    const duration  = startedAt && endedAt ? Math.round((new Date(endedAt) - new Date(startedAt)) / 1000) : null;
-
-    // Vapi sends `type` as `inboundPhoneCall` / `outboundPhoneCall` / `webCall`.
-    // We collapse everything that isn't an outbound PSTN call into 'inbound'
-    // so the Conversations table has a clean two-way split.
-    const callType = String(call.type || msg.type || '').toLowerCase();
-    const direction = callType.includes('outbound') ? 'outbound' : 'inbound';
-
-    sql.upsertCall.run({
-      id            : call.id || crypto.randomUUID(),
-      company_id    : companyRow?.id || null,
-      assistant_id  : assistantId || null,
-      caller_number : call.customer?.number || msg.customer?.number || null,
-      duration_sec  : duration,
-      started_at    : startedAt || null,
-      ended_at      : endedAt || null,
-      ended_reason  : msg.endedReason || call.endedReason || null,
-      transcript    : transcript || null,
-      summary       : msg.summary || null,
-      cost_usd      : msg.cost || call.cost || null,
-      direction,
-      recording_url : msg.artifact?.recordingUrl || msg.recordingUrl || call.artifact?.recordingUrl || null,
-    });
-
-    if (transcript && (!msg.summary || msg.summary.length < 20)) {
-      const ours = await summarize(transcript);
-      if (ours) sql.setCallSummary.run(ours, call.id);
-    }
-  }
-}
-
-// Drain up to N pending webhook events on a tick. Called best-effort from the
-// webhook handler so failed events get retried whenever new traffic arrives.
-async function drainWebhookInbox(limit = 5) {
-  const pending = sql.listPendingWebhooks.all(limit);
-  for (const ev of pending) {
-    try {
-      const parsed = JSON.parse(ev.raw_body);
-      await processVapiEvent(parsed.message || parsed);
-      sql.markWebhookProcessed.run(ev.id);
-    } catch (e) {
-      sql.markWebhookFailed.run(e.message?.slice(0, 500) || 'unknown', ev.id);
-      logger.error('webhook drain failed', { eventId: ev.id, err: e.message });
-    }
-  }
-}
-
-// Background drain every 60s. Without this, a failed event only got retried
-// when the NEXT webhook arrived — an evening failure could sit unprocessed
-// until the next morning's first call. unref() so it never blocks shutdown.
-const drainTimer = setInterval(() => {
-  drainWebhookInbox(10).catch((e) => logger.error('scheduled drain failed', { err: e.message }));
-}, 60_000);
-drainTimer.unref();
-
-app.post('/webhook/vapi', async (req, res) => {
-  // Capture every attempt so the operator can inspect what Vapi actually sent
-  // when verification fails (header names + sanitized values, body type).
-  const captured = captureWebhookAttempt(req);
-  if (!verifyVapiSignature(req)) {
-    captured.verified = false;
-    req.log.warn('vapi webhook: signature verification failed', captured);
-    return res.status(401).json({ error: 'invalid signature' });
-  }
-  captured.verified = true;
-
-  // 1. Persist the raw payload before doing anything else. If processing or
-  // the process itself dies, the event survives in the inbox for retry.
-  const msg = req.body?.message;
-  const eventId = msg?.call?.id || msg?.id || null;
-  let row;
-  try {
-    const result = sql.insertWebhookEvent.run({
-      provider  : 'vapi',
-      event_id  : eventId,
-      event_type: msg?.type || null,
-      raw_body  : req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {}),
-    });
-    row = result.lastInsertRowid;
-  } catch (e) {
-    req.log.error('webhook inbox insert failed', { err: e.message });
-  }
-
-  // 2. Ack Vapi immediately — at-least-once delivery means they won't retry.
-  res.json({ ok: true });
-
-  // 3. Process inline, then drain any stragglers from prior failures.
-  try {
-    await processVapiEvent(msg);
-    if (row) sql.markWebhookProcessed.run(row);
-  } catch (e) {
-    if (row) sql.markWebhookFailed.run(e.message?.slice(0, 500) || 'unknown', row);
-    req.log.error('vapi webhook processing failed', { err: e.message });
-  }
-
-  // 4. Best-effort: pick up older failures while we're already on a worker thread.
-  try { await drainWebhookInbox(5); } catch (e) { req.log.error('drain failed', { err: e.message }); }
-});
-
-// Upsert a single Vapi call object (from the REST list/get API) into our
-// calls table. Mirrors the mapping in processVapiEvent but works on the
-// call object directly rather than a webhook envelope. Returns the matched
-// company id (or null). Used by the backfill endpoint below so calls that
-// missed their webhook (e.g. a phone number whose Server URL lacked the
-// auth header) still show up in the dashboard.
-function upsertVapiCall(v) {
-  if (!v || !v.id) return null;
-  const assistantId = v.assistantId || v.assistant?.id || null;
-  const companyRow = matchCompanyForCall(assistantId, v.phoneNumberId || null);
-  const startedAt = v.startedAt || null;
-  const endedAt   = v.endedAt || null;
-  const duration  = startedAt && endedAt
-    ? Math.round((new Date(endedAt) - new Date(startedAt)) / 1000) : null;
-  const direction = String(v.type || '').toLowerCase().includes('outbound') ? 'outbound' : 'inbound';
-  sql.upsertCall.run({
-    id            : v.id,
-    company_id    : companyRow?.id || null,
-    assistant_id  : assistantId,
-    caller_number : v.customer?.number || null,
-    duration_sec  : duration,
-    started_at    : startedAt,
-    ended_at      : endedAt,
-    ended_reason  : v.endedReason || null,
-    transcript    : v.artifact?.transcript || v.transcript || null,
-    summary       : v.analysis?.summary || v.summary || null,
-    cost_usd      : v.cost ?? null,
-    direction,
-    recording_url : v.artifact?.recordingUrl || v.recordingUrl || null,
-  });
-  return companyRow?.id || null;
-}
+// The Vapi webhook pipeline lives in routes/webhook.js (verification +
+// inbox) and services/call-events.js (event -> calls row + drain).
+app.use('/webhook', webhookRoutes);
+startDrainTimer();
 
 // ─── Admin: backfill recent calls from Vapi ──────────────────────
 // Superadmin-only. Pulls the most recent calls straight from Vapi's REST
@@ -1150,7 +864,7 @@ app.get('/api/_debug/recent-webhooks', (req, res) => {
       last4         : trimmed.slice(-4),
       has_whitespace: raw.length !== trimmed.length,
     },
-    attempts: recentWebhookAttempts.slice().reverse(),
+    attempts: getRecentWebhookAttempts(),
   });
 });
 

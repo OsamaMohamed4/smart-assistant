@@ -9,7 +9,9 @@ const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 
 const multer = require('multer');
-const { db, sql } = require('./db');
+const { db, sql, get: dataGet, all: dataAll, run: dataRun, withTransaction, initDb, healthCheck, close: dbClose, isPg } = require('./db');
+// TEXT timestamp literal for dynamic SQL that must run on both engines.
+const NOW_SQL = isPg ? `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')` : `datetime('now')`;
 const { loadCompany, listCompaniesFull, invalidateCache, buildSystemPromptWithRAG, fillGlobals } = require('./companies');
 const { summarize, chatToTranscript } = require('./summarize');
 const { ingestDocument, retrieve, repairMojibake } = require('./lib/rag');
@@ -149,7 +151,7 @@ app.use('/admin', express.static(path.join(__dirname, 'public', 'admin')));
 // Attach a per-request id + child logger. Echoed back as `X-Request-Id` so
 // clients can correlate. Honors an incoming X-Request-Id if the upstream
 // proxy set one.
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
   const incoming = String(req.get('x-request-id') || '').slice(0, 64);
   const id = /^[A-Za-z0-9_-]{8,64}$/.test(incoming)
     ? incoming
@@ -179,7 +181,7 @@ const agentLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders  : false,
   keyGenerator: (req) => {
-    const cred = req.get('authorization') || req.get('x-api-key') || req.ip || '';
+    const cred = req.get('authorization') || req.get('x-api-key') || 'anon';
     return 'k:' + crypto.createHash('sha256').update(String(cred)).digest('hex').slice(0, 16);
   },
   message : { success: false, error: 'too many requests' },
@@ -207,7 +209,7 @@ function requireXhrHeader(req, res, next) {
 startSessionCleanup();
 
 // Customer page: SPA handles routing inside the same React build.
-app.get('/c/:companyId', (_req, res) => {
+app.get('/c/:companyId', async (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin', 'index.html'));
 });
 
@@ -219,9 +221,9 @@ app.use('/api/auth', authRoutes);
 // customer experience to render the phone-call panel. `phoneNumber` is
 // included because it's marketing-grade info already advertised by the
 // business; voiceId, system prompt, and KB stay hidden.
-app.get('/api/public/companies/:id', (req, res) => {
+app.get('/api/public/companies/:id', async (req, res) => {
   if (!COMPANY_ID_RE.test(req.params.id)) return res.status(404).json({ error: 'not found' });
-  const c = loadCompany(req.params.id);
+  const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
   res.json({
     id         : c.id,
@@ -245,16 +247,16 @@ app.get('/api/public/companies/:id', (req, res) => {
 //  2. Legacy global AGENT_API_KEY — kept for compatibility during
 //     migration; logs a deprecation warning. Scope is whatever company_id
 //     the body claims (the historical, unsafe behavior).
-function resolveAgentApiAuth(req) {
+async function resolveAgentApiAuth(req) {
   const authHeader = req.get('authorization') || '';
   const m = /^Bearer\s+(.+)$/i.exec(authHeader);
   const provided = (m?.[1] || req.get('x-api-key') || '').trim();
   if (!provided) return { error: 'missing api key', status: 401 };
 
   const hash = crypto.createHash('sha256').update(provided).digest('hex');
-  const keyRow = sql.getApiKeyByHash.get(hash);
+  const keyRow = await sql.getApiKeyByHash.get(hash);
   if (keyRow) {
-    sql.touchApiKey.run(keyRow.id);
+    await sql.touchApiKey.run(keyRow.id);
     return { companyId: keyRow.company_id, keyId: keyRow.id };
   }
 
@@ -272,7 +274,7 @@ function resolveAgentApiAuth(req) {
 }
 
 app.post('/api/v1/agent/chat', agentLimiter, async (req, res) => {
-  const auth = resolveAgentApiAuth(req);
+  const auth = await resolveAgentApiAuth(req);
   if (auth.error) return res.status(auth.status).json({ success: false, error: auth.error });
 
   const bodyCompanyId = String(req.body?.company_id || '').trim();
@@ -304,14 +306,14 @@ app.post('/api/v1/agent/chat', agentLimiter, async (req, res) => {
     return res.status(413).json({ success: false, error: 'message too long' });
   }
 
-  const company = loadCompany(companyId);
+  const company = await loadCompany(companyId);
   if (!company) {
     return res.status(404).json({ success: false, error: 'company not found' });
   }
   if (!company.assistantId) {
     return res.status(409).json({ success: false, error: 'company not published to Vapi' });
   }
-  if (!checkAndBumpUsage(company.id, 'agent_msgs', dailyCap(company, 'dailyMessageCap', 'DAILY_MSG_CAP', 2000))) {
+  if (!(await checkAndBumpUsage(company.id, 'agent_msgs', dailyCap(company, 'dailyMessageCap', 'DAILY_MSG_CAP', 2000)))) {
     return res.status(429).json({ success: false, error: 'daily message limit reached for this company' });
   }
 
@@ -328,7 +330,7 @@ app.post('/api/v1/agent/chat', agentLimiter, async (req, res) => {
 
   // Resume previousChatId for this (company, customer_phone) pair so the
   // conversation stays stateful across multiple HTTP calls.
-  const prev = sql.getWhatsappSession.get(company.id, customerPhone);
+  const prev = await sql.getWhatsappSession.get(company.id, customerPhone);
   const previousChatId = prev?.vapi_chat_id || undefined;
 
   const t0 = Date.now();
@@ -366,7 +368,7 @@ app.post('/api/v1/agent/chat', agentLimiter, async (req, res) => {
   }
 
   // Persist the new chat id so the next inbound message resumes the thread.
-  sql.upsertWhatsappSession.run({
+  await sql.upsertWhatsappSession.run({
     company_id    : company.id,
     customer_phone: customerPhone,
     vapi_chat_id  : newChatId || null,
@@ -374,7 +376,7 @@ app.post('/api/v1/agent/chat', agentLimiter, async (req, res) => {
 
   // Log to chats so the conversation shows up in the dashboard.
   try {
-    sql.insertChat.run({
+    await sql.insertChat.run({
       company_id     : company.id,
       session_id     : 'api-' + customerPhone.replace(/[^0-9]/g, ''),
       user_message   : message,
@@ -407,7 +409,7 @@ const MAX_MSG_CHARS  = 2000;      // per-message cap
 const MAX_USER_MSG_CHARS = 4000;  // per-user-turn cap
 const TTS_DAILY_CAP_CHARS = 60000;       // ~60k chars/day = a few hours of voice
 
-function resolveCompany(req, res) {
+async function resolveCompany(req, res) {
   const companyId = String(req.body?.companyId || '');
   const message = String(req.body?.message || '');
   if (!companyId || !message) {
@@ -428,7 +430,7 @@ function resolveCompany(req, res) {
     .slice(-MAX_HISTORY)
     .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
     .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_MSG_CHARS) }));
-  const company = loadCompany(companyId);
+  const company = await loadCompany(companyId);
   if (!company) {
     res.status(404).json({ error: `Unknown companyId: ${companyId}` });
     return null;
@@ -472,9 +474,9 @@ const KB_INJECT_CAP = 15000; // chars — headroom for a few docs of real conten
 // phone numbers). Kept first when the KB overflows the cap so key info isn't
 // the part that gets truncated.
 const KB_PRIORITY_RE = /[0-9٠-٩]|ريال|سعر|أسعار|السعر|ضمان|هاتف|جوال|رقم|مساحة|متر|نسبة|بالمئة|٪|%/;
-function composeSystemPrompt(company, instructionPrompt) {
+async function composeSystemPrompt(company, instructionPrompt) {
   let systemContent = fillGlobals(instructionPrompt || '', company);
-  const chunks = sql.listAllChunksForCompany.all(company.id);
+  const chunks = await sql.listAllChunksForCompany.all(company.id);
   if (chunks.length) {
     const header = '\n\n---\n\n## قاعدة معرفة الشركة\n\nاستخدم المعلومات التالية كمصدر حقائق رسمي. لا تختلق أسعاراً أو معلومات غير موجودة هنا:\n\n';
     const segs = chunks.map((ch, i) => ({
@@ -550,22 +552,23 @@ app.get('/', (_req, res) => res.redirect('/admin/'));
 // reported in the body for the uptime monitor to alert on. Deliberately no
 // secrets/config details — this endpoint is unauthenticated.
 const BOOTED_AT = Date.now();
-app.get('/health', (_req, res) => {
+app.get('/health', async (_req, res) => {
   const out = {
     ok        : true,
     uptime_sec: Math.round((Date.now() - BOOTED_AT) / 1000),
     version   : (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'dev',
+    driver    : isPg ? 'postgres' : 'sqlite',
   };
   try {
-    db.prepare('SELECT 1').get();
+    await healthCheck();
     out.db = 'ok';
   } catch (e) {
     logger.error('health: db check failed', { err: e.message });
     return res.status(503).json({ ok: false, db: 'fail' });
   }
   try {
-    out.webhook_pending = db.prepare("SELECT COUNT(*) AS n FROM webhook_events WHERE status = 'pending'").get().n;
-    out.webhook_failed  = db.prepare("SELECT COUNT(*) AS n FROM webhook_events WHERE status = 'failed'").get().n;
+    out.webhook_pending = (await sql.countWebhooksByStatus.get('pending')).n;
+    out.webhook_failed  = (await sql.countWebhooksByStatus.get('failed')).n;
     if (out.webhook_pending > 50) out.degraded = 'webhook backlog';
   } catch {}
   // Backup signal for the uptime monitor: 'off' (not configured), 'ok',
@@ -582,18 +585,18 @@ app.get('/health', (_req, res) => {
 });
 
 app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
-  const ctx = resolveCompany(req, res);
+  const ctx = await resolveCompany(req, res);
   if (!ctx) return;
   if (!canChatWithCompany(req.user, ctx.company.id)) {
     return res.status(403).json({ error: 'لا تملك صلاحية محادثة هذه الشركة' });
   }
-  if (!checkAndBumpUsage(ctx.company.id, 'chat_msgs', dailyCap(ctx.company, 'dailyMessageCap', 'DAILY_MSG_CAP', 2000))) {
+  if (!(await checkAndBumpUsage(ctx.company.id, 'chat_msgs', dailyCap(ctx.company, 'dailyMessageCap', 'DAILY_MSG_CAP', 2000)))) {
     return res.status(429).json({ error: 'تم بلوغ الحد اليومي للرسائل لهذه الشركة. حاول غداً أو ارفع الحد من الإعدادات.' });
   }
   const sessionId = getOrMakeSessionId(req);
   try {
     const r = await askGPT(ctx.company, ctx.message, ctx.history, ctx.vars);
-    sql.insertChat.run({
+    await sql.insertChat.run({
       company_id: ctx.company.id, session_id: sessionId,
       user_message: ctx.message, assistant_reply: r.reply,
       channel: 'text', latency_ms: r.ms,
@@ -623,7 +626,7 @@ const PLAYGROUND_VOICES = [
 ];
 const PLAYGROUND_VOICE_IDS = new Set(PLAYGROUND_VOICES.map((v) => v.id));
 
-app.get('/api/voices', requireAuth, (_req, res) => {
+app.get('/api/voices', requireAuth, async (_req, res) => {
   res.json(PLAYGROUND_VOICES);
 });
 
@@ -632,7 +635,7 @@ app.get('/api/voices', requireAuth, (_req, res) => {
 // pipeline. Same assistant as a real customer call → same prompt, same voice,
 // same transcriber, real production behaviour.
 app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, res) => {
-  const c = loadCompany(req.params.id);
+  const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'company not found' });
   if (!c.assistantId) {
     return res.status(409).json({ error: 'انشر الشركة على Vapi أولاً.', code: 'NOT_PUBLISHED' });
@@ -643,7 +646,7 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
   if (!outboundPhoneId) {
     return res.status(503).json({ error: 'رقم صادر غير مضبوط لهذه الشركة (إعدادات الصوت) ولا VAPI_PHONE_NUMBER_ID.' });
   }
-  if (!checkAndBumpUsage(c.id, 'outbound_calls', dailyCap(c, 'dailyOutboundCap', 'DAILY_OUTBOUND_CAP', 200))) {
+  if (!(await checkAndBumpUsage(c.id, 'outbound_calls', dailyCap(c, 'dailyOutboundCap', 'DAILY_OUTBOUND_CAP', 200)))) {
     return res.status(429).json({ error: 'تم بلوغ الحد اليومي للمكالمات الصادرة لهذه الشركة.' });
   }
   const phoneNumber = String(req.body?.phoneNumber || '').trim();
@@ -665,7 +668,7 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
   // the inbound default baked into the assistant. Vapi interpolates
   // {{customer_name}}/etc from variableValues at call start.
   const overrides = { variableValues: vars };
-  const activeScenario = sql.getActiveScenarioForCompany.get(c.id);
+  const activeScenario = await sql.getActiveScenarioForCompany.get(c.id);
   if (activeScenario?.first_message) {
     overrides.firstMessage = activeScenario.first_message;
   }
@@ -693,7 +696,7 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
     // even before Vapi's end-of-call-report webhook arrives. The webhook's
     // upsert fills in transcript/duration/cost when the call ends.
     try {
-      sql.insertOutboundCallStub.run({
+      await sql.insertOutboundCallStub.run({
         id            : r.data.id,
         company_id    : c.id,
         assistant_id  : c.assistantId,
@@ -715,7 +718,7 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
 // wants to test the scenario without a phone call. Vapi's /chat endpoint
 // runs the EXACT same prompt + variables but skips STT/TTS entirely.
 app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, res) => {
-  const c = loadCompany(req.params.id);
+  const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'company not found' });
   if (!c.assistantId) {
     return res.status(409).json({ error: 'انشر الشركة على Vapi أولاً.', code: 'NOT_PUBLISHED' });
@@ -759,7 +762,7 @@ app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, 
     // Persist the turn so the Playground chat shows up in Conversations like
     // every other channel. channel='text' marks it as an internal test chat.
     try {
-      sql.insertChat.run({
+      await sql.insertChat.run({
         company_id     : c.id,
         session_id     : sessionId,
         user_message   : message,
@@ -805,7 +808,7 @@ app.get('/api/_admin/sync-calls', async (req, res) => {
     const calls = Array.isArray(r.data) ? r.data : [];
     let matched = 0;
     for (const v of calls) {
-      const cid = upsertVapiCall(v);
+      const cid = await upsertVapiCall(v);
       if (cid) matched++;
     }
     audit(req, 'admin.sync_calls', null, { fetched: calls.length, matched });
@@ -821,8 +824,9 @@ app.get('/api/_admin/sync-calls', async (req, res) => {
 // operator can save a copy before risky changes (Railway volume swap,
 // schema migration, etc.). db.serialize() runs a synchronous in-process
 // snapshot — safe with WAL mode, no torn writes mid-transaction.
-app.get('/api/_admin/backup', (req, res) => {
+app.get('/api/_admin/backup', async (req, res) => {
   if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  if (isPg) return res.status(400).json({ error: 'binary snapshot is sqlite-only — use /api/_admin/backup-now (offsite) on postgres' });
   try {
     const snapshot = db.serialize();
     const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
@@ -838,7 +842,7 @@ app.get('/api/_admin/backup', (req, res) => {
 });
 
 // ─── Admin: offsite backup status + manual trigger ───────────────
-app.get('/api/_admin/backup-status', (req, res) => {
+app.get('/api/_admin/backup-status', async (req, res) => {
   if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
   res.json(getBackupStatus());
 });
@@ -859,7 +863,7 @@ app.post('/api/_admin/backup-now', async (req, res) => {
 // sanitized) plus the length of VAPI_WEBHOOK_SECRET as configured on
 // this server, so the operator can spot mismatches between what Vapi
 // is sending and what Railway has in its env vars.
-app.get('/api/_debug/recent-webhooks', (req, res) => {
+app.get('/api/_debug/recent-webhooks', async (req, res) => {
   if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
   const raw     = process.env.VAPI_WEBHOOK_SECRET || '';
   const trimmed = raw.trim();
@@ -876,25 +880,14 @@ app.get('/api/_debug/recent-webhooks', (req, res) => {
 });
 
 // ─── Admin API ───────────────────────────────────────────────────
-app.get('/api/companies', (req, res) => {
+app.get('/api/companies', async (req, res) => {
   // Clients see only their own workspace; superadmins see everything.
-  const all = listCompaniesFull();
+  const all = await listCompaniesFull();
   const list = req.user.role === 'superadmin'
     ? all
     : all.filter((c) => c.id === req.user.companyId);
   // Per-company stats in a single query.
-  const statsRows = db.prepare(`
-    SELECT
-      c.id AS company_id,
-      (SELECT COUNT(DISTINCT session_id) FROM chats WHERE company_id = c.id) AS chats,
-      (SELECT COUNT(*) FROM calls WHERE company_id = c.id) AS calls,
-      (SELECT MAX(ts) FROM (
-        SELECT MAX(created_at) AS ts FROM chats WHERE company_id = c.id
-        UNION ALL
-        SELECT MAX(created_at) AS ts FROM calls WHERE company_id = c.id
-      )) AS last_activity
-    FROM companies c
-  `).all();
+  const statsRows = await sql.companiesStats.all();
   const statsMap = new Map(statsRows.map((r) => [r.company_id, r]));
   res.json(list.map((c) => ({
     ...c,
@@ -906,18 +899,18 @@ app.get('/api/companies', (req, res) => {
   })));
 });
 
-app.get('/api/companies/:id', requireCompanyAccess, (req, res) => {
-  const c = loadCompany(req.params.id);
+app.get('/api/companies/:id', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
   // Return the raw stored system_prompt and kb_text (not the composed prompt).
-  const row = sql.getCompany.get(req.params.id);
+  const row = await sql.getCompany.get(req.params.id);
   res.json({ ...c, systemPrompt: row.system_prompt, kbText: row.kb_text });
 });
 
 // Per-company voice + model settings. Whitelist keys so a client can't inject
 // arbitrary config; values are re-clamped at sync time regardless.
-app.patch('/api/companies/:id/settings', requireCompanyAccess, (req, res) => {
-  const row = sql.getCompany.get(req.params.id);
+app.patch('/api/companies/:id/settings', requireCompanyAccess, async (req, res) => {
+  const row = await sql.getCompany.get(req.params.id);
   if (!row) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
   const clean = {};
@@ -949,7 +942,7 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, (req, res) => {
   let existing = {};
   try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
   const merged = { ...existing, ...clean };
-  sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify(merged) });
+  await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify(merged) });
   invalidateCache(row.id);
   audit(req, 'company.settings', `companies/${row.id}`, Object.keys(clean));
   res.json({ settings: merged });
@@ -958,12 +951,12 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, (req, res) => {
 // ─── Per-company API keys (public Agent API) ─────────────────────
 // Superadmin-only. The plaintext key is returned ONCE at creation; only its
 // SHA-256 hash is stored, so there is no way to re-display it later.
-app.post('/api/companies/:id/api-keys', requireCompanyAdmin, (req, res) => {
+app.post('/api/companies/:id/api-keys', requireCompanyAdmin, async (req, res) => {
   const name = String(req.body?.name || '').trim().slice(0, 80) || 'default';
   const raw = 'sa_' + crypto.randomBytes(24).toString('hex');
   const keyHash = crypto.createHash('sha256').update(raw).digest('hex');
   const prefix = raw.slice(0, 10);
-  const r = sql.insertApiKey.run({ company_id: req.params.id, name, key_hash: keyHash, prefix });
+  const r = await sql.insertApiKey.run({ company_id: req.params.id, name, key_hash: keyHash, prefix });
   audit(req, 'apikey.create', `companies/${req.params.id}`, { keyId: Number(r.lastInsertRowid), name });
   res.status(201).json({
     id: Number(r.lastInsertRowid), name, prefix,
@@ -971,18 +964,18 @@ app.post('/api/companies/:id/api-keys', requireCompanyAdmin, (req, res) => {
   });
 });
 
-app.get('/api/companies/:id/api-keys', requireCompanyAdmin, (req, res) => {
-  res.json(sql.listApiKeysForCompany.all(req.params.id));
+app.get('/api/companies/:id/api-keys', requireCompanyAdmin, async (req, res) => {
+  res.json(await sql.listApiKeysForCompany.all(req.params.id));
 });
 
-app.delete('/api/companies/:id/api-keys/:keyId', requireCompanyAdmin, (req, res) => {
-  const r = sql.revokeApiKey.run(Number(req.params.keyId), req.params.id);
+app.delete('/api/companies/:id/api-keys/:keyId', requireCompanyAdmin, async (req, res) => {
+  const r = await sql.revokeApiKey.run(Number(req.params.keyId), req.params.id);
   if (!r.changes) return res.status(404).json({ error: 'key not found or already revoked' });
   audit(req, 'apikey.revoke', `companies/${req.params.id}`, { keyId: Number(req.params.keyId) });
   res.json({ ok: true });
 });
 
-app.post('/api/companies', (req, res) => {
+app.post('/api/companies', async (req, res) => {
   const b = req.body || {};
   // systemPrompt + kbText are legacy — Scenarios replaced them. Kept for old
   // companies that still have them set; we don't require them at creation.
@@ -992,8 +985,8 @@ app.post('/api/companies', (req, res) => {
   if (!COMPANY_ID_RE.test(b.id)) {
     return res.status(400).json({ error: 'id must be lowercase letters/digits/hyphens (max 40)' });
   }
-  if (sql.getCompany.get(b.id)) return res.status(409).json({ error: 'id already exists' });
-  sql.insertCompany.run({
+  if (await sql.getCompany.get(b.id)) return res.status(409).json({ error: 'id already exists' });
+  await sql.insertCompany.run({
     id            : b.id,
     user_id       : req.user.id,
     name          : b.name,
@@ -1006,14 +999,14 @@ app.post('/api/companies', (req, res) => {
   });
   invalidateCache(b.id);
   audit(req, 'company.create', `companies/${b.id}`, { name: b.name });
-  res.status(201).json(loadCompany(b.id));
+  res.status(201).json(await loadCompany(b.id));
 });
 
-app.patch('/api/companies/:id', requireCompanyAccess, (req, res) => {
-  const existing = sql.getCompany.get(req.params.id);
+app.patch('/api/companies/:id', requireCompanyAccess, async (req, res) => {
+  const existing = await sql.getCompany.get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
-  sql.updateCompany.run({
+  await sql.updateCompany.run({
     id            : existing.id,
     name          : b.name          ?? existing.name,
     language      : b.language      ?? existing.language,
@@ -1025,55 +1018,55 @@ app.patch('/api/companies/:id', requireCompanyAccess, (req, res) => {
   });
   invalidateCache(existing.id);
   audit(req, 'company.update', `companies/${existing.id}`, Object.keys(b));
-  res.json(loadCompany(existing.id));
+  res.json(await loadCompany(existing.id));
 });
 
-app.delete('/api/companies/:id', requireCompanyAdmin, (req, res) => {
-  const r = sql.deleteCompany.run(req.params.id);
+app.delete('/api/companies/:id', requireCompanyAdmin, async (req, res) => {
+  const r = await sql.deleteCompany.run(req.params.id);
   invalidateCache(req.params.id);
   audit(req, 'company.delete', `companies/${req.params.id}`);
   res.json({ deleted: r.changes });
 });
 
 // Chat sessions + calls per company.
-app.get('/api/companies/:id/sessions', requireCompanyAccess, (req, res) => {
-  res.json(sql.listSessionsForCompany.all(req.params.id, Number(req.query.limit) || 50));
+app.get('/api/companies/:id/sessions', requireCompanyAccess, async (req, res) => {
+  res.json(await sql.listSessionsForCompany.all(req.params.id, Number(req.query.limit) || 50));
 });
 
 // Verify the session belongs to a company the user can access.
-function ensureSessionOwned(req, res, next) {
-  const row = db.prepare('SELECT DISTINCT company_id FROM chats WHERE session_id = ?').get(req.params.sessionId);
+async function ensureSessionOwned(req, res, next) {
+  const row = await dataGet('SELECT DISTINCT company_id FROM chats WHERE session_id = ?', [req.params.sessionId]);
   if (!row) return res.status(404).json({ error: 'session not found' });
   if (req.user.role === 'superadmin') return next();
-  const owns = db.prepare('SELECT 1 FROM companies WHERE id = ? AND user_id = ?').get(row.company_id, req.user.id);
+  const owns = await dataGet('SELECT 1 AS one FROM companies WHERE id = ? AND user_id = ?', [row.company_id, req.user.id]);
   if (!owns) return res.status(404).json({ error: 'session not found' });
   next();
 }
 
-app.get('/api/sessions/:sessionId', ensureSessionOwned, (req, res) => {
-  res.json(sql.getSession.all(req.params.sessionId));
+app.get('/api/sessions/:sessionId', ensureSessionOwned, async (req, res) => {
+  res.json(await sql.getSession.all(req.params.sessionId));
 });
 
 app.post('/api/sessions/:sessionId/summarize', ensureSessionOwned, async (req, res) => {
-  const rows = sql.getSession.all(req.params.sessionId);
+  const rows = await sql.getSession.all(req.params.sessionId);
   if (!rows.length) return res.status(404).json({ error: 'session not found' });
   const transcript = chatToTranscript(rows);
   const summary = await summarize(transcript);
-  if (summary) sql.setSessionSummary.run(summary, req.params.sessionId);
+  if (summary) await sql.setSessionSummary.run(summary, req.params.sessionId);
   res.json({ summary });
 });
 
-app.get('/api/companies/:id/calls', requireCompanyAccess, (req, res) => {
-  res.json(sql.listCallsForCompany.all(req.params.id, Number(req.query.limit) || 50));
+app.get('/api/companies/:id/calls', requireCompanyAccess, async (req, res) => {
+  res.json(await sql.listCallsForCompany.all(req.params.id, Number(req.query.limit) || 50));
 });
 
 // Verify the call belongs to a company the user can access.
-function ensureCallOwned(req, res, next) {
-  const c = sql.getCall.get(req.params.id);
+async function ensureCallOwned(req, res, next) {
+  const c = await sql.getCall.get(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
   if (req.user.role === 'superadmin') { req._call = c; return next(); }
   if (!c.company_id) return res.status(404).json({ error: 'not found' });
-  const owns = db.prepare('SELECT 1 FROM companies WHERE id = ? AND user_id = ?').get(c.company_id, req.user.id);
+  const owns = await dataGet('SELECT 1 AS one FROM companies WHERE id = ? AND user_id = ?', [c.company_id, req.user.id]);
   if (!owns) return res.status(404).json({ error: 'not found' });
   req._call = c;
   next();
@@ -1101,7 +1094,7 @@ app.get('/api/calls/:id', ensureCallOwned, async (req, res) => {
         : (call.duration_sec || null);
       const direction = String(v.type || '').toLowerCase().includes('outbound')
         ? 'outbound' : (call.direction || 'inbound');
-      sql.upsertCall.run({
+      await sql.upsertCall.run({
         id            : call.id,
         company_id    : call.company_id,
         assistant_id  : v.assistantId || call.assistant_id || null,
@@ -1117,7 +1110,7 @@ app.get('/api/calls/:id', ensureCallOwned, async (req, res) => {
         recording_url : v.artifact?.recordingUrl || v.recordingUrl || call.recording_url || null,
         structured_data: v.analysis?.structuredData ? JSON.stringify(v.analysis.structuredData) : (call.structured_data || null),
       });
-      call = sql.getCall.get(call.id);
+      call = await sql.getCall.get(call.id);
     } catch (e) {
       req.log.warn('vapi call refresh failed', { err: e.message, callId: call.id });
     }
@@ -1128,7 +1121,7 @@ app.get('/api/calls/:id', ensureCallOwned, async (req, res) => {
 app.post('/api/calls/:id/summarize', ensureCallOwned, async (req, res) => {
   const c = req._call;
   const summary = await summarize(c.transcript || '');
-  if (summary) sql.setCallSummary.run(summary, c.id);
+  if (summary) await sql.setCallSummary.run(summary, c.id);
   res.json({ summary });
 });
 
@@ -1138,19 +1131,19 @@ app.post('/api/calls/:id/summarize', ensureCallOwned, async (req, res) => {
 // only thing that should change what callers hear on the phone, so the
 // /admin Scenarios page is the only source of truth.
 app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) => {
-  const c = loadCompany(req.params.id);
+  const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
 
   // Optional override: ?force=1 wipes the stored assistantId before sync.
   // Forces a clean rebuild on Vapi — useful when the user has deleted the
   // assistant from the dashboard and our PATCH would otherwise be silent.
   if (req.query.force === '1' && c.assistantId) {
-    db.prepare('UPDATE companies SET assistant_id = NULL WHERE id = ?').run(c.id);
+    await dataRun('UPDATE companies SET assistant_id = NULL WHERE id = ?', [c.id]);
     invalidateCache(c.id);
     Object.assign(c, { assistantId: null });
   }
 
-  const scenarioRow = sql.getActiveScenarioForCompany.get(c.id);
+  const scenarioRow = await sql.getActiveScenarioForCompany.get(c.id);
   if (!scenarioRow || !scenarioRow.instruction_prompt) {
     return res.status(409).json({
       error: 'فعّل سيناريو أولاً قبل النشر — الـ Vapi assistant بيتبني من السيناريو النشط.',
@@ -1161,7 +1154,7 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
 
   // Compose the exact prompt the assistant runs on. Shared with the draft
   // tester and the prompt preview so all three are identical.
-  let systemContent = composeSystemPrompt(c, scenario.instructionPrompt);
+  let systemContent = await composeSystemPrompt(c, scenario.instructionPrompt);
 
   // DEFAULT_VOICE_ID is the source of truth for the agent's voice. We ignore
   // company.voice_id here because it gets stamped at seed time and becomes
@@ -1304,7 +1297,7 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   // known, add a function tool that searches the KB mid-call. The static KB
   // bake in the system prompt stays (fast path); the tool covers what the
   // KB_INJECT_CAP truncation dropped — the main voice-hallucination source.
-  const kbChunkCount = sql.countCompanyChunks.get(c.id)?.n || 0;
+  const kbChunkCount = await sql.countCompanyChunks.get(c.id)?.n || 0;
   if (kbChunkCount > 0 && PUBLIC_BASE_URL) {
     cfg.model.tools.push({
       type: 'function',
@@ -1343,7 +1336,7 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
       const inboundCfg = {
         ...cfg,
         name: `smart-assistant:${c.id}:inbound`,
-        model: { ...cfg.model, messages: [{ role: 'system', content: composeSystemPrompt(c, inboundPrompt) }] },
+        model: { ...cfg.model, messages: [{ role: 'system', content: await composeSystemPrompt(c, inboundPrompt) }] },
         firstMessage: scenario.firstMessageInbound || cfg.firstMessage,
       };
       inboundAssistantId = await upsertVapiAssistant(inboundCfg, c.assistantIdInbound, vapiOpts, req.log);
@@ -1351,14 +1344,8 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
 
     // Stamp last_synced_at so the UI can show "unpublished changes" when
     // the active scenario gets edited after a sync.
-    db.prepare(`
-      UPDATE companies
-         SET assistant_id    = ?,
-             last_synced_at  = datetime('now'),
-             updated_at      = datetime('now')
-       WHERE id = ?
-    `).run(assistantId, c.id);
-    sql.setCompanyInboundAssistant.run({ id: c.id, aid: inboundAssistantId });
+    await sql.setCompanySynced.run(assistantId, c.id);
+    await sql.setCompanyInboundAssistant.run({ id: c.id, aid: inboundAssistantId });
     invalidateCache(c.id);
     res.json({ assistantId, inboundAssistantId, scenarioId: scenario.id, scenarioName: scenario.name });
   } catch (e) {
@@ -1373,7 +1360,7 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
 // confirms success, and we only clear the previous owner of THIS specific
 // phone number (not every company in the table).
 app.post('/api/companies/:id/bind-phone', requireCompanyAdmin, async (req, res) => {
-  const c = loadCompany(req.params.id);
+  const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
   if (!c.assistantId) return res.status(400).json({ error: 'انشر الشركة على Vapi أولاً.' });
 
@@ -1393,10 +1380,10 @@ app.post('/api/companies/:id/bind-phone', requireCompanyAdmin, async (req, res) 
     const r = await axios.patch(`https://api.vapi.ai/phone-number/${phoneId}`, { assistantId: targetAssistant }, vapiOpts);
     const newNumber = r.data.number;
     // Vapi succeeded — now reflect the move in DB atomically.
-    db.transaction(() => {
-      db.prepare('UPDATE companies SET phone_number = NULL WHERE phone_number = ?').run(newNumber);
-      db.prepare("UPDATE companies SET phone_number = ?, updated_at = datetime('now') WHERE id = ?").run(newNumber, c.id);
-    })();
+    await withTransaction(async () => {
+      await dataRun('UPDATE companies SET phone_number = NULL WHERE phone_number = ?', [newNumber]);
+      await dataRun(`UPDATE companies SET phone_number = ?, updated_at = ${NOW_SQL} WHERE id = ?`, [newNumber, c.id]);
+    });
     invalidateCache();
     audit(req, 'vapi.phone_bind', `companies/${c.id}`, { phoneNumber: newNumber, assistantId: targetAssistant });
     res.json({ phoneNumber: newNumber, assistantId: targetAssistant });
@@ -1408,7 +1395,7 @@ app.post('/api/companies/:id/bind-phone', requireCompanyAdmin, async (req, res) 
 
 // ─── RAG: documents CRUD + retrieval test ────────────────────────
 app.post('/api/companies/:id/documents', requireCompanyAccess, upload.single('file'), async (req, res) => {
-  const c = loadCompany(req.params.id);
+  const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
   if (!req.file) return res.status(400).json({ error: 'no file uploaded' });
 
@@ -1451,31 +1438,31 @@ function extractionQuality(chunkCount, textLength, sizeBytes) {
   return { level: 'ok', message: '' };
 }
 
-app.get('/api/companies/:id/documents', requireCompanyAccess, (req, res) => {
-  res.json(sql.listDocuments.all(req.params.id).map((d) => ({
+app.get('/api/companies/:id/documents', requireCompanyAccess, async (req, res) => {
+  res.json((await sql.listDocuments.all(req.params.id)).map((d) => ({
     ...d,
     quality: extractionQuality(d.chunk_count, (d.chunk_count || 0) * 200, d.size_bytes),
   })));
 });
 
-app.delete('/api/companies/:id/documents/:docId', requireCompanyAccess, (req, res) => {
-  const doc = sql.getDocument.get(req.params.docId);
+app.delete('/api/companies/:id/documents/:docId', requireCompanyAccess, async (req, res) => {
+  const doc = await sql.getDocument.get(req.params.docId);
   if (!doc || doc.company_id !== req.params.id) {
     return res.status(404).json({ error: 'document not found' });
   }
   // Soft-delete the document row (preserves raw_text for forensics) and hard-
   // delete the searchable chunks so retrieval can't surface it any more.
-  db.transaction(() => {
-    sql.deleteDocument.run(req.params.docId);
-    sql.purgeDocumentChunks.run(req.params.docId);
-  })();
+  await withTransaction(async () => {
+    await sql.deleteDocument.run(req.params.docId);
+    await sql.purgeDocumentChunks.run(req.params.docId);
+  });
   audit(req, 'document.delete', `companies/${req.params.id}/documents/${req.params.docId}`, { filename: doc.filename });
   res.json({ deleted: 1 });
 });
 
 // Download the original document if available, otherwise fallback to extracted text.
-app.get('/api/companies/:id/documents/:docId/download', requireCompanyAccess, (req, res) => {
-  const doc = sql.getDocument.get(req.params.docId);
+app.get('/api/companies/:id/documents/:docId/download', requireCompanyAccess, async (req, res) => {
+  const doc = await sql.getDocument.get(req.params.docId);
   if (!doc || doc.company_id !== req.params.id) {
     return res.status(404).json({ error: 'document not found' });
   }
@@ -1521,7 +1508,7 @@ function shiftedPrev({ from, to }) {
 }
 function isoUtc(d) { return d.toISOString().replace('T', ' ').slice(0, 19); }
 
-app.get('/api/dashboard', (req, res) => {
+app.get('/api/dashboard', async (req, res) => {
   const period   = String(req.query.period || 'today');
   const fromStr  = req.query.from || null;
   const toStr    = req.query.to   || null;
@@ -1545,33 +1532,33 @@ app.get('/api/dashboard', (req, res) => {
   const args = (range) => ({ from: isoUtc(range.from), to: isoUtc(range.to), company_id });
 
   // Stats card metrics for current + previous periods.
-  const stat = (range) => {
+  const stat = async (range) => {
     const a = args(range);
-    const calls    = sql.countCallsInRange.get(a).n || 0;
-    const avgRow   = sql.avgCallDurationInRange.get(a);
+    const calls    = (await sql.countCallsInRange.get(a))?.n || 0;
+    const avgRow   = await sql.avgCallDurationInRange.get(a);
     const avgDur   = Math.round(avgRow?.avg_dur || 0);
-    const okRow    = sql.callSuccessRateInRange.get(a);
+    const okRow    = await sql.callSuccessRateInRange.get(a);
     const ok       = okRow?.ok || 0;
     const total    = okRow?.total || 0;
     const success  = total ? ok / total : 0;
-    const chats    = sql.countChatSessionsInRange.get(a).n || 0;
+    const chats    = (await sql.countChatSessionsInRange.get(a))?.n || 0;
     return { calls, avgDur, success, chats };
   };
-  const current  = stat(cur);
-  const previous = stat(prev);
+  const current  = await stat(cur);
+  const previous = await stat(prev);
 
   // 24-hour chart for the current period. We bucket on hour-of-day (00..23),
   // not on calendar date — for a "Today" window that maps to a real timeline,
   // for "This Week/Month" it shows when in the day activity tends to land.
   const a = args(cur);
-  const callRows = sql.callsPerHourInRange.all(a);
+  const callRows = await sql.callsPerHourInRange.all(a);
   const inboundByHour  = new Map();
   const outboundByHour = new Map();
   for (const r of callRows) {
     const map = r.direction === 'outbound' ? outboundByHour : inboundByHour;
     map.set(r.hour, (map.get(r.hour) || 0) + r.n);
   }
-  const chatsByHour = new Map(sql.chatsPerHourInRange.all(a).map((r) => [r.hour, r.n]));
+  const chatsByHour = new Map((await sql.chatsPerHourInRange.all(a)).map((r) => [r.hour, r.n]));
   const chart = [];
   for (let h = 0; h < 24; h++) {
     const key = String(h).padStart(2, '0');
@@ -1583,7 +1570,7 @@ app.get('/api/dashboard', (req, res) => {
     });
   }
 
-  const scenarios = sql.countActiveCompanies.get({ company_id }).n || 0;
+  const scenarios = (await sql.countActiveCompanies.get({ company_id }))?.n || 0;
 
   res.json({
     period,
@@ -1603,7 +1590,7 @@ app.get('/api/dashboard', (req, res) => {
 //   - status   = completed / failed
 //   - outcome  = success / not_available  (proxy for "did the AI finish the job")
 //   - direction = inbound (everything for now; outbound arrives with batch calls)
-app.get('/api/conversations', (req, res) => {
+app.get('/api/conversations', async (req, res) => {
   const period       = String(req.query.period   || 'all');
   const typeFilter   = String(req.query.type     || 'all');     // all | chat | voice
   const statusFilter = String(req.query.status   || 'all');     // all | completed | failed
@@ -1628,8 +1615,8 @@ app.get('/api/conversations', (req, res) => {
 
   // Resolve target companies.
   const companies = scopedCompany
-    ? db.prepare('SELECT id, name FROM companies WHERE id = ?').all(scopedCompany)
-    : db.prepare('SELECT id, name FROM companies').all();
+    ? [await sql.getCompanyIdName.get(scopedCompany)].filter(Boolean)
+    : await sql.listCompanyIdNames.all();
   if (!companies.length) return res.json({ items: [], total: 0, page: 1, limit });
   const companyMap = new Map(companies.map((c) => [c.id, c.name]));
   const ids = companies.map((c) => c.id);
@@ -1645,7 +1632,7 @@ app.get('/api/conversations', (req, res) => {
   }
 
   // Chats (grouped per session — one row per conversation).
-  const chats = typeFilter === 'voice' ? [] : db.prepare(`
+  const chats = typeFilter === 'voice' ? [] : await dataAll(`
     SELECT
       session_id        AS session_id,
       company_id        AS company_id,
@@ -1656,22 +1643,22 @@ app.get('/api/conversations', (req, res) => {
       SUM(CASE WHEN assistant_reply IS NULL OR assistant_reply = '' THEN 1 ELSE 0 END) AS missing_replies
     FROM chats
     WHERE company_id IN (${inPlaceholders}) ${timeClause}
-    GROUP BY session_id
-  `).all(...ids, ...timeArgs);
+    GROUP BY session_id, company_id
+  `, [...ids, ...timeArgs]);
 
   // Calls.
-  const calls = typeFilter === 'chat' ? [] : db.prepare(`
+  const calls = typeFilter === 'chat' ? [] : await dataAll(`
     SELECT id, company_id, created_at AS ts, caller_number, duration_sec, ended_reason, summary, direction
     FROM calls
     WHERE company_id IN (${inPlaceholders}) ${timeClause}
-  `).all(...ids, ...timeArgs);
+  `, [...ids, ...timeArgs]);
 
   // Hydrate user emails for chat rows in one round-trip.
   const userIds = [...new Set(chats.map((c) => c.user_id).filter(Boolean))];
   const userMap = new Map();
   if (userIds.length) {
     const ph = userIds.map(() => '?').join(',');
-    db.prepare(`SELECT id, email FROM users WHERE id IN (${ph})`).all(...userIds)
+    (await dataAll(`SELECT id, email FROM users WHERE id IN (${ph})`, userIds))
       .forEach((u) => userMap.set(u.id, u.email));
   }
 
@@ -1747,12 +1734,10 @@ app.get('/api/conversations', (req, res) => {
     // "the agent said X yesterday" is findable — not just metadata fields.
     const like = `%${search}%`;
     const callHits = new Set(
-      db.prepare(`SELECT id FROM calls WHERE company_id IN (${inPlaceholders}) AND (transcript LIKE ? OR structured_data LIKE ?)`)
-        .all(...ids, like, like).map((r) => r.id),
+      (await dataAll(`SELECT id FROM calls WHERE company_id IN (${inPlaceholders}) AND (transcript LIKE ? OR structured_data LIKE ?)`, [...ids, like, like])).map((r) => r.id),
     );
     const chatHits = new Set(
-      db.prepare(`SELECT DISTINCT session_id FROM chats WHERE company_id IN (${inPlaceholders}) AND (user_message LIKE ? OR assistant_reply LIKE ?)`)
-        .all(...ids, like, like).map((r) => r.session_id),
+      (await dataAll(`SELECT DISTINCT session_id FROM chats WHERE company_id IN (${inPlaceholders}) AND (user_message LIKE ? OR assistant_reply LIKE ?)`, [...ids, like, like])).map((r) => r.session_id),
     );
     items = items.filter((i) =>
          (i.phoneNumber || '').toLowerCase().includes(search)
@@ -1776,9 +1761,9 @@ app.get('/api/conversations', (req, res) => {
 // ─── CSV export: calls (with lead-qualification columns) ─────────
 // UTF-8 BOM so Excel opens Arabic correctly. Sales managers live in Excel;
 // this is the cheapest possible CRM bridge.
-app.get('/api/companies/:id/calls.csv', requireCompanyAccess, (req, res) => {
+app.get('/api/companies/:id/calls.csv', requireCompanyAccess, async (req, res) => {
   const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit, 10) || 1000));
-  const rows = sql.listCallsForCompany.all(req.params.id, limit);
+  const rows = await sql.listCallsForCompany.all(req.params.id, limit);
   const esc = (v) => {
     const s = v === null || v === undefined ? '' : String(v);
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -1886,24 +1871,24 @@ function detectVariables(prevConfig, ...texts) {
 // is_active = 1. The activate / create / generate paths all funnel through
 // here so we never end up with two "winners" again. Runs as one SQLite
 // transaction so a partial failure can't leave the table inconsistent.
-const activateExclusively = db.transaction((companyId, scenarioId) => {
-  sql.deactivateAllScenariosForCompany.run({ company_id: companyId, except_id: scenarioId });
-  sql.setScenarioActive.run({ id: scenarioId, is_active: 1 });
+const activateExclusively = (companyId, scenarioId) => withTransaction(async () => {
+  await sql.deactivateAllScenariosForCompany.run({ company_id: companyId, except_id: scenarioId });
+  await sql.setScenarioActive.run({ id: scenarioId, is_active: 1 });
 });
 
 // Returns the currently-active scenario for a company (or null). The
 // Playground uses this to render input-data fields, prefill the greeting,
 // and know whether to surface an "Activate a scenario first" empty state.
-app.get('/api/companies/:id/scenarios/active', requireCompanyAccess, (req, res) => {
-  const row = sql.getActiveScenarioForCompany.get(req.params.id);
+app.get('/api/companies/:id/scenarios/active', requireCompanyAccess, async (req, res) => {
+  const row = await sql.getActiveScenarioForCompany.get(req.params.id);
   res.json(row ? shapeScenario(row) : null);
 });
 
-app.get('/api/companies/:id/scenarios', requireCompanyAccess, (req, res) => {
+app.get('/api/companies/:id/scenarios', requireCompanyAccess, async (req, res) => {
   const tab = String(req.query.tab || 'active');
   const rows = tab === 'deleted'
-    ? sql.listDeletedScenarios.all(req.params.id)
-    : sql.listScenarios.all(req.params.id);
+    ? await sql.listDeletedScenarios.all(req.params.id)
+    : await sql.listScenarios.all(req.params.id);
   res.json(rows.map((r) => ({
     id              : r.id,
     name            : r.name,
@@ -1916,8 +1901,8 @@ app.get('/api/companies/:id/scenarios', requireCompanyAccess, (req, res) => {
   })));
 });
 
-app.get('/api/scenarios/:id', requireAuth, (req, res) => {
-  const row = sql.getScenario.get(req.params.id);
+app.get('/api/scenarios/:id', requireAuth, async (req, res) => {
+  const row = await sql.getScenario.get(req.params.id);
   if (!row) return res.status(404).json({ error: 'not found' });
   if (req.user.role !== 'superadmin' && req.user.companyId !== row.company_id) {
     return res.status(404).json({ error: 'not found' });
@@ -1925,7 +1910,7 @@ app.get('/api/scenarios/:id', requireAuth, (req, res) => {
   res.json(shapeScenario(row));
 });
 
-app.post('/api/companies/:id/scenarios', requireCompanyAccess, (req, res) => {
+app.post('/api/companies/:id/scenarios', requireCompanyAccess, async (req, res) => {
   const b = req.body || {};
   const name = String(b.name || '').trim().slice(0, 200);
   // repairMojibake: if the user pastes text that was saved in a broken
@@ -1941,7 +1926,7 @@ app.post('/api/companies/:id/scenarios', requireCompanyAccess, (req, res) => {
   const variables    = detectVariables(b.variables, firstMessage, firstMessageInbound, instructionPrompt);
   const kbIds        = Array.isArray(b.knowledgeBaseIds) ? b.knowledgeBaseIds : [];
   const wantActive = b.isActive !== false;
-  const r = sql.insertScenario.run({
+  const r = await sql.insertScenario.run({
     company_id              : req.params.id,
     name,
     description             : String(b.description || '').slice(0, 4000),
@@ -1954,16 +1939,16 @@ app.post('/api/companies/:id/scenarios', requireCompanyAccess, (req, res) => {
     language                : String(b.language || 'ar').slice(0, 8),
     knowledge_base_ids      : JSON.stringify(kbIds),
   });
-  if (wantActive) activateExclusively(req.params.id, r.lastInsertRowid);
+  if (wantActive) await activateExclusively(req.params.id, r.lastInsertRowid);
   audit(req, 'scenario.create', `scenarios/${r.lastInsertRowid}`, { name });
   res.status(201).json({
-    ...shapeScenario(sql.getScenario.get(r.lastInsertRowid)),
+    ...shapeScenario(await sql.getScenario.get(r.lastInsertRowid)),
     warnings: lintScenario(instructionPrompt),
   });
 });
 
-app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
-  const existing = sql.getScenario.get(req.params.id);
+app.patch('/api/scenarios/:id', requireAuth, async (req, res) => {
+  const existing = await sql.getScenario.get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
   if (req.user.role !== 'superadmin' && req.user.companyId !== existing.company_id) {
     return res.status(404).json({ error: 'not found' });
@@ -1978,7 +1963,7 @@ app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
     || (b.firstMessageInbound !== undefined && b.firstMessageInbound !== (existing.first_message_inbound || ''));
   if (contentChanged) {
     try {
-      sql.insertScenarioVersion.run({
+      await sql.insertScenarioVersion.run({
         scenario_id           : existing.id,
         name                  : existing.name,
         first_message         : existing.first_message,
@@ -1986,7 +1971,7 @@ app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
         instruction_prompt    : existing.instruction_prompt,
         edited_by             : req.user?.email || null,
       });
-      sql.pruneScenarioVersions.run(existing.id, existing.id);
+      await sql.pruneScenarioVersions.run(existing.id, existing.id);
     } catch (e) { req.log.error('scenario version snapshot failed', { err: e.message }); }
   }
 
@@ -1999,7 +1984,7 @@ app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
     ? (Array.isArray(b.variables) ? b.variables : detectVariables(prevVars, firstMessage, firstMessageInbound, instructionPrompt))
     : detectVariables(prevVars, firstMessage, firstMessageInbound, instructionPrompt);
   const nextIsActive = b.isActive !== undefined ? (b.isActive ? 1 : 0) : existing.is_active;
-  sql.updateScenario.run({
+  await sql.updateScenario.run({
     id                       : existing.id,
     name                     : b.name             !== undefined ? String(b.name).trim().slice(0, 200) : existing.name,
     description              : b.description      !== undefined ? String(b.description).slice(0, 4000) : (existing.description || ''),
@@ -2016,22 +2001,22 @@ app.patch('/api/scenarios/:id', requireAuth, (req, res) => {
   });
   // If this PATCH flipped isActive ON, deactivate the other scenarios so we
   // still satisfy the one-active-per-company invariant.
-  if (nextIsActive === 1) activateExclusively(existing.company_id, existing.id);
+  if (nextIsActive === 1) await activateExclusively(existing.company_id, existing.id);
   // Optional inbound prompt (Phase 3) — saved separately so the core update
   // statement + its other call-sites stay untouched.
   if (b.instructionPromptInbound !== undefined) {
-    sql.setScenarioInboundPrompt.run({ id: existing.id, v: repairMojibake(String(b.instructionPromptInbound)).slice(0, 30000) });
+    await sql.setScenarioInboundPrompt.run({ id: existing.id, v: repairMojibake(String(b.instructionPromptInbound)).slice(0, 30000) });
   }
   audit(req, 'scenario.update', `scenarios/${existing.id}`, Object.keys(b));
   res.json({
-    ...shapeScenario(sql.getScenario.get(existing.id)),
+    ...shapeScenario(await sql.getScenario.get(existing.id)),
     warnings: lintScenario(instructionPrompt),
   });
 });
 
 // Version history for a scenario (last 30 edits).
-function ensureScenarioAccess(req, res) {
-  const row = sql.getScenario.get(req.params.id);
+async function ensureScenarioAccess(req, res) {
+  const row = await sql.getScenario.get(req.params.id);
   if (!row) { res.status(404).json({ error: 'not found' }); return null; }
   if (req.user.role !== 'superadmin' && req.user.companyId !== row.company_id) {
     res.status(404).json({ error: 'not found' }); return null;
@@ -2039,22 +2024,22 @@ function ensureScenarioAccess(req, res) {
   return row;
 }
 
-app.get('/api/scenarios/:id/versions', requireAuth, (req, res) => {
-  if (!ensureScenarioAccess(req, res)) return;
-  res.json(sql.listScenarioVersions.all(req.params.id));
+app.get('/api/scenarios/:id/versions', requireAuth, async (req, res) => {
+  if (!await ensureScenarioAccess(req, res)) return;
+  res.json(await sql.listScenarioVersions.all(req.params.id));
 });
 
 // Roll back a scenario to a previous version. Snapshots the current state
 // first (so rollback is itself undoable), then restores the chosen version.
-app.post('/api/scenarios/:id/rollback/:versionId', requireAuth, (req, res) => {
-  const existing = ensureScenarioAccess(req, res);
+app.post('/api/scenarios/:id/rollback/:versionId', requireAuth, async (req, res) => {
+  const existing = await ensureScenarioAccess(req, res);
   if (!existing) return;
-  const version = sql.getScenarioVersion.get(req.params.versionId);
+  const version = await sql.getScenarioVersion.get(req.params.versionId);
   if (!version || version.scenario_id !== existing.id) {
     return res.status(404).json({ error: 'version not found' });
   }
   try {
-    sql.insertScenarioVersion.run({
+    await sql.insertScenarioVersion.run({
       scenario_id           : existing.id,
       name                  : existing.name,
       first_message         : existing.first_message,
@@ -2067,7 +2052,7 @@ app.post('/api/scenarios/:id/rollback/:versionId', requireAuth, (req, res) => {
     parseVariables(existing.variables),
     version.first_message, version.first_message_inbound, version.instruction_prompt,
   );
-  sql.updateScenario.run({
+  await sql.updateScenario.run({
     id                    : existing.id,
     name                  : version.name || existing.name,
     description           : existing.description || '',
@@ -2080,20 +2065,20 @@ app.post('/api/scenarios/:id/rollback/:versionId', requireAuth, (req, res) => {
     language              : existing.language || 'ar',
     knowledge_base_ids    : existing.knowledge_base_ids || '[]',
   });
-  sql.pruneScenarioVersions.run(existing.id, existing.id);
+  await sql.pruneScenarioVersions.run(existing.id, existing.id);
   audit(req, 'scenario.rollback', `scenarios/${existing.id}`, { versionId: version.id });
-  res.json(shapeScenario(sql.getScenario.get(existing.id)));
+  res.json(shapeScenario(await sql.getScenario.get(existing.id)));
 });
 
 // Live lint — the editor calls this (debounced) so a company sees TTS/prompt
 // problems as it types, before saving or publishing. Stateless + auth-gated.
-app.post('/api/scenarios/lint', requireAuth, (req, res) => {
+app.post('/api/scenarios/lint', requireAuth, async (req, res) => {
   const text = String(req.body?.text || '').slice(0, 30000);
   res.json({ warnings: lintScenario(text) });
 });
 
 // Vetted, lint-clean starting templates a company can build from.
-app.get('/api/scenario-templates', requireAuth, (_req, res) => {
+app.get('/api/scenario-templates', requireAuth, async (_req, res) => {
   res.json(SCENARIO_TEMPLATES);
 });
 
@@ -2101,7 +2086,7 @@ app.get('/api/scenario-templates', requireAuth, (_req, res) => {
 // (composed exactly like a real call: + KB + endCall rule) through the model
 // and returns the reply. Lets a company verify behaviour before pressing نشر.
 app.post('/api/companies/:id/scenarios/test-draft', chatLimiter, requireCompanyAccess, async (req, res) => {
-  const c = loadCompany(req.params.id);
+  const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
   const draft   = String(req.body?.instructionPrompt || '').slice(0, 30000);
   const message = String(req.body?.message || '').trim();
@@ -2115,7 +2100,7 @@ app.post('/api/companies/:id/scenarios/test-draft', chatLimiter, requireCompanyA
     .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
     .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_MSG_CHARS) }));
 
-  const systemContent = composeSystemPrompt(c, draft);
+  const systemContent = await composeSystemPrompt(c, draft);
   try {
     const t0 = Date.now();
     const completion = await openai.chat.completions.create({
@@ -2133,16 +2118,16 @@ app.post('/api/companies/:id/scenarios/test-draft', chatLimiter, requireCompanyA
 // KB dump (capped) + endCall wiring — so a company can see what Vapi actually
 // receives (eliminates the "hidden layers" confusion). Pass ?draft=... to
 // preview unsaved text, otherwise uses the active scenario.
-app.post('/api/companies/:id/scenarios/preview-prompt', requireCompanyAccess, (req, res) => {
-  const c = loadCompany(req.params.id);
+app.post('/api/companies/:id/scenarios/preview-prompt', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
   let prompt = req.body?.instructionPrompt;
   if (prompt === undefined) {
-    const row = sql.getActiveScenarioForCompany.get(c.id);
+    const row = await sql.getActiveScenarioForCompany.get(c.id);
     prompt = row?.instruction_prompt || '';
   }
-  const composed = composeSystemPrompt(c, String(prompt).slice(0, 30000));
-  const chunks = sql.listAllChunksForCompany.all(c.id);
+  const composed = await composeSystemPrompt(c, String(prompt).slice(0, 30000));
+  const chunks = await sql.listAllChunksForCompany.all(c.id);
   res.json({
     prompt    : composed,
     length    : composed.length,
@@ -2152,8 +2137,8 @@ app.post('/api/companies/:id/scenarios/preview-prompt', requireCompanyAccess, (r
   });
 });
 
-app.post('/api/scenarios/:id/activate', requireAuth, (req, res) => {
-  const existing = sql.getScenario.get(req.params.id);
+app.post('/api/scenarios/:id/activate', requireAuth, async (req, res) => {
+  const existing = await sql.getScenario.get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
   if (req.user.role !== 'superadmin' && req.user.companyId !== existing.company_id) {
     return res.status(404).json({ error: 'not found' });
@@ -2161,21 +2146,21 @@ app.post('/api/scenarios/:id/activate', requireAuth, (req, res) => {
   const isActive = req.body?.isActive === false ? 0 : 1;
   if (isActive) {
     // Activating: this scenario becomes the sole active one for the company.
-    activateExclusively(existing.company_id, existing.id);
+    await activateExclusively(existing.company_id, existing.id);
   } else {
-    sql.setScenarioActive.run({ id: existing.id, is_active: 0 });
+    await sql.setScenarioActive.run({ id: existing.id, is_active: 0 });
   }
   audit(req, isActive ? 'scenario.activate' : 'scenario.deactivate', `scenarios/${existing.id}`);
   res.json({ id: existing.id, isActive: !!isActive });
 });
 
-app.delete('/api/scenarios/:id', requireAuth, (req, res) => {
-  const existing = sql.getScenario.get(req.params.id);
+app.delete('/api/scenarios/:id', requireAuth, async (req, res) => {
+  const existing = await sql.getScenario.get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
   if (req.user.role !== 'superadmin' && req.user.companyId !== existing.company_id) {
     return res.status(404).json({ error: 'not found' });
   }
-  sql.softDeleteScenario.run(existing.id);
+  await sql.softDeleteScenario.run(existing.id);
   audit(req, 'scenario.delete', `scenarios/${existing.id}`, { name: existing.name });
   res.json({ deleted: true });
 });
@@ -2252,7 +2237,7 @@ app.post('/api/companies/:id/scenarios/generate', requireCompanyAccess, async (r
     }));
     const variables = detectVariables([], firstMessage, firstMessageInbound, instructionPrompt);
 
-    const r = sql.insertScenario.run({
+    const r = await sql.insertScenario.run({
       company_id              : req.params.id,
       name,
       description,
@@ -2267,9 +2252,9 @@ app.post('/api/companies/:id/scenarios/generate', requireCompanyAccess, async (r
     });
     // AI-generated scenarios are immediately the new active one for the
     // company, so deactivate any sibling that was previously winning.
-    activateExclusively(req.params.id, r.lastInsertRowid);
+    await activateExclusively(req.params.id, r.lastInsertRowid);
     audit(req, 'scenario.generate', `scenarios/${r.lastInsertRowid}`, { name });
-    res.status(201).json(shapeScenario(sql.getScenario.get(r.lastInsertRowid)));
+    res.status(201).json(shapeScenario(await sql.getScenario.get(r.lastInsertRowid)));
   } catch (e) {
     const hasKey = !!process.env.OPENAI_API_KEY;
     req.log.error('scenario gen error', {
@@ -2295,7 +2280,7 @@ app.post('/api/companies/:id/scenarios/generate', requireCompanyAccess, async (r
 });
 
 app.post('/api/companies/:id/rag-test', requireCompanyAccess, async (req, res) => {
-  const c = loadCompany(req.params.id);
+  const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
   const query = (req.body?.query || '').trim();
   if (!query) return res.status(400).json({ error: 'query required' });
@@ -2331,8 +2316,14 @@ app.use((err, req, res, _next) => {
 });
 
 const PORT = process.env.PORT || 3000;
-const httpServer = app.listen(PORT, () => {
-  logger.info('server started', { port: Number(PORT), adminUrl: `http://localhost:${PORT}/admin/` });
+let httpServer = null;
+initDb().then(() => {
+  httpServer = app.listen(PORT, () => {
+    logger.info('server started', { port: Number(PORT), driver: isPg ? 'postgres' : 'sqlite', adminUrl: `http://localhost:${PORT}/admin/` });
+  });
+}).catch((e) => {
+  logger.error('db init failed — exiting', { err: e.message });
+  process.exit(1);
 });
 
 // Graceful shutdown: stop accepting new connections, let in-flight requests
@@ -2345,12 +2336,16 @@ function shutdown(signal) {
     process.exit(1);
   }, 25000);
   force.unref();
+  if (!httpServer) { process.exit(0); }
   httpServer.close((err) => {
     if (err) logger.error('http close error', { err: err.message });
-    try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch (e) { logger.error('wal checkpoint failed', { err: e.message }); }
-    try { db.close(); } catch (e) { logger.error('db close failed', { err: e.message }); }
-    clearTimeout(force);
-    process.exit(0);
+    if (!isPg) {
+      try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch (e) { logger.error('wal checkpoint failed', { err: e.message }); }
+    }
+    Promise.resolve(dbClose()).catch(() => {}).then(() => {
+      clearTimeout(force);
+      process.exit(0);
+    });
   });
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));

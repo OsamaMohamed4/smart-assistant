@@ -31,7 +31,7 @@ class NoActiveScenarioError extends Error {
 }
 
 async function buildSystemPromptWithRAG(company, userQuery, vars) {
-  const scenario = sql.getActiveScenarioForCompany.get(company.id);
+  const scenario = await sql.getActiveScenarioForCompany.get(company.id);
   if (!scenario || !scenario.instruction_prompt) {
     throw new NoActiveScenarioError(company.id);
   }
@@ -44,7 +44,7 @@ async function buildSystemPromptWithRAG(company, userQuery, vars) {
   const base = filled;
 
   if (!userQuery) return base;
-  const chunkCount = sql.countCompanyChunks.get(company.id)?.n || 0;
+  const chunkCount = (await sql.countCompanyChunks.get(company.id))?.n || 0;
   if (!chunkCount) return base;
   try {
     const { retrieve, formatChunksForPrompt } = require('./lib/rag');
@@ -105,19 +105,19 @@ function toCompany(row) {
   };
 }
 
-function loadCompany(id) {
+async function loadCompany(id) {
   if (cache.has(id)) return cache.get(id);
-  const company = toCompany(sql.getCompany.get(id));
+  const company = toCompany(await sql.getCompany.get(id));
   if (company) cache.set(id, company);
   return company;
 }
 
-function listCompanies() {
-  return sql.listCompanies.all().map((r) => r.id);
+async function listCompanies() {
+  return (await sql.listCompanies.all()).map((r) => r.id);
 }
 
-function listCompaniesFull() {
-  return sql.listCompanies.all().map(toCompany);
+async function listCompaniesFull() {
+  return (await sql.listCompanies.all()).map(toCompany);
 }
 
 function invalidateCache(id) {

@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const rateLimit = require('express-rate-limit');
-const { db, sql } = require('../db');
+const { sql, withTransaction } = require('../db');
 const {
   hashPassword, verifyPassword,
   createSession, destroySession,
@@ -65,16 +65,15 @@ router.post('/signup', async (req, res) => {
   // attempts can no longer both win — only the first transaction commits.
   let userId;
   try {
-    const tx = db.transaction(() => {
-      if (sql.countUsers.get().n !== 0) throw new Error('BOOTSTRAP_CLOSED');
-      if (sql.getUserByEmail.get(email)) throw new Error('EMAIL_TAKEN');
-      const insert = sql.insertUser.run({
+    userId = await withTransaction(async () => {
+      if ((await sql.countUsers.get()).n !== 0) throw new Error('BOOTSTRAP_CLOSED');
+      if (await sql.getUserByEmail.get(email)) throw new Error('EMAIL_TAKEN');
+      const insert = await sql.insertUser.run({
         email, password_hash, name, role: 'superadmin', company_id: null,
       });
-      sql.claimOrphanCompanies.run(insert.lastInsertRowid);
+      await sql.claimOrphanCompanies.run(insert.lastInsertRowid);
       return insert.lastInsertRowid;
     });
-    userId = tx();
   } catch (e) {
     if (e.message === 'BOOTSTRAP_CLOSED') {
       return res.status(403).json({ error: 'التسجيل مغلق. تواصل مع المسؤول للحصول على حساب.' });
@@ -85,9 +84,9 @@ router.post('/signup', async (req, res) => {
     throw e;
   }
 
-  const session = createSession(userId, req);
+  const session = await createSession(userId, req);
   setSessionCookie(res, session.id);
-  logEvent('signup', req, { userId, email });
+  await logEvent('signup', req, { userId, email });
 
   res.status(201).json({
     user: { id: userId, email, name, role: 'superadmin', companyId: null },
@@ -98,8 +97,8 @@ router.post('/signup', async (req, res) => {
 // Rate-limited to 3/min/IP so it can't be abused as a fresh-install scanner.
 // Also returns `{open:false}` for ALL requests once the platform has even one
 // user, so attackers can't distinguish a real platform from an empty one.
-router.get('/bootstrap', bootstrapLimiter, (_req, res) => {
-  res.json({ open: sql.countUsers.get().n === 0 });
+router.get('/bootstrap', bootstrapLimiter, async (_req, res) => {
+  res.json({ open: (await sql.countUsers.get()).n === 0 });
 });
 
 router.post('/login', async (req, res) => {
@@ -107,7 +106,7 @@ router.post('/login', async (req, res) => {
   const password = String(req.body?.password || '');
   if (!email || !password) return res.status(400).json({ error: 'البريد وكلمة السر مطلوبين' });
 
-  const user = sql.getUserByEmail.get(email);
+  const user = await sql.getUserByEmail.get(email);
   // Always run bcrypt — on unknown emails against DUMMY_HASH — so the response
   // time doesn't reveal whether the email is registered. Failure messages stay
   // identical for "no such user" and "wrong password".
@@ -115,36 +114,36 @@ router.post('/login', async (req, res) => {
   const ok = await bcrypt.compare(password, hashToCheck);
 
   if (!user) {
-    logEvent('login_fail', req, { email });
+    await logEvent('login_fail', req, { email });
     return res.status(401).json({ error: 'بيانات الدخول غير صحيحة' });
   }
 
   if (user.locked_until && new Date(user.locked_until) > new Date()) {
-    logEvent('login_fail', req, { userId: user.id, email });
+    await logEvent('login_fail', req, { userId: user.id, email });
     return res.status(429).json({ error: 'الحساب مقفول مؤقتاً بسبب محاولات فاشلة. حاول بعد 15 دقيقة' });
   }
 
   if (!ok) {
-    sql.bumpFailedLogin.run(user.id);
-    logEvent('login_fail', req, { userId: user.id, email });
+    await sql.bumpFailedLogin.run(user.id);
+    await logEvent('login_fail', req, { userId: user.id, email });
     return res.status(401).json({ error: 'بيانات الدخول غير صحيحة' });
   }
 
-  sql.clearFailedLogins.run(user.id);
-  const session = createSession(user.id, req);
+  await sql.clearFailedLogins.run(user.id);
+  const session = await createSession(user.id, req);
   setSessionCookie(res, session.id);
-  logEvent('login_ok', req, { userId: user.id, email });
+  await logEvent('login_ok', req, { userId: user.id, email });
 
   res.json({
     user: { id: user.id, email: user.email, name: user.name, role: user.role, companyId: user.company_id },
   });
 });
 
-router.post('/logout', (req, res) => {
-  const ctx = sessionFromCookie(req);
+router.post('/logout', async (req, res) => {
+  const ctx = await sessionFromCookie(req);
   if (ctx) {
-    destroySession(ctx.sessionId);
-    logEvent('logout', req, { userId: ctx.user.id, email: ctx.user.email });
+    await destroySession(ctx.sessionId);
+    await logEvent('logout', req, { userId: ctx.user.id, email: ctx.user.email });
   }
   clearSessionCookie(res);
   res.json({ ok: true });
@@ -160,15 +159,15 @@ router.post('/change-password', requireAuth, async (req, res) => {
   if (!isStrongPassword(newPw)) {
     return res.status(400).json({ error: `كلمة السر الجديدة لازم تكون ${MIN_PASSWORD}+ أحرف وتحتوي على حرف ورقم` });
   }
-  const user = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
+  const user = await sql.getUserPasswordHash.get(req.user.id);
   const ok = await verifyPassword(oldPw, user.password_hash);
   if (!ok) return res.status(401).json({ error: 'كلمة السر القديمة غير صحيحة' });
 
   const newHash = await hashPassword(newPw);
-  sql.updatePassword.run(newHash, req.user.id);
-  sql.deleteUserSessions.run(req.user.id);
+  await sql.updatePassword.run(newHash, req.user.id);
+  await sql.deleteUserSessions.run(req.user.id);
 
-  const session = createSession(req.user.id, req);
+  const session = await createSession(req.user.id, req);
   setSessionCookie(res, session.id);
   res.json({ ok: true });
 });

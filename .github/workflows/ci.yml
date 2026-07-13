@@ -9,7 +9,19 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: smartassistant
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -25,12 +37,20 @@ jobs:
         run: |
           node --check server.js
           node --check db.js
+          node --check db-sqlite.js
+          node --check db-postgres.js
           node --check companies.js
           node --check summarize.js
-          for f in lib/*.js routes/*.js scripts/*.js; do node --check "$f"; done
+          for f in lib/*.js routes/*.js scripts/*.js services/*.js; do node --check "$f"; done
 
       - name: Build admin UI
         run: npm run build
 
-      - name: Smoke test (boot server + critical paths)
+      - name: Smoke test — sqlite driver
+        run: npm run test:smoke
+
+      - name: Smoke test — postgres driver
+        env:
+          DB_DRIVER: postgres
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/smartassistant
         run: npm run test:smoke

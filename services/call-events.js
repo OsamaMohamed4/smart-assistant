@@ -2,7 +2,7 @@
 // or REST call object) into a row in `calls`. Shared by the webhook route,
 // the background drain, and the admin backfill.
 const crypto = require('crypto');
-const { db, sql } = require('../db');
+const { sql } = require('../db');
 const { summarize } = require('../summarize');
 const { logger } = require('../lib/logger');
 const { sendCallCompleted } = require('./outbound-webhook');
@@ -13,21 +13,13 @@ const { sendCallCompleted } = require('./outbound-webhook');
 // Phone-number IDs never change, so we fall back to matching the call's
 // phoneNumberId against the inbound/outbound number IDs stored per company in
 // settings JSON. This keeps call logging correct across assistant churn.
-function matchCompanyForCall(assistantId, phoneNumberId) {
+async function matchCompanyForCall(assistantId, phoneNumberId) {
   if (assistantId) {
-    const byAssistant = db
-      .prepare('SELECT id FROM companies WHERE assistant_id = ? OR assistant_id_inbound = ?')
-      .get(assistantId, assistantId);
+    const byAssistant = await sql.companyByAssistantId.get(assistantId);
     if (byAssistant) return byAssistant;
   }
   if (phoneNumberId) {
-    const byPhone = db
-      .prepare(
-        `SELECT id FROM companies
-         WHERE json_extract(settings,'$.inboundPhoneNumberId')  = ?
-            OR json_extract(settings,'$.outboundPhoneNumberId') = ?`,
-      )
-      .get(phoneNumberId, phoneNumberId);
+    const byPhone = await sql.companyByPhoneNumberId.get(phoneNumberId);
     if (byPhone) return byPhone;
   }
   return null;
@@ -43,7 +35,7 @@ async function processVapiEvent(msg) {
   const call = msg.call || {};
   const assistantId = call.assistantId || msg.assistant?.id;
   const phoneNumberId = call.phoneNumberId || msg.phoneNumber?.id || null;
-  const companyRow = matchCompanyForCall(assistantId, phoneNumberId);
+  const companyRow = await matchCompanyForCall(assistantId, phoneNumberId);
 
   if (msg.type === 'end-of-call-report') {
     const transcript = msg.artifact?.transcript || msg.transcript || '';
@@ -57,7 +49,7 @@ async function processVapiEvent(msg) {
     const callType = String(call.type || msg.type || '').toLowerCase();
     const direction = callType.includes('outbound') ? 'outbound' : 'inbound';
 
-    sql.upsertCall.run({
+    await sql.upsertCall.run({
       id            : call.id || crypto.randomUUID(),
       company_id    : companyRow?.id || null,
       assistant_id  : assistantId || null,
@@ -76,7 +68,7 @@ async function processVapiEvent(msg) {
 
     if (transcript && (!msg.summary || msg.summary.length < 20)) {
       const ours = await summarize(transcript);
-      if (ours) sql.setCallSummary.run(ours, call.id);
+      if (ours) await sql.setCallSummary.run(ours, call.id);
     }
 
     // Outgoing webhook (opt-in per company). Read the row back so the
@@ -84,8 +76,8 @@ async function processVapiEvent(msg) {
     if (companyRow) {
       try {
         const { loadCompany } = require('../companies'); // lazy: avoids require cycle at module load
-        const company = loadCompany(companyRow.id);
-        const finalRow = sql.getCall.get(call.id);
+        const company = await loadCompany(companyRow.id);
+        const finalRow = await sql.getCall.get(call.id);
         if (company && finalRow) sendCallCompleted(company, finalRow);
       } catch (e) {
         logger.warn('outbound webhook dispatch skipped', { err: e.message });
@@ -99,16 +91,16 @@ async function processVapiEvent(msg) {
 // call object directly rather than a webhook envelope. Returns the matched
 // company id (or null). Used by the admin backfill so calls that missed
 // their webhook still show up in the dashboard.
-function upsertVapiCall(v) {
+async function upsertVapiCall(v) {
   if (!v || !v.id) return null;
   const assistantId = v.assistantId || v.assistant?.id || null;
-  const companyRow = matchCompanyForCall(assistantId, v.phoneNumberId || null);
+  const companyRow = await matchCompanyForCall(assistantId, v.phoneNumberId || null);
   const startedAt = v.startedAt || null;
   const endedAt   = v.endedAt || null;
   const duration  = startedAt && endedAt
     ? Math.round((new Date(endedAt) - new Date(startedAt)) / 1000) : null;
   const direction = String(v.type || '').toLowerCase().includes('outbound') ? 'outbound' : 'inbound';
-  sql.upsertCall.run({
+  await sql.upsertCall.run({
     id            : v.id,
     company_id    : companyRow?.id || null,
     assistant_id  : assistantId,
@@ -130,14 +122,14 @@ function upsertVapiCall(v) {
 // Drain up to N pending webhook events on a tick. Called from the webhook
 // route after each event and from the background timer below.
 async function drainWebhookInbox(limit = 5) {
-  const pending = sql.listPendingWebhooks.all(limit);
+  const pending = await sql.listPendingWebhooks.all(limit);
   for (const ev of pending) {
     try {
       const parsed = JSON.parse(ev.raw_body);
       await processVapiEvent(parsed.message || parsed);
-      sql.markWebhookProcessed.run(ev.id);
+      await sql.markWebhookProcessed.run(ev.id);
     } catch (e) {
-      sql.markWebhookFailed.run(e.message?.slice(0, 500) || 'unknown', ev.id);
+      await sql.markWebhookFailed.run(e.message?.slice(0, 500) || 'unknown', ev.id);
       logger.error('webhook drain failed', { eventId: ev.id, err: e.message });
     }
   }

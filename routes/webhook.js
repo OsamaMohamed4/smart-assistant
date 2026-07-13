@@ -114,7 +114,7 @@ async function searchKb(companyId, query, log) {
 async function handleToolCalls(req, res) {
   const msg = req.body?.message || {};
   const call = msg.call || {};
-  const companyRow = matchCompanyForCall(
+  const companyRow = await matchCompanyForCall(
     call.assistantId || msg.assistant?.id || null,
     call.phoneNumberId || msg.phoneNumber?.id || null,
   );
@@ -159,13 +159,13 @@ router.post('/vapi', async (req, res) => {
   const eventId = msg?.call?.id || msg?.id || null;
   let row;
   try {
-    const result = sql.insertWebhookEvent.run({
+    const result = await sql.insertWebhookEvent.run({
       provider  : 'vapi',
       event_id  : eventId,
       event_type: msg?.type || null,
       raw_body  : req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {}),
     });
-    row = result.lastInsertRowid;
+    row = result.changes ? result.lastInsertRowid : null;
   } catch (e) {
     req.log.error('webhook inbox insert failed', { err: e.message });
   }
@@ -176,9 +176,9 @@ router.post('/vapi', async (req, res) => {
   // 3. Process inline, then drain any stragglers from prior failures.
   try {
     await processVapiEvent(msg);
-    if (row) sql.markWebhookProcessed.run(row);
+    if (row) await sql.markWebhookProcessed.run(row);
   } catch (e) {
-    if (row) sql.markWebhookFailed.run(e.message?.slice(0, 500) || 'unknown', row);
+    if (row) await sql.markWebhookFailed.run(e.message?.slice(0, 500) || 'unknown', row);
     req.log.error('vapi webhook processing failed', { err: e.message });
   }
 

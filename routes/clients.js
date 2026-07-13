@@ -24,8 +24,8 @@ function generatePassword() {
 }
 
 // GET /api/companies/:id/clients
-router.get('/', (req, res) => {
-  res.json(sql.listClientsForCompany.all(req.params.id));
+router.get('/', async (req, res) => {
+  res.json(await sql.listClientsForCompany.all(req.params.id));
 });
 
 // Tighter than the loose `[^@\s]+@...` from before.
@@ -36,14 +36,14 @@ router.post('/', async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const name  = String(req.body?.name || '').trim().slice(0, 80) || null;
   if (!EMAIL_RE_STRICT.test(email)) return res.status(400).json({ error: 'بريد إلكتروني غير صالح' });
-  if (sql.getUserByEmail.get(email)) {
+  if (await sql.getUserByEmail.get(email)) {
     return res.status(409).json({ error: 'الإيميل ده مسجّل بالفعل' });
   }
 
   const password = generatePassword();
   const password_hash = await hashPassword(password);
 
-  const insert = sql.insertUser.run({
+  const insert = await sql.insertUser.run({
     email,
     password_hash,
     name,
@@ -52,7 +52,7 @@ router.post('/', async (req, res) => {
   });
 
   try {
-    sql.logAuditEvent.run({
+    await sql.logAuditEvent.run({
       actor_id   : req.user?.id || null,
       actor_email: req.user?.email || null,
       action     : 'client.create',
@@ -72,22 +72,22 @@ router.post('/', async (req, res) => {
 });
 
 // DELETE /api/companies/:id/clients/:userId
-router.delete('/:userId', (req, res) => {
+router.delete('/:userId', async (req, res) => {
   const uid = Number(req.params.userId);
   if (!uid) return res.status(400).json({ error: 'invalid id' });
   // Confirm the user is actually a client of this company before deleting.
-  const u = sql.getUserById.get(uid);
+  const u = await sql.getUserById.get(uid);
   if (!u || u.role !== 'client' || u.company_id !== req.params.id) {
     return res.status(404).json({ error: 'client not found' });
   }
   // Belt-and-suspenders: this route should never delete a superadmin even if
   // the role check above somehow flipped; protect against accidental escalation.
-  if (u.role === 'superadmin' || (sql.countSuperadmins.get().n <= 1 && u.id === req.user.id)) {
+  if (u.role === 'superadmin' || ((await sql.countSuperadmins.get()).n <= 1 && u.id === req.user.id)) {
     return res.status(403).json({ error: 'لا يمكن حذف هذا الحساب' });
   }
-  sql.deleteUser.run(uid);
+  await sql.deleteUser.run(uid);
   try {
-    sql.logAuditEvent.run({
+    await sql.logAuditEvent.run({
       actor_id   : req.user?.id || null,
       actor_email: req.user?.email || null,
       action     : 'client.delete',

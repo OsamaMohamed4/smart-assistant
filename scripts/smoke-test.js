@@ -27,10 +27,25 @@ const env = {
   VAPI_WEBHOOK_SECRET: 'smoke-webhook-secret',
 };
 
-const srv = spawn(process.execPath, ['server.js'], { cwd: ROOT, env });
+// Under postgres, wipe the schema first — unlike the throwaway SQLite file,
+// the pg database persists between runs and a leftover user closes bootstrap.
+async function resetPg() {
+  if ((process.env.DB_DRIVER || 'sqlite') !== 'postgres') return;
+  const { Client } = require('pg');
+  const c = new Client({ connectionString: process.env.DATABASE_URL });
+  await c.connect();
+  await c.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+  await c.end();
+  console.log('(postgres schema reset)');
+}
+
+let srv = null;
 let out = '';
-srv.stdout.on('data', (d) => { out += d; });
-srv.stderr.on('data', (d) => { out += d; });
+function startServer() {
+  srv = spawn(process.execPath, ['server.js'], { cwd: ROOT, env });
+  srv.stdout.on('data', (d) => { out += d; });
+  srv.stderr.on('data', (d) => { out += d; });
+}
 
 const results = [];
 function check(name, cond, extra = '') {
@@ -47,6 +62,8 @@ async function waitForBoot() {
 }
 
 (async () => {
+  await resetPg();
+  startServer();
   await waitForBoot();
 
   // 1. Health: db must answer.
@@ -105,7 +122,68 @@ async function waitForBoot() {
   });
   check('agent api: scoped key passes auth (409 unpublished)', good.status === 409, `status=${good.status}`);
 
-  // 9. Webhook: wrong secret → 401; right secret → 200 + call logged.
+  // 9. Scenario lifecycle: create → read → update → activate → versions.
+  const sc = await fetch(B + `/api/companies/${companyId}/scenarios`, {
+    method: 'POST', headers: { ...XHR, cookie },
+    body: JSON.stringify({
+      name: 'سيناريو الدخان',
+      instructionPrompt: 'أنت موظف خدمة عملاء تجيب باختصار وود.',
+      firstMessage: 'حياك الله، كيف أقدر أساعدك؟',
+    }),
+  });
+  const scB = await sc.json().catch(() => ({}));
+  const scenarioId = scB.id || scB.scenario?.id;
+  check('scenario create → id', (sc.status === 200 || sc.status === 201) && !!scenarioId, `status=${sc.status}`);
+
+  const scList = await fetch(B + `/api/companies/${companyId}/scenarios`, { headers: { cookie } });
+  const scListB = await scList.json().catch(() => []);
+  check('scenario list includes it', scList.status === 200 && scListB.some((x) => x.id === scenarioId));
+
+  const scUpd = await fetch(B + `/api/scenarios/${scenarioId}`, {
+    method: 'PATCH', headers: { ...XHR, cookie },
+    body: JSON.stringify({ instructionPrompt: 'أنت موظف مبيعات عقاري تجيب بدقة من قاعدة المعرفة.' }),
+  });
+  check('scenario update → 200', scUpd.status === 200, `status=${scUpd.status}`);
+
+  const scAct = await fetch(B + `/api/scenarios/${scenarioId}/activate`, {
+    method: 'POST', headers: { ...XHR, cookie }, body: '{}',
+  });
+  check('scenario activate → 200', scAct.status === 200, `status=${scAct.status}`);
+
+  const scVer = await fetch(B + `/api/scenarios/${scenarioId}/versions`, { headers: { cookie } });
+  const scVerB = await scVer.json().catch(() => []);
+  check('scenario versions listed', scVer.status === 200 && Array.isArray(scVerB) && scVerB.length >= 1, `n=${scVerB.length}`);
+
+  // 10. Settings PATCH merge (numbers + caps + transfer number validation).
+  const st1 = await fetch(B + `/api/companies/${companyId}/settings`, {
+    method: 'PATCH', headers: { ...XHR, cookie },
+    body: JSON.stringify({ temperature: 0.3, dailyMessageCap: 500 }),
+  });
+  const st2 = await fetch(B + `/api/companies/${companyId}/settings`, {
+    method: 'PATCH', headers: { ...XHR, cookie },
+    body: JSON.stringify({ transferPhoneNumber: '+966501234567', inboundPhoneNumberId: 'smoke-pn-1' }),
+  });
+  const st2B = await st2.json().catch(() => ({}));
+  check('settings merge keeps earlier keys',
+    st1.status === 200 && st2.status === 200 && st2B.settings?.temperature === 0.3 && st2B.settings?.transferPhoneNumber === '+966501234567');
+  const stBad = await fetch(B + `/api/companies/${companyId}/settings`, {
+    method: 'PATCH', headers: { ...XHR, cookie }, body: JSON.stringify({ transferPhoneNumber: 'abc' }),
+  });
+  check('settings rejects bad transfer number', stBad.status === 400, `status=${stBad.status}`);
+
+  // 11. Clients: create + list + delete.
+  const cl = await fetch(B + `/api/companies/${companyId}/clients`, {
+    method: 'POST', headers: { ...XHR, cookie },
+    body: JSON.stringify({ email: 'client@smoke.local', name: 'عميل' }),
+  });
+  const clB = await cl.json().catch(() => ({}));
+  check('client create → password shown once', cl.status === 201 && !!clB.password, `status=${cl.status}`);
+  const clDel = await fetch(B + `/api/companies/${companyId}/clients/${clB.id}`, {
+    method: 'DELETE', headers: { ...XHR, cookie },
+  });
+  check('client delete → 200', clDel.status === 200, `status=${clDel.status}`);
+
+  // 12. Webhook: wrong secret → 401; right secret → 200 + call logged.
   const w1 = await fetch(B + '/webhook/vapi', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-vapi-secret': 'wrong' }, body: '{}',
   });
@@ -116,13 +194,35 @@ async function waitForBoot() {
     body: JSON.stringify({
       message: {
         type: 'end-of-call-report',
-        call: { id: 'smoke-call-1', type: 'inboundPhoneCall', startedAt: '2026-01-01T00:00:00Z', endedAt: '2026-01-01T00:00:30Z' },
+        // phoneNumberId (not assistantId) so the phone-fallback company
+        // matching path gets exercised too.
+        call: { id: 'smoke-call-1', type: 'inboundPhoneCall', phoneNumberId: 'smoke-pn-1', startedAt: '2026-01-01T00:00:00Z', endedAt: '2026-01-01T00:00:30Z' },
         summary: 'مكالمة اختبار دخان ناجحة تماماً.',
         artifact: { transcript: 'ok', recordingUrl: 'https://storage.vapi.ai/smoke.wav' },
       },
     }),
   });
   check('webhook: valid secret → 200', w2.status === 200, `status=${w2.status}`);
+  await new Promise((r) => setTimeout(r, 600));
+
+  // 13. Calls list + detail + CSV export carry the webhook data.
+  const calls = await fetch(B + `/api/companies/${companyId}/calls`, { headers: { cookie } });
+  const callsB = await calls.json().catch(() => []);
+  check('calls list has the webhook call', calls.status === 200 && callsB.some((c2) => c2.id === 'smoke-call-1'));
+  const csv = await fetch(B + `/api/companies/${companyId}/calls.csv`, { headers: { cookie } });
+  const csvBuf = Buffer.from(await csv.arrayBuffer());
+  check('calls.csv → 200 with BOM', csv.status === 200 && csvBuf.subarray(0, 3).toString('hex') === 'efbbbf');
+
+  // 14. Dashboard + conversations aggregate endpoints.
+  const dash = await fetch(B + '/api/dashboard?period=today', { headers: { cookie } });
+  const dashB = await dash.json().catch(() => ({}));
+  check('dashboard → 200 with chart', dash.status === 200 && Array.isArray(dashB.chart) && dashB.chart.length === 24, `status=${dash.status}`);
+  const conv = await fetch(B + '/api/conversations?limit=10', { headers: { cookie } });
+  const convB = await conv.json().catch(() => ({}));
+  check('conversations → 200 + finds the call', conv.status === 200 && convB.items?.some((i) => i.callId === 'smoke-call-1'), `total=${convB.total}`);
+  const convSearch = await fetch(B + '/api/conversations?search=' + encodeURIComponent('دخان'), { headers: { cookie } });
+  const convSearchB = await convSearch.json().catch(() => ({}));
+  check('conversations company-name search works', convSearch.status === 200 && convSearchB.items?.length >= 1);
 
   srv.kill();
   const pass = results.every(Boolean);

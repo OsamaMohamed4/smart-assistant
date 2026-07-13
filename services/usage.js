@@ -16,11 +16,11 @@ function dailyCap(company, settingsKey, envKey, dflt) {
 
 // Atomically consume `amount` from a company's daily budget for `kind`.
 // Returns false (without consuming) when the cap would be exceeded.
-function checkAndBumpUsage(companyId, kind, cap, amount = 1) {
+async function checkAndBumpUsage(companyId, kind, cap, amount = 1) {
   const day = new Date().toISOString().slice(0, 10);
-  const used = sql.getUsage.get(companyId, day, kind)?.amount || 0;
+  const used = (await sql.getUsage.get(companyId, day, kind))?.amount || 0;
   if (used + amount > cap) return false;
-  sql.bumpUsage.run({ company_id: companyId, day, kind, amount });
+  await sql.bumpUsage.run({ company_id: companyId, day, kind, amount });
   return true;
 }
 

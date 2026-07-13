@@ -2310,7 +2310,8 @@ app.post('/api/companies/:id/rag-test', requireCompanyAccess, async (req, res) =
       chunks: chunks.map((ch) => ({
         id        : ch.id,
         documentId: ch.documentId,
-        score     : Number(ch.score.toFixed(4)),
+        score     : Number((ch.score || 0).toFixed(4)),
+        kwScore   : Number((ch.kwScore || 0).toFixed(2)),
         preview   : ch.text.slice(0, 280) + (ch.text.length > 280 ? '...' : ''),
         text      : ch.text,
       })),

@@ -251,7 +251,7 @@ const sql = {
   ),
   insertChunk: stmt(
     `INSERT INTO kb_chunks (company_id, document_id, chunk_index, text, embedding, token_count)
-     VALUES ($1, $2, $3, $4, $5::vector, $6)`,
+     VALUES ($1, $2, $3, $4, $5::vector, $6) RETURNING id`,
     ['company_id', 'document_id', 'chunk_index', 'text', 'embedding', 'token_count'],
     { embedding: bufferToVecLiteral },
   ),
@@ -271,6 +271,13 @@ const sql = {
   listChunksForDoc: stmt(`
     SELECT id, chunk_index, text, token_count
       FROM kb_chunks WHERE document_id = $1 ORDER BY chunk_index ASC`),
+  listCompanyChunkTexts: stmt(`
+    SELECT id, document_id, text FROM kb_chunks WHERE company_id = $1`),
+  updateChunkEmbedding: stmt(
+    `UPDATE kb_chunks SET embedding = $1::vector WHERE id = $2`,
+    ['embedding', 'id'],
+    { embedding: bufferToVecLiteral },
+  ),
   listAllChunksForCompany: stmt(`
     SELECT c.id, c.document_id, c.chunk_index, c.text, d.filename
       FROM kb_chunks c

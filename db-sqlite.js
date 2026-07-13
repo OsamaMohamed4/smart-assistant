@@ -703,6 +703,13 @@ const sql = {
     SELECT id, chunk_index, text, token_count
     FROM kb_chunks WHERE document_id = ? ORDER BY chunk_index ASC
   `),
+  // Texts only (no embedding blobs) — keyword leg of the hybrid search.
+  listCompanyChunkTexts: db.prepare(`
+    SELECT id, document_id, text FROM kb_chunks WHERE company_id = ?
+  `),
+  updateChunkEmbedding: db.prepare(`
+    UPDATE kb_chunks SET embedding = @embedding WHERE id = @id
+  `),
   // All chunks for a company, ordered for stable concatenation. Used at
   // Vapi sync time to bake the KB into the assistant's system prompt
   // (Vapi can't reach our DB at call time, so we inline it once).

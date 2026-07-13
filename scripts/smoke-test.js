@@ -183,6 +183,50 @@ async function waitForBoot() {
   });
   check('client delete → 200', clDel.status === 200, `status=${clDel.status}`);
 
+  // 12a. Campaign lifecycle: create (mixed number formats) → start → pause → cancel.
+  const cm = await fetch(B + `/api/companies/${companyId}/campaigns`, {
+    method: 'POST', headers: { ...XHR, cookie },
+    body: JSON.stringify({
+      name: 'حملة الدخان',
+      numbersText: '+966501112222,أبو خالد\n0553334444\ninvalid-line\n+966501112222',
+      startHour: 0, endHour: 0, maxConcurrent: 2, maxAttempts: 2,
+    }),
+  });
+  const cmB = await cm.json().catch(() => ({}));
+  check('campaign create → dedup + normalize (2 contacts)', cm.status === 201 && cmB.contacts === 2, `status=${cm.status} contacts=${cmB.contacts}`);
+
+  const cmList = await fetch(B + `/api/companies/${companyId}/campaigns`, { headers: { cookie } });
+  const cmListB = await cmList.json().catch(() => []);
+  check('campaign list + stats', cmList.status === 200 && cmListB[0]?.stats?.pending === 2);
+
+  const cmStart = await fetch(B + `/api/companies/${companyId}/campaigns/${cmB.id}/start`, { method: 'POST', headers: { ...XHR, cookie }, body: '{}' });
+  check('campaign start → running', cmStart.status === 200);
+  const cmPause = await fetch(B + `/api/companies/${companyId}/campaigns/${cmB.id}/pause`, { method: 'POST', headers: { ...XHR, cookie }, body: '{}' });
+  check('campaign pause', cmPause.status === 200);
+  const cmCancel = await fetch(B + `/api/companies/${companyId}/campaigns/${cmB.id}/cancel`, { method: 'POST', headers: { ...XHR, cookie }, body: '{}' });
+  const cmDetail = await fetch(B + `/api/companies/${companyId}/campaigns/${cmB.id}`, { headers: { cookie } });
+  const cmDetailB = await cmDetail.json().catch(() => ({}));
+  check('campaign cancel → contacts cancelled', cmCancel.status === 200 && cmDetailB.stats?.cancelled === 2, JSON.stringify(cmDetailB.stats || {}));
+
+  // 12b. Evals: question CRUD + run without questions/scenario → clean errors.
+  const eq = await fetch(B + `/api/companies/${companyId}/evals/questions`, {
+    method: 'POST', headers: { ...XHR, cookie },
+    body: JSON.stringify({ question: 'كم سعر الشقة؟', expected: 'تسعمئة وخمسون ألف ريال' }),
+  });
+  const eqB = await eq.json().catch(() => ({}));
+  check('eval question create', eq.status === 201 && !!eqB.id);
+  const eqList = await fetch(B + `/api/companies/${companyId}/evals/questions`, { headers: { cookie } });
+  check('eval questions list', eqList.status === 200 && (await eqList.json()).length === 1);
+  // A scenario was activated earlier, so the run reaches OpenAI — with the
+  // fake key it must fail CLEANLY as 502 (never a crash or HTML error).
+  const er = await fetch(B + `/api/companies/${companyId}/evals/runs`, { method: 'POST', headers: { ...XHR, cookie }, body: '{}' });
+  check('eval run fails cleanly without real OpenAI key', er.status === 502 || er.status === 200, `status=${er.status}`);
+
+  // 12c. Audit log readable + captured the campaign ops.
+  const au = await fetch(B + '/api/_admin/audit?limit=50', { headers: { cookie } });
+  const auB = await au.json().catch(() => []);
+  check('audit log lists campaign.create', au.status === 200 && auB.some((r) => r.action === 'campaign.create'));
+
   // 12. Webhook: wrong secret → 401; right secret → 200 + call logged.
   const w1 = await fetch(B + '/webhook/vapi', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-vapi-secret': 'wrong' }, body: '{}',

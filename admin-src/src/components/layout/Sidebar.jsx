@@ -1,4 +1,4 @@
-import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen } from 'lucide-react';
+import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen, PhoneOutgoing, ShieldCheck } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 // Two-tier nav: "Build" is where you author the assistant; "Monitor" is where
@@ -24,6 +24,8 @@ const NAV_GROUPS = [
     items: [
       { id: 'dashboard',  label: 'لوحة التحكم', icon: LayoutDashboard, hint: 'تحليلات',             roles: ['superadmin', 'client'] },
       { id: 'sessions',   label: 'السجلات',     icon: MessageSquare,   hint: 'مكالمات + شات',       roles: ['superadmin', 'client'] },
+      { id: 'campaigns',  label: 'الحملات',     icon: PhoneOutgoing,   hint: 'مكالمات صادرة',       roles: ['superadmin', 'client'] },
+      { id: 'audit',      label: 'سجل العمليات', icon: ShieldCheck,    hint: 'audit',               roles: ['superadmin'] },
     ],
   },
 ];
@@ -39,7 +41,7 @@ export function Sidebar({ active, onChange, user, onLogout, workspaceMode = fals
   // Inside a workspace there's no "list of clients" page — that's a
   // control-plane concern. 'companies' is shown but the page itself filters
   // to a single company.
-  const WORKSPACE_HIDDEN = new Set(['clients']);
+  const WORKSPACE_HIDDEN = new Set(['clients', 'audit']);
   return (
     <aside className="w-[260px] shrink-0 bg-ink-950 text-ink-300 flex flex-col h-screen sticky top-0 border-l border-ink-800/60">
       {/* ─── Brand ─── */}

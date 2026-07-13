@@ -35,13 +35,15 @@ const TABLES = [
   'schema_migrations', 'users', 'companies', 'sessions', 'auth_events',
   'chats', 'calls', 'kb_documents', 'kb_chunks', 'audit_events',
   'usage_counters', 'webhook_events', 'scenarios', 'scenario_versions',
-  'whatsapp_sessions', 'api_keys',
+  'whatsapp_sessions', 'api_keys', 'campaigns', 'campaign_contacts',
+  'eval_questions', 'eval_runs',
 ];
 
 // Serial-id tables that need their sequence bumped after explicit-id inserts.
 const IDENTITY_TABLES = ['users', 'auth_events', 'chats', 'kb_documents',
   'kb_chunks', 'audit_events', 'webhook_events', 'scenarios',
-  'scenario_versions', 'api_keys'];
+  'scenario_versions', 'api_keys', 'campaigns', 'campaign_contacts',
+  'eval_questions', 'eval_runs'];
 
 function bufferToVec(buf) {
   return new Float32Array(buf.buffer, buf.byteOffset, buf.length / 4);

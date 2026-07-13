@@ -9,6 +9,8 @@ import { WorkspaceGate } from './pages/WorkspaceGate';
 import { AuthPage } from './pages/AuthPage';
 import { ClientsPage } from './pages/ClientsPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { CampaignsPage } from './pages/CampaignsPage';
+import { AuditPage } from './pages/AuditPage';
 import { ToastProvider } from './components/ui/Toast';
 import { api, setUnauthenticatedHandler } from './lib/api';
 
@@ -113,10 +115,10 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
   // concern), but the company-settings tab is visible — a workspace owner
   // needs to edit their own company details and republish to Vapi.
   const allowedTabs = isWorkspace
-    ? new Set(['dashboard', 'scenarios', 'knowledge', 'playground', 'companies', 'sessions'])
+    ? new Set(['dashboard', 'scenarios', 'knowledge', 'playground', 'companies', 'sessions', 'campaigns'])
     : isSuper
-      ? new Set(['dashboard', 'scenarios', 'knowledge', 'playground', 'companies', 'clients', 'sessions'])
-      : new Set(['dashboard', 'scenarios', 'knowledge', 'playground', 'sessions']);
+      ? new Set(['dashboard', 'scenarios', 'knowledge', 'playground', 'companies', 'clients', 'sessions', 'campaigns', 'audit'])
+      : new Set(['dashboard', 'scenarios', 'knowledge', 'playground', 'sessions', 'campaigns']);
   const activeTab = allowedTabs.has(tab) ? tab : 'dashboard';
 
   return (
@@ -138,6 +140,8 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         )}
         {activeTab === 'clients'   && isSuper && !isWorkspace && <ClientsPage />}
         {activeTab === 'sessions'  && <SessionsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
+        {activeTab === 'campaigns' && <CampaignsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
+        {activeTab === 'audit'     && isSuper && !isWorkspace && <AuditPage />}
       </main>
     </div>
   );

@@ -79,6 +79,25 @@ export const api = {
   createApiKey      : (id, name) => request(`/api/companies/${id}/api-keys`, { method: 'POST', body: JSON.stringify({ name }) }),
   revokeApiKey      : (id, keyId) => request(`/api/companies/${id}/api-keys/${keyId}`, { method: 'DELETE' }),
 
+  // Campaigns (outbound dialer)
+  listCampaigns     : (id) => request(`/api/companies/${id}/campaigns`),
+  createCampaign    : (id, body) => request(`/api/companies/${id}/campaigns`, { method: 'POST', body: JSON.stringify(body) }),
+  getCampaign       : (id, campaignId) => request(`/api/companies/${id}/campaigns/${campaignId}`),
+  startCampaign     : (id, campaignId) => request(`/api/companies/${id}/campaigns/${campaignId}/start`, { method: 'POST', body: '{}' }),
+  pauseCampaign     : (id, campaignId) => request(`/api/companies/${id}/campaigns/${campaignId}/pause`, { method: 'POST', body: '{}' }),
+  cancelCampaign    : (id, campaignId) => request(`/api/companies/${id}/campaigns/${campaignId}/cancel`, { method: 'POST', body: '{}' }),
+
+  // Evals (golden questions + runs)
+  listEvalQuestions : (id) => request(`/api/companies/${id}/evals/questions`),
+  addEvalQuestion   : (id, body) => request(`/api/companies/${id}/evals/questions`, { method: 'POST', body: JSON.stringify(body) }),
+  deleteEvalQuestion: (id, qid) => request(`/api/companies/${id}/evals/questions/${qid}`, { method: 'DELETE' }),
+  listEvalRuns      : (id) => request(`/api/companies/${id}/evals/runs`),
+  getEvalRun        : (id, runId) => request(`/api/companies/${id}/evals/runs/${runId}`),
+  runEval           : (id, body = {}) => request(`/api/companies/${id}/evals/runs`, { method: 'POST', body: JSON.stringify(body) }),
+
+  // Audit log (superadmin)
+  listAudit         : (limit = 100, action = '') => request(`/api/_admin/audit?limit=${limit}${action ? `&action=${encodeURIComponent(action)}` : ''}`),
+
   // sessions
   listSessions      : (companyId, limit = 50) => request(`/api/companies/${companyId}/sessions?limit=${limit}`),
   getSession        : (sessionId) => request(`/api/sessions/${sessionId}`),

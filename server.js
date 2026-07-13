@@ -21,7 +21,10 @@ const { TEMPLATES: SCENARIO_TEMPLATES } = require('./lib/scenario-templates');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
 const { router: webhookRoutes, getRecentWebhookAttempts } = require('./routes/webhook');
+const campaignsRoutes = require('./routes/campaigns');
+const evalsRoutes = require('./routes/evals');
 const { upsertVapiCall, startDrainTimer } = require('./services/call-events');
+const { startCampaignWorker } = require('./services/campaigns');
 const { dailyCap, checkAndBumpUsage } = require('./services/usage');
 const { audit } = require('./lib/audit');
 const { requireAuth, requireCompanyAccess, requireCompanyAdmin, canChatWithCompany, startSessionCleanup } = require('./lib/auth');
@@ -401,6 +404,10 @@ app.use('/api', requireAuth);
 
 // Per-company client accounts (superadmin only — owners no longer exist).
 app.use('/api/companies/:id/clients', clientsRoutes);
+
+// Outbound campaigns + eval harness (both tenant-scoped via :id).
+app.use('/api/companies/:id/campaigns', campaignsRoutes);
+app.use('/api/companies/:id/evals', evalsRoutes);
 
 // ─── helpers ─────────────────────────────────────────────────────
 const COMPANY_ID_RE  = /^[a-z0-9-]{1,40}$/;
@@ -788,6 +795,7 @@ app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, 
 // inbox) and services/call-events.js (event -> calls row + drain).
 app.use('/webhook', webhookRoutes);
 startDrainTimer();
+startCampaignWorker();
 
 // ─── Admin: backfill recent calls from Vapi ──────────────────────
 // Superadmin-only. Pulls the most recent calls straight from Vapi's REST
@@ -856,6 +864,16 @@ app.post('/api/_admin/backup-now', async (req, res) => {
   } catch (e) {
     res.status(503).json({ success: false, error: e.message });
   }
+});
+
+// ─── Admin: audit log (read side) ────────────────────────────────
+app.get('/api/_admin/audit', async (req, res) => {
+  if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 100));
+  let rows = await sql.listAuditEvents.all(limit);
+  const action = String(req.query.action || '').trim();
+  if (action) rows = rows.filter((r) => (r.action || '').startsWith(action));
+  res.json(rows);
 });
 
 // ─── Debug: recent webhook attempts ──────────────────────────────

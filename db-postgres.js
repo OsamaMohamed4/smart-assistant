@@ -401,6 +401,91 @@ const sql = {
     UPDATE api_keys SET revoked_at = ${NOW}
      WHERE id = $1 AND company_id = $2 AND revoked_at IS NULL`),
 
+  // ─── Campaigns (outbound dialer) ─────────────────────────
+  insertCampaign: stmt(
+    `INSERT INTO campaigns (company_id, name, status, start_hour, end_hour, max_concurrent, max_attempts, retry_delay_min)
+     VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7) RETURNING id`,
+    ['company_id', 'name', 'start_hour', 'end_hour', 'max_concurrent', 'max_attempts', 'retry_delay_min'],
+  ),
+  getCampaign: stmt(`SELECT * FROM campaigns WHERE id = $1`),
+  listCampaignsForCompany: stmt(`SELECT * FROM campaigns WHERE company_id = $1 ORDER BY created_at DESC`),
+  listRunningCampaigns: stmt(`SELECT * FROM campaigns WHERE status = 'running'`),
+  setCampaignStatus: stmt(
+    `UPDATE campaigns SET status = $1, updated_at = ${NOW} WHERE id = $2`,
+    ['status', 'id'],
+  ),
+  startCampaign: stmt(`
+    UPDATE campaigns SET status = 'running', started_at = COALESCE(started_at, ${NOW}), updated_at = ${NOW}
+     WHERE id = $1 AND status IN ('draft','paused')`),
+  completeCampaign: stmt(`
+    UPDATE campaigns SET status = 'completed', completed_at = ${NOW}, updated_at = ${NOW} WHERE id = $1`),
+  insertCampaignContact: stmt(
+    `INSERT INTO campaign_contacts (campaign_id, phone, name, variables)
+     VALUES ($1, $2, $3, $4) RETURNING id`,
+    ['campaign_id', 'phone', 'name', 'variables'],
+  ),
+  listCampaignContacts: stmt(`SELECT * FROM campaign_contacts WHERE campaign_id = $1 ORDER BY id ASC LIMIT $2`),
+  campaignContactStats: stmt(`
+    SELECT status, COUNT(*)::int AS n FROM campaign_contacts WHERE campaign_id = $1 GROUP BY status`),
+  pickPendingContacts: stmt(`
+    SELECT * FROM campaign_contacts WHERE campaign_id = $1 AND status = 'pending' ORDER BY id ASC LIMIT $2`),
+  countCallingContacts: stmt(`
+    SELECT COUNT(*)::int AS n FROM campaign_contacts WHERE campaign_id = $1 AND status = 'calling'`),
+  countRemainingContacts: stmt(`
+    SELECT COUNT(*)::int AS n FROM campaign_contacts
+     WHERE campaign_id = $1 AND (status IN ('pending','calling')
+        OR (status IN ('failed','no_answer') AND attempts < $2))`),
+  claimContact: stmt(
+    `UPDATE campaign_contacts
+        SET status = 'calling', attempts = attempts + 1,
+            last_attempt_at = $1, last_error = NULL
+      WHERE id = $2 AND status = 'pending'`,
+    ['at', 'id'],
+  ),
+  setContactCallId: stmt(
+    `UPDATE campaign_contacts SET call_id = $1 WHERE id = $2`,
+    ['call_id', 'id'],
+  ),
+  markContactError: stmt(
+    `UPDATE campaign_contacts SET status = 'failed', last_error = $1 WHERE id = $2`,
+    ['err', 'id'],
+  ),
+  updateContactByCallId: stmt(
+    `UPDATE campaign_contacts SET status = $1, last_error = $2
+      WHERE call_id = $3 AND status = 'calling'`,
+    ['status', 'err', 'call_id'],
+  ),
+  requeueRetryContacts: stmt(`
+    UPDATE campaign_contacts SET status = 'pending'
+     WHERE campaign_id = $1 AND status IN ('failed','no_answer')
+       AND attempts < $2 AND (last_attempt_at IS NULL OR last_attempt_at <= $3)`),
+  requeueStaleCalling: stmt(`
+    UPDATE campaign_contacts SET status = 'failed', last_error = 'timeout: no end-of-call report'
+     WHERE campaign_id = $1 AND status = 'calling' AND last_attempt_at <= $2`),
+  cancelCampaignContacts: stmt(`
+    UPDATE campaign_contacts SET status = 'cancelled'
+     WHERE campaign_id = $1 AND status IN ('pending','calling')`),
+
+  // ─── Evals (golden questions + runs) ─────────────────────
+  insertEvalQuestion: stmt(
+    `INSERT INTO eval_questions (company_id, question, expected) VALUES ($1, $2, $3) RETURNING id`,
+    ['company_id', 'question', 'expected'],
+  ),
+  listEvalQuestions: stmt(`SELECT * FROM eval_questions WHERE company_id = $1 ORDER BY id ASC`),
+  deleteEvalQuestion: stmt(`DELETE FROM eval_questions WHERE id = $1 AND company_id = $2`),
+  insertEvalRun: stmt(
+    `INSERT INTO eval_runs (company_id, label, score, total, correct, partial, results)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    ['company_id', 'label', 'score', 'total', 'correct', 'partial', 'results'],
+  ),
+  listEvalRuns: stmt(`SELECT id, label, score, total, correct, partial, created_at FROM eval_runs WHERE company_id = $1 ORDER BY id DESC LIMIT 20`),
+  getEvalRun: stmt(`SELECT * FROM eval_runs WHERE id = $1 AND company_id = $2`),
+
+  // ─── Audit log (read side) ───────────────────────────────
+  listAuditEvents: stmt(`
+    SELECT id, actor_email, action, resource, metadata, ip, created_at
+      FROM audit_events ORDER BY id DESC LIMIT $1`),
+
   // ─── dashboard analytics ─────────────────────────────────
   countCallsInRange: stmt(
     `SELECT COUNT(*)::int AS n FROM calls

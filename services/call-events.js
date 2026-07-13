@@ -71,6 +71,14 @@ async function processVapiEvent(msg) {
       if (ours) await sql.setCallSummary.run(ours, call.id);
     }
 
+    // If this call belongs to a campaign contact, resolve its outcome.
+    try {
+      const { handleCallEnded } = require('./campaigns'); // lazy: avoid require cycle
+      await handleCallEnded(call.id, msg.endedReason || call.endedReason, duration);
+    } catch (e) {
+      logger.warn('campaign call-ended hook failed', { err: e.message });
+    }
+
     // Outgoing webhook (opt-in per company). Read the row back so the
     // payload carries the final summary, then fire-and-forget.
     if (companyRow) {

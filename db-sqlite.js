@@ -395,6 +395,71 @@ if (!hasColumn('calls', 'structured_data')) {
     `ALTER TABLE calls ADD COLUMN structured_data TEXT`);
 }
 
+// Migration 23: outbound campaigns. A campaign is a list of contacts the
+// worker dials through the company's assistant inside a daily time window,
+// with bounded concurrency and retries.
+runMigration(23, 'create_campaigns', `
+  CREATE TABLE IF NOT EXISTS campaigns (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id      TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'draft',  -- draft|running|paused|completed|cancelled
+    start_hour      INTEGER NOT NULL DEFAULT 10,    -- Saudi time (UTC+3)
+    end_hour        INTEGER NOT NULL DEFAULT 21,
+    max_concurrent  INTEGER NOT NULL DEFAULT 2,
+    max_attempts    INTEGER NOT NULL DEFAULT 2,
+    retry_delay_min INTEGER NOT NULL DEFAULT 60,
+    created_at      TEXT DEFAULT (datetime('now')),
+    updated_at      TEXT DEFAULT (datetime('now')),
+    started_at      TEXT,
+    completed_at    TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_campaigns_company ON campaigns(company_id);
+  CREATE INDEX IF NOT EXISTS idx_campaigns_status  ON campaigns(status);
+
+  CREATE TABLE IF NOT EXISTS campaign_contacts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id     INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    phone           TEXT NOT NULL,
+    name            TEXT,
+    variables       TEXT,                            -- JSON prompt vars
+    status          TEXT NOT NULL DEFAULT 'pending', -- pending|calling|completed|no_answer|failed|cancelled
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at TEXT,
+    call_id         TEXT,
+    last_error      TEXT,
+    created_at      TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_cc_campaign_status ON campaign_contacts(campaign_id, status);
+  CREATE INDEX IF NOT EXISTS idx_cc_call ON campaign_contacts(call_id);
+`);
+
+// Migration 24: eval harness. Golden questions per company + run history so
+// prompt edits get a measurable score instead of vibes.
+runMigration(24, 'create_evals', `
+  CREATE TABLE IF NOT EXISTS eval_questions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id  TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    question    TEXT NOT NULL,
+    expected    TEXT NOT NULL,
+    created_at  TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_evalq_company ON eval_questions(company_id);
+
+  CREATE TABLE IF NOT EXISTS eval_runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id    TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    label         TEXT,                    -- 'active' or 'draft' or scenario name
+    score         REAL,
+    total         INTEGER,
+    correct       INTEGER,
+    partial       INTEGER,
+    results       TEXT,                    -- JSON per-question verdicts
+    created_at    TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_evalr_company ON eval_runs(company_id);
+`);
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users
@@ -796,6 +861,94 @@ const sql = {
   revokeApiKey       : db.prepare(`
     UPDATE api_keys SET revoked_at = datetime('now')
      WHERE id = ? AND company_id = ? AND revoked_at IS NULL
+  `),
+
+  // ─── Campaigns (outbound dialer) ─────────────────────────────
+  insertCampaign     : db.prepare(`
+    INSERT INTO campaigns (company_id, name, status, start_hour, end_hour, max_concurrent, max_attempts, retry_delay_min)
+    VALUES (@company_id, @name, 'draft', @start_hour, @end_hour, @max_concurrent, @max_attempts, @retry_delay_min)
+  `),
+  getCampaign        : db.prepare('SELECT * FROM campaigns WHERE id = ?'),
+  listCampaignsForCompany: db.prepare('SELECT * FROM campaigns WHERE company_id = ? ORDER BY created_at DESC'),
+  listRunningCampaigns: db.prepare("SELECT * FROM campaigns WHERE status = 'running'"),
+  setCampaignStatus  : db.prepare(`
+    UPDATE campaigns SET status = @status, updated_at = datetime('now') WHERE id = @id
+  `),
+  startCampaign      : db.prepare(`
+    UPDATE campaigns SET status = 'running', started_at = COALESCE(started_at, datetime('now')), updated_at = datetime('now')
+     WHERE id = ? AND status IN ('draft','paused')
+  `),
+  completeCampaign   : db.prepare(`
+    UPDATE campaigns SET status = 'completed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?
+  `),
+  insertCampaignContact: db.prepare(`
+    INSERT INTO campaign_contacts (campaign_id, phone, name, variables)
+    VALUES (@campaign_id, @phone, @name, @variables)
+  `),
+  listCampaignContacts: db.prepare(`
+    SELECT * FROM campaign_contacts WHERE campaign_id = ? ORDER BY id ASC LIMIT ?
+  `),
+  campaignContactStats: db.prepare(`
+    SELECT status, COUNT(*) AS n FROM campaign_contacts WHERE campaign_id = ? GROUP BY status
+  `),
+  pickPendingContacts: db.prepare(`
+    SELECT * FROM campaign_contacts WHERE campaign_id = ? AND status = 'pending' ORDER BY id ASC LIMIT ?
+  `),
+  countCallingContacts: db.prepare(`
+    SELECT COUNT(*) AS n FROM campaign_contacts WHERE campaign_id = ? AND status = 'calling'
+  `),
+  countRemainingContacts: db.prepare(`
+    SELECT COUNT(*) AS n FROM campaign_contacts
+     WHERE campaign_id = ? AND (status IN ('pending','calling')
+        OR (status IN ('failed','no_answer') AND attempts < ?))
+  `),
+  // Atomic claim: only flips a *pending* row, so an overlapping tick (or a
+  // second instance) can never double-dial the same contact.
+  claimContact       : db.prepare(`
+    UPDATE campaign_contacts
+       SET status = 'calling', attempts = attempts + 1,
+           last_attempt_at = @at, last_error = NULL
+     WHERE id = @id AND status = 'pending'
+  `),
+  setContactCallId   : db.prepare('UPDATE campaign_contacts SET call_id = @call_id WHERE id = @id'),
+  markContactError   : db.prepare(`
+    UPDATE campaign_contacts SET status = 'failed', last_error = @err WHERE id = @id
+  `),
+  updateContactByCallId: db.prepare(`
+    UPDATE campaign_contacts SET status = @status, last_error = @err
+     WHERE call_id = @call_id AND status = 'calling'
+  `),
+  requeueRetryContacts: db.prepare(`
+    UPDATE campaign_contacts SET status = 'pending'
+     WHERE campaign_id = ? AND status IN ('failed','no_answer')
+       AND attempts < ? AND (last_attempt_at IS NULL OR last_attempt_at <= ?)
+  `),
+  requeueStaleCalling: db.prepare(`
+    UPDATE campaign_contacts SET status = 'failed', last_error = 'timeout: no end-of-call report'
+     WHERE campaign_id = ? AND status = 'calling' AND last_attempt_at <= ?
+  `),
+  cancelCampaignContacts: db.prepare(`
+    UPDATE campaign_contacts SET status = 'cancelled'
+     WHERE campaign_id = ? AND status IN ('pending','calling')
+  `),
+
+  // ─── Evals (golden questions + runs) ─────────────────────────
+  insertEvalQuestion : db.prepare(`
+    INSERT INTO eval_questions (company_id, question, expected) VALUES (@company_id, @question, @expected)
+  `),
+  listEvalQuestions  : db.prepare('SELECT * FROM eval_questions WHERE company_id = ? ORDER BY id ASC'),
+  deleteEvalQuestion : db.prepare('DELETE FROM eval_questions WHERE id = ? AND company_id = ?'),
+  insertEvalRun      : db.prepare(`
+    INSERT INTO eval_runs (company_id, label, score, total, correct, partial, results)
+    VALUES (@company_id, @label, @score, @total, @correct, @partial, @results)
+  `),
+  listEvalRuns       : db.prepare('SELECT id, label, score, total, correct, partial, created_at FROM eval_runs WHERE company_id = ? ORDER BY id DESC LIMIT 20'),
+  getEvalRun         : db.prepare('SELECT * FROM eval_runs WHERE id = ? AND company_id = ?'),
+
+  // ─── Audit log (read side) ───────────────────────────────────
+  listAuditEvents    : db.prepare(`
+    SELECT id, actor_email, action, resource, metadata, ip, created_at
+      FROM audit_events ORDER BY id DESC LIMIT ?
   `),
 
   // ─── WhatsApp sessions ──────────────────────────────────────

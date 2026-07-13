@@ -1124,6 +1124,7 @@ function ConfigurationTab({ scenario, update }) {
   return (
     <div className="space-y-5">
       <VoiceSettingsCard companyId={scenario.companyId} />
+      <EvalsCard companyId={scenario.companyId} />
       <Card>
         <h3 className="text-[14px] font-semibold text-ink-900 mb-3">اللغات المُعدّة</h3>
         <div className="flex flex-wrap items-center gap-2">
@@ -1356,6 +1357,104 @@ function VoiceSettingsCard({ companyId }) {
           />
         </div>
       </div>
+    </Card>
+  );
+}
+
+// Eval harness: golden questions + one-click scoring of the ACTIVE scenario.
+// Comparing the last two runs (e.g. active vs draft) is the practical A/B.
+function EvalsCard({ companyId }) {
+  const { push } = useToast();
+  const [questions, setQuestions] = useState([]);
+  const [runs, setRuns] = useState([]);
+  const [q, setQ] = useState('');
+  const [expected, setExpected] = useState('');
+  const [running, setRunning] = useState(false);
+  const [lastRun, setLastRun] = useState(null);
+
+  const load = () => {
+    api.listEvalQuestions(companyId).then(setQuestions).catch(() => {});
+    api.listEvalRuns(companyId).then(setRuns).catch(() => {});
+  };
+  useEffect(load, [companyId]);
+
+  const addQ = async () => {
+    if (!q.trim() || !expected.trim()) return;
+    try {
+      await api.addEvalQuestion(companyId, { question: q.trim(), expected: expected.trim() });
+      setQ(''); setExpected(''); load();
+    } catch (e) { push(e.message, 'error'); }
+  };
+
+  const run = async () => {
+    setRunning(true);
+    try {
+      const r = await api.runEval(companyId);
+      setLastRun(r);
+      push(`النتيجة: ${r.score}٪ (${r.correct} صحيحة، ${r.partial} جزئية من ${r.total})`, r.score >= 80 ? 'success' : 'error');
+      load();
+    } catch (e) { push(e.message, 'error'); }
+    finally { setRunning(false); }
+  };
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-1">
+        <h3 className="text-[14px] font-semibold text-ink-900">اختبار الجودة (Evals)</h3>
+        <Button variant="brand" size="sm" onClick={run} loading={running} disabled={!questions.length}>
+          شغّل الاختبار ({questions.length})
+        </Button>
+      </div>
+      <p className="text-[11.5px] text-ink-500 mb-3">
+        أسئلة ذهبية بإجابات معتمدة — تُقاس بعد كل تعديل حتى تعرف إن كان السيناريو تحسّن أم ساء.
+      </p>
+
+      {runs.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-3">
+          {runs.slice(0, 4).map((r) => (
+            <Badge key={r.id} tone={r.score >= 80 ? 'success' : r.score >= 50 ? 'warning' : 'danger'}>
+              {r.label === 'draft' ? 'مسودة' : 'المفعّل'}: {r.score}٪ · {fmtDate(r.created_at)}
+            </Badge>
+          ))}
+        </div>
+      )}
+
+      <div className="space-y-1.5 mb-3 max-h-[180px] overflow-y-auto">
+        {questions.map((it) => (
+          <div key={it.id} className="flex items-start gap-2 rounded-lg ring-1 ring-ink-100 bg-ink-50/50 px-3 py-2">
+            <div className="flex-1 min-w-0">
+              <div className="text-[12.5px] text-ink-800">{it.question}</div>
+              <div className="text-[11px] text-ink-500 mt-0.5">المتوقع: {it.expected}</div>
+            </div>
+            <button onClick={() => api.deleteEvalQuestion(companyId, it.id).then(load)}
+              className="text-rose-400 hover:text-rose-600 shrink-0 mt-0.5"><X className="w-3.5 h-3.5" /></button>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="سؤال يسأله العميل عادة" />
+        <div className="flex gap-2">
+          <Input value={expected} onChange={(e) => setExpected(e.target.value)} placeholder="الإجابة الصحيحة المتوقعة" />
+          <Button variant="secondary" size="sm" onClick={addQ} className="shrink-0 h-10">إضافة</Button>
+        </div>
+      </div>
+
+      {lastRun && (
+        <div className="mt-3 space-y-1 max-h-[200px] overflow-y-auto">
+          {lastRun.results.map((r, i) => (
+            <div key={i} className="text-[11.5px] rounded-lg px-3 py-1.5 ring-1 ring-ink-100 bg-white flex items-start gap-2">
+              <Badge tone={r.verdict === 'correct' ? 'success' : r.verdict === 'partial' ? 'warning' : 'danger'}>
+                {r.verdict === 'correct' ? 'صحيحة' : r.verdict === 'partial' ? 'جزئية' : 'خاطئة'}
+              </Badge>
+              <div className="min-w-0">
+                <div className="text-ink-800 truncate">{r.question}</div>
+                {r.reason && <div className="text-ink-500">{r.reason}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </Card>
   );
 }

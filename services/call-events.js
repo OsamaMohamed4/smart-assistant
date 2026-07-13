@@ -71,6 +71,7 @@ async function processVapiEvent(msg) {
       cost_usd      : msg.cost || call.cost || null,
       direction,
       recording_url : msg.artifact?.recordingUrl || msg.recordingUrl || call.artifact?.recordingUrl || null,
+      structured_data: msg.analysis?.structuredData ? JSON.stringify(msg.analysis.structuredData) : null,
     });
 
     if (transcript && (!msg.summary || msg.summary.length < 20)) {
@@ -121,6 +122,7 @@ function upsertVapiCall(v) {
     cost_usd      : v.cost ?? null,
     direction,
     recording_url : v.artifact?.recordingUrl || v.recordingUrl || null,
+    structured_data: v.analysis?.structuredData ? JSON.stringify(v.analysis.structuredData) : null,
   });
   return companyRow?.id || null;
 }

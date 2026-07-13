@@ -388,6 +388,13 @@ runMigration(21, 'create_api_keys', `
   CREATE INDEX IF NOT EXISTS idx_api_keys_company ON api_keys(company_id);
 `);
 
+// Migration 22: structured lead-qualification data extracted by Vapi's
+// post-call analysis (interest level, budget, area, callbacks...). JSON text.
+if (!hasColumn('calls', 'structured_data')) {
+  runMigration(22, 'calls_add_structured_data',
+    `ALTER TABLE calls ADD COLUMN structured_data TEXT`);
+}
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users
@@ -536,8 +543,8 @@ const sql = {
 
   // calls
   upsertCall         : db.prepare(`
-    INSERT INTO calls (id, company_id, assistant_id, caller_number, duration_sec, started_at, ended_at, ended_reason, transcript, summary, cost_usd, direction, recording_url)
-    VALUES (@id, @company_id, @assistant_id, @caller_number, @duration_sec, @started_at, @ended_at, @ended_reason, @transcript, @summary, @cost_usd, @direction, @recording_url)
+    INSERT INTO calls (id, company_id, assistant_id, caller_number, duration_sec, started_at, ended_at, ended_reason, transcript, summary, cost_usd, direction, recording_url, structured_data)
+    VALUES (@id, @company_id, @assistant_id, @caller_number, @duration_sec, @started_at, @ended_at, @ended_reason, @transcript, @summary, @cost_usd, @direction, @recording_url, @structured_data)
     ON CONFLICT(id) DO UPDATE SET
       company_id    = excluded.company_id,
       assistant_id  = excluded.assistant_id,
@@ -550,7 +557,8 @@ const sql = {
       summary       = COALESCE(excluded.summary, calls.summary),
       cost_usd      = excluded.cost_usd,
       direction     = COALESCE(excluded.direction, calls.direction),
-      recording_url = COALESCE(excluded.recording_url, calls.recording_url)
+      recording_url = COALESCE(excluded.recording_url, calls.recording_url),
+      structured_data = COALESCE(excluded.structured_data, calls.structured_data)
   `),
   // Stub row written when we initiate an outbound call so the attempt is
   // visible in the Conversations table even before Vapi's end-of-call webhook

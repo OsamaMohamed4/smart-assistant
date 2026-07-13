@@ -132,7 +132,7 @@ export function SessionsPage({ user, pinnedCompanyId }) {
       <div className="px-8 py-6">
         {/* ─── Filter row ─── */}
         <div className="flex items-center gap-2 flex-wrap mb-4">
-          <SearchBox value={filters.search} onChange={setFilter('search')} placeholder="بحث برقم تليفون أو إيميل..." />
+          <SearchBox value={filters.search} onChange={setFilter('search')} placeholder="بحث برقم، إيميل، أو كلمة قيلت في المكالمة..." />
           <FilterSelect
             value={filters.status} onChange={setFilter('status')}
             options={[

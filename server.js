@@ -1115,6 +1115,7 @@ app.get('/api/calls/:id', ensureCallOwned, async (req, res) => {
         cost_usd      : v.cost ?? call.cost_usd ?? null,
         direction,
         recording_url : v.artifact?.recordingUrl || v.recordingUrl || call.recording_url || null,
+        structured_data: v.analysis?.structuredData ? JSON.stringify(v.analysis.structuredData) : (call.structured_data || null),
       });
       call = sql.getCall.get(call.id);
     } catch (e) {
@@ -1210,6 +1211,27 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
     // Azure ar-SA (which mishears colloquial vocab and injects wrong words,
     // making the model answer the wrong question). Accuracy > latency here.
     transcriber: { provider: 'google', model: 'gemini-2.5-flash', language: 'Multilingual' },
+    // Post-call lead qualification: Vapi's analysis model fills this schema
+    // from the transcript and sends it in the end-of-call report
+    // (analysis.structuredData) — stored in calls.structured_data and shown
+    // as lead chips in the call details. Analysis config, not prompt text.
+    analysisPlan: {
+      structuredDataPlan: {
+        enabled: true,
+        schema: {
+          type: 'object',
+          properties: {
+            interest_level      : { type: 'string', enum: ['مهتم جدا', 'مهتم', 'متردد', 'غير مهتم'], description: 'مستوى اهتمام العميل بالعرض' },
+            property_type       : { type: 'string', description: 'نوع العقار المطلوب (شقة، فيلا، أرض، مكتب...) إن ذُكر' },
+            budget              : { type: 'string', description: 'الميزانية المذكورة بالريال إن ذُكرت' },
+            preferred_area      : { type: 'string', description: 'الحي أو المنطقة المفضلة إن ذُكرت' },
+            callback_requested  : { type: 'boolean', description: 'هل طلب العميل التواصل معه لاحقاً' },
+            appointment_requested: { type: 'boolean', description: 'هل طلب العميل موعد معاينة أو زيارة' },
+            notes               : { type: 'string', description: 'ملاحظة مهمة واحدة للمبيعات إن وجدت' },
+          },
+        },
+      },
+    },
     // Inbound default: the assistant-level firstMessage is what an unknown
     // caller hears, so it must NOT depend on customer_name. We use the
     // scenario's inbound variant, falling back to the outbound version
@@ -1721,11 +1743,24 @@ app.get('/api/conversations', (req, res) => {
   if (statusFilter  !== 'all') items = items.filter((i) => i.status  === statusFilter);
   if (outcomeFilter !== 'all') items = items.filter((i) => i.outcome === outcomeFilter);
   if (search) {
+    // Deep content search in SQL (LIKE over transcripts + chat messages) so
+    // "the agent said X yesterday" is findable — not just metadata fields.
+    const like = `%${search}%`;
+    const callHits = new Set(
+      db.prepare(`SELECT id FROM calls WHERE company_id IN (${inPlaceholders}) AND (transcript LIKE ? OR structured_data LIKE ?)`)
+        .all(...ids, like, like).map((r) => r.id),
+    );
+    const chatHits = new Set(
+      db.prepare(`SELECT DISTINCT session_id FROM chats WHERE company_id IN (${inPlaceholders}) AND (user_message LIKE ? OR assistant_reply LIKE ?)`)
+        .all(...ids, like, like).map((r) => r.session_id),
+    );
     items = items.filter((i) =>
          (i.phoneNumber || '').toLowerCase().includes(search)
       || (i.user        || '').toLowerCase().includes(search)
       || (i.summary     || '').toLowerCase().includes(search)
       || (i.companyName || '').toLowerCase().includes(search)
+      || (i.callId && callHits.has(i.callId))
+      || (i.sessionId && chatHits.has(i.sessionId))
     );
   }
 
@@ -1736,6 +1771,40 @@ app.get('/api/conversations', (req, res) => {
   const slice = items.slice(start, start + limit);
 
   res.json({ items: slice, total, page, limit });
+});
+
+// ─── CSV export: calls (with lead-qualification columns) ─────────
+// UTF-8 BOM so Excel opens Arabic correctly. Sales managers live in Excel;
+// this is the cheapest possible CRM bridge.
+app.get('/api/companies/:id/calls.csv', requireCompanyAccess, (req, res) => {
+  const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit, 10) || 1000));
+  const rows = sql.listCallsForCompany.all(req.params.id, limit);
+  const esc = (v) => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const header = [
+    'call_id', 'direction', 'caller_number', 'started_at', 'duration_sec',
+    'ended_reason', 'interest_level', 'property_type', 'budget',
+    'preferred_area', 'callback_requested', 'appointment_requested',
+    'summary', 'recording_url',
+  ];
+  const lines = [header.join(',')];
+  for (const r of rows) {
+    let lead = {};
+    try { if (r.structured_data) lead = JSON.parse(r.structured_data) || {}; } catch {}
+    lines.push([
+      r.id, r.direction, r.caller_number, r.started_at, r.duration_sec,
+      r.ended_reason, lead.interest_level, lead.property_type, lead.budget,
+      lead.preferred_area, lead.callback_requested, lead.appointment_requested,
+      r.summary, r.recording_url,
+    ].map(esc).join(','));
+  }
+  const stamp = new Date().toISOString().slice(0, 10);
+  audit(req, 'export.calls_csv', `companies/${req.params.id}`, { rows: rows.length });
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="calls-${req.params.id}-${stamp}.csv"`);
+  res.send('\uFEFF' + lines.join('\r\n'));
 });
 
 // ─── Scenarios: per-company AI agent configurations ─────────────

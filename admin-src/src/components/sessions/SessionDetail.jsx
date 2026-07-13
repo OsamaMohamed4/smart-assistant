@@ -16,6 +16,9 @@ export function SessionDetail({ open, onClose, kind, data, companyName, onResumm
   };
 
   if (kind === 'call') {
+    let lead = null;
+    try { if (data.structured_data) lead = JSON.parse(data.structured_data); } catch {}
+    const hasLead = lead && Object.values(lead).some((v) => v !== null && v !== '' && v !== undefined);
     return (
       <Modal
         open={open}
@@ -37,6 +40,26 @@ export function SessionDetail({ open, onClose, kind, data, companyName, onResumm
             <MetaCard icon={PhoneCall} label="السبب" value={data.ended_reason || '—'} />
             <MetaCard icon={User} label="من" value={data.caller_number || 'مجهول'} mono />
           </div>
+
+          {hasLead && (
+            <div className="rounded-2xl bg-gradient-to-br from-emerald-50 to-white border border-emerald-200/60 p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-6 h-6 rounded-md bg-emerald-500 flex items-center justify-center">
+                  <User className="w-3 h-3 text-white" strokeWidth={2.5} />
+                </div>
+                <span className="text-[12px] font-semibold text-emerald-900 uppercase tracking-wider">بيانات العميل المحتمل</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {lead.interest_level && <Badge tone={lead.interest_level.includes('غير') ? 'neutral' : lead.interest_level.includes('جدا') ? 'success' : 'info'}>الاهتمام: {lead.interest_level}</Badge>}
+                {lead.property_type && <Badge tone="brand">العقار: {lead.property_type}</Badge>}
+                {lead.budget && <Badge tone="warning">الميزانية: {lead.budget}</Badge>}
+                {lead.preferred_area && <Badge tone="info">المنطقة: {lead.preferred_area}</Badge>}
+                {lead.callback_requested === true && <Badge tone="danger" dot>طلب تواصل</Badge>}
+                {lead.appointment_requested === true && <Badge tone="danger" dot>طلب معاينة</Badge>}
+              </div>
+              {lead.notes && <p className="mt-2.5 text-[13px] text-ink-700 leading-relaxed">{lead.notes}</p>}
+            </div>
+          )}
 
           {data.recording_url && (
             <div className="rounded-2xl bg-white ring-1 ring-ink-100 p-4">

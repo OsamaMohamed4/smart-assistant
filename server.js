@@ -622,13 +622,14 @@ app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
 
 // Playground voice catalog. Whitelist — only these IDs can be requested from
 // /chat-voice, so a tampered client can't bill an arbitrary ElevenLabs voice.
-// All three are Saudi-Arabic male voices already on the account.
+// Arabic male voices on the account.
 // Global default voice for every agent. Code is the source of truth (not the
 // Railway env var) so a stale ELEVENLABS_VOICE_ID can't silently override it.
 // Per-company overrides still win via settings.voiceId (set in the admin UI).
-const DEFAULT_VOICE_ID = 'cFUFIbKkO2iZFwS8cRnY'; // Nasser — صوت سعودي احترافي
+const DEFAULT_VOICE_ID = 'MI88rOZjXbH22N8KHXUo'; // Ali علي — الصوت الافتراضي (مختبَر وجيد)
 
 const PLAYGROUND_VOICES = [
+  { id: 'MI88rOZjXbH22N8KHXUo', name: 'Ali', label: 'علي', description: 'صوت هادئ وواضح', gender: 'male', accent: 'arabic' },
   { id: 'cFUFIbKkO2iZFwS8cRnY', name: 'Nasser', label: 'ناصر', description: 'صوت سعودي طبيعي', gender: 'male', accent: 'saudi' },
 ];
 const PLAYGROUND_VOICE_IDS = new Set(PLAYGROUND_VOICES.map((v) => v.id));

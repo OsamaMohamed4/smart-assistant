@@ -1193,7 +1193,7 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   const temperature   = clamp(s.temperature, 0, 1, 0.3);
   // Roomier cap so property explanations aren't cut off mid-sentence.
   const maxTokens     = clamp(s.maxTokens, 50, 800, 400);
-  const stability     = clamp(s.stability, 0, 1, 0.45);
+  const stability     = clamp(s.stability, 0, 1, 0.8);
   const similarity    = clamp(s.similarityBoost, 0, 1, 0.8);
   const streamLatency = clamp(s.optimizeStreamingLatency, 0, 4, 3);
   // Speaking pace. 1.0 = ElevenLabs default; below 1.0 is slower. 0.95 is a
@@ -1219,10 +1219,11 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
       speed: voiceSpeed,
       optimizeStreamingLatency: streamLatency,
     },
-    // Google Gemini multilingual STT: markedly better on Saudi dialect than
-    // Azure ar-SA (which mishears colloquial vocab and injects wrong words,
-    // making the model answer the wrong question). Accuracy > latency here.
-    transcriber: { provider: 'google', model: 'gemini-2.5-flash', language: 'Multilingual' },
+    // Google Gemini STT, language pinned to Arabic (was Multilingual). On calls
+    // that are ~100% Saudi Arabic, pinning ar cuts language-confusion errors and
+    // stray non-Arabic tokens vs Multilingual — and still far better than Azure
+    // ar-SA. Accuracy > latency here. (User set this in Vapi and made it default.)
+    transcriber: { provider: 'google', model: 'gemini-2.5-flash', language: 'Arabic' },
     // Post-call lead qualification: Vapi's analysis model fills this schema
     // from the transcript and sends it in the end-of-call report
     // (analysis.structuredData) — stored in calls.structured_data and shown

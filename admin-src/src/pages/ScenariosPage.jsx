@@ -1274,7 +1274,7 @@ function VoiceSettingsCard({ companyId }) {
     api.getCompany(companyId)
       .then((c) => setS({
         model: 'gpt-4.1', temperature: 0.3, maxTokens: 400,
-        stability: 0.45, optimizeStreamingLatency: 3,
+        stability: 0.8, optimizeStreamingLatency: 3,
         ...(c.settings || {}),
       }))
       .catch(() => setS({}));
@@ -1326,7 +1326,7 @@ function VoiceSettingsCard({ companyId }) {
             <option value="gpt-4o-mini">gpt-4o-mini (الأسرع)</option>
           </select>
         </div>
-        <RangeField label="ثبات الصوت (stability)" value={s.stability ?? 0.45} min={0} max={1} step={0.05} onChange={num('stability')} />
+        <RangeField label="ثبات الصوت (stability)" value={s.stability ?? 0.8} min={0} max={1} step={0.05} onChange={num('stability')} />
         <RangeField label="حرارة الردود (temperature)" value={s.temperature ?? 0.6} min={0} max={1} step={0.05} onChange={num('temperature')} />
         <RangeField label="سرعة البث (latency 0-4)" value={s.optimizeStreamingLatency ?? 3} min={0} max={4} step={1} onChange={num('optimizeStreamingLatency')} />
         <RangeField label="أقصى طول للرد (tokens)" value={s.maxTokens ?? 200} min={50} max={500} step={10} onChange={num('maxTokens')} />

@@ -21,6 +21,7 @@ const { TEMPLATES: SCENARIO_TEMPLATES } = require('./lib/scenario-templates');
 const { validate } = require('./lib/validate');
 const schemas = require('./lib/schemas');
 const metrics = require('./lib/metrics');
+const { enforceSecretsAtBoot } = require('./lib/secrets');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
 const { router: webhookRoutes, getRecentWebhookAttempts } = require('./routes/webhook');
@@ -2353,6 +2354,9 @@ app.use((err, req, res, _next) => {
 
 const PORT = process.env.PORT || 3000;
 let httpServer = null;
+// Fail-safe secret validation: in production, refuse to boot if a required
+// provider/security secret is missing or malformed (Task #4).
+enforceSecretsAtBoot();
 initDb().then(() => {
   httpServer = app.listen(PORT, () => {
     logger.info('server started', { port: Number(PORT), driver: isPg ? 'postgres' : 'sqlite', adminUrl: `http://localhost:${PORT}/admin/` });

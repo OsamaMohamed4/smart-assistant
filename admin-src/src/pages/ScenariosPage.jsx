@@ -393,7 +393,7 @@ function ScenarioCreatePage({ companyId, onBack, onGenerating, onCreated }) {
         {templates.length > 0 && (
           <div className="mb-6">
             <div className="text-[12px] text-ink-500 mb-2 text-center">أو ابدأ من قالب جاهز (نضيف وجاهز للنطق الصوتي):</div>
-            <div className="grid grid-cols-2 gap-3 max-w-3xl mx-auto">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-3xl mx-auto">
               {templates.map((t) => (
                 <button
                   key={t.id}
@@ -426,7 +426,7 @@ function ScenarioCreatePage({ companyId, onBack, onGenerating, onCreated }) {
           ))}
         </div>
 
-        <div className="grid grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {/* ─── Textarea ─── */}
           <div className="col-span-2">
             <div className="bg-white border border-ink-200 rounded-2xl shadow-card">
@@ -1297,7 +1297,7 @@ function VoiceSettingsCard({ companyId }) {
         <Button variant="brand" size="sm" onClick={save} loading={saving}>حفظ</Button>
       </div>
       <p className="text-[11.5px] text-ink-500 mb-4">إعدادات على مستوى الشركة — تُطبّق بعد الضغط على نشر.</p>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label>معرّف الرقم الصادر (Vapi)</Label>
           <Input
@@ -1432,7 +1432,7 @@ function EvalsCard({ companyId }) {
         ))}
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="سؤال يسأله العميل عادة" />
         <div className="flex gap-2">
           <Input value={expected} onChange={(e) => setExpected(e.target.value)} placeholder="الإجابة الصحيحة المتوقعة" />

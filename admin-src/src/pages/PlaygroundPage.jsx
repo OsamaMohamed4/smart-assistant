@@ -170,7 +170,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-ink-50/40">
+    <div className="flex flex-col lg:flex-row lg:h-screen lg:overflow-hidden bg-ink-50/40">
       {/* ═══ Main area ═══════════════════════════ */}
       {/* min-h-0 is required at every flex-column ancestor of the chat scroll
           area; without it Flexbox uses the children's intrinsic height and
@@ -272,7 +272,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
       </div>
 
       {/* ═══ Right pane: data + voice + scenario card ═══ */}
-      <div className="w-[340px] shrink-0 border-l border-ink-100 bg-white flex flex-col h-screen overflow-y-auto">
+      <div className="w-full lg:w-[340px] lg:shrink-0 border-t lg:border-t-0 lg:border-l border-ink-100 bg-white flex flex-col lg:h-screen overflow-y-auto">
         {companies.length > 1 && (
           <div className="px-4 py-4 border-b border-ink-100">
             <Label>الشركة</Label>

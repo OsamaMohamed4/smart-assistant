@@ -20,6 +20,7 @@ const { lintScenario } = require('./lib/scenario-lint');
 const { TEMPLATES: SCENARIO_TEMPLATES } = require('./lib/scenario-templates');
 const { validate } = require('./lib/validate');
 const schemas = require('./lib/schemas');
+const metrics = require('./lib/metrics');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
 const { router: webhookRoutes, getRecentWebhookAttempts } = require('./routes/webhook');
@@ -166,6 +167,9 @@ app.use(async (req, res, next) => {
   res.setHeader('X-Request-Id', id);
   next();
 });
+
+// Prometheus: time every request + emit a structured access-log line (Task #6).
+app.use(metrics.httpMetricsMiddleware);
 
 // Apply CSRF gate globally (still skips GETs and /webhook/*).
 app.use(requireXhrHeader);
@@ -571,7 +575,9 @@ app.get('/health', async (_req, res) => {
   try {
     await healthCheck();
     out.db = 'ok';
+    metrics.recordDbUp(true);
   } catch (e) {
+    metrics.recordDbUp(false);
     logger.error('health: db check failed', { err: e.message });
     return res.status(503).json({ ok: false, db: 'fail' });
   }
@@ -592,6 +598,12 @@ app.get('/health', async (_req, res) => {
   }
   res.json(out);
 });
+
+// Liveness probe: process is up, no dependency checks (for k8s/uptime liveness).
+app.get('/livez', (_req, res) => res.json({ ok: true, uptime_sec: Math.round((Date.now() - BOOTED_AT) / 1000) }));
+
+// Prometheus scrape endpoint (Task #6). Gate with METRICS_TOKEN in production.
+app.get('/metrics', metrics.metricsHandler);
 
 app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
   const ctx = await resolveCompany(req, res);
@@ -2333,6 +2345,7 @@ app.use((err, req, res, _next) => {
   const isClientErr = err instanceof multer.MulterError || err.status === 400 || err.type === 'entity.too.large';
   const status = err.status || (isClientErr ? 400 : 500);
   (req.log || logger).error('unhandled route error', { err: err.message, path: req.path, status });
+  metrics.recordAppError();
   if (status >= 500) captureError(err, { path: req.path, requestId: req.id });
   if (res.headersSent) return;
   res.status(status).json({ error: status >= 500 ? 'internal error' : err.message });

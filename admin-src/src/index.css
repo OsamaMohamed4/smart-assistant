@@ -105,3 +105,22 @@ dialog::backdrop { background: rgba(14,15,18,0.45); backdrop-filter: blur(2px); 
   33%      { transform: translate(8%,   12%)  scale(1.1); }
   66%      { transform: translate(-12%, -6%)  scale(0.95);}
 }
+
+/* ─── Responsive foundations (reusable app-wide) ──────────────────── */
+
+/* Comfortable tap targets on touch devices without changing mouse density. */
+@media (pointer: coarse) {
+  button, [role="button"], select { min-height: 44px; }
+  input:not([type="checkbox"]):not([type="radio"]), textarea { min-height: 44px; }
+}
+
+/* Safety net: never let a stray wide element scroll the whole page sideways on
+   phones. Wide content (tables, code) scrolls inside its own container. */
+@media (max-width: 640px) {
+  body { overflow-x: hidden; }
+  /* Native <dialog> becomes a near-full-width sheet on phones. */
+  dialog { max-width: 100vw; }
+}
+
+/* Reusable helper: horizontal scroll container for tables/wide content. */
+.x-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }

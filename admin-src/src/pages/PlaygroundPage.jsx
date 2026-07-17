@@ -240,7 +240,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
             {scenarioOutOfSync && (
               <div className="mx-8 mt-5 inline-flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[12.5px] text-amber-900">
                 <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>السيناريو عُدّل بعد آخر نشر. اضغط <strong>نشر</strong> لتحديث الـ assistant.</span>
+                <span>السيناريو عُدّل بعد آخر نشر. اضغط <strong>نشر</strong> لتحديث الوكيل.</span>
               </div>
             )}
 
@@ -317,7 +317,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
             <span className="text-[12px] font-semibold text-ink-900 uppercase tracking-wider">صوت الـ Agent</span>
           </div>
           <p className="text-[11px] text-ink-500 mb-3 leading-relaxed">
-            اختيارك يحدّد قيمة <code className="font-mono">agent_name</code> فقط.
+            اسم الصوت الذي تختاره يُستخدم كاسم الوكيل في المحادثة.
           </p>
           <div className="space-y-2">
             {voices.map((v) => {
@@ -389,7 +389,7 @@ function VoiceModePanel({ phone, setPhone, phoneOk, missingRequired, calling, on
         </div>
         <h2 className="text-[22px] font-bold text-ink-900 tracking-tight">جرّب الوكيل على جوّالك</h2>
         <p className="mt-2 text-[13.5px] text-ink-500 leading-relaxed">
-          اكتب رقمك ليتصل بك الـ assistant.
+          اكتب رقمك ليتصل بك الوكيل.
         </p>
 
         <div className="mt-7 text-right">
@@ -451,7 +451,7 @@ function ChatModePanel({ messages, input, setInput, onSend, busy, company, onRes
             <Avatar name={company?.name || 'AI'} size={56} className="mx-auto" />
             <h2 className="mt-5 text-[20px] font-bold text-ink-900">شات مع {company?.name}</h2>
             <p className="mt-2 text-[13.5px] text-ink-500 max-w-md mx-auto leading-relaxed">
-              نفس الـ assistant بنفس السيناريو، ردود نصية.
+              نفس الوكيل بنفس السيناريو، ردود نصية.
             </p>
           </div>
         ) : (

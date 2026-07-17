@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Menu } from 'lucide-react';
 import { Sidebar } from './components/layout/Sidebar';
 import { CompaniesPage } from './pages/CompaniesPage';
 import { SessionsPage } from './pages/SessionsPage';
@@ -108,6 +109,7 @@ export default function App() {
 // page to a single company (workspace mode); when null, superadmin gets the
 // platform-wide view with company switchers and management tabs.
 function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
+  const [navOpen, setNavOpen] = useState(false);
   const isSuper = user.role === 'superadmin';
   const isWorkspace = !!pinnedCompanyId;
 
@@ -125,12 +127,26 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
     <div className="flex min-h-screen flex-row-reverse">
       <Sidebar
         active={activeTab}
-        onChange={setTab}
+        onChange={(t) => { setTab(t); setNavOpen(false); }}
         user={user}
         onLogout={onLogout}
         workspaceMode={isWorkspace}
+        mobileOpen={navOpen}
+        onClose={() => setNavOpen(false)}
       />
-      <main className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0 flex flex-col">
+        <header className="lg:hidden sticky top-0 z-30 flex items-center gap-2 h-14 px-3 bg-ink-950 text-white border-b border-ink-800/60">
+          <button onClick={() => setNavOpen(true)} aria-label="فتح القائمة" className="w-11 h-11 rounded-lg flex items-center justify-center text-ink-200 hover:bg-white/10 active:bg-white/[0.15] transition-colors">
+            <Menu className="w-5 h-5" />
+          </button>
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-brand-400 to-brand-700 flex items-center justify-center shrink-0">
+              <svg viewBox="0 0 24 24" className="w-4 h-4 text-white" fill="currentColor"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 1 0 6 0V4a3 3 0 0 0-3-3Zm7 11v-2a1 1 0 1 0-2 0v2a5 5 0 0 1-10 0v-2a1 1 0 1 0-2 0v2a7 7 0 0 0 6 6.92V21H8a1 1 0 1 0 0 2h8a1 1 0 1 0 0-2h-3v-2.08A7 7 0 0 0 19 12Z" /></svg>
+            </div>
+            <span className="text-[14px] font-semibold truncate">Smart Assistant</span>
+          </div>
+        </header>
+        <main className="flex-1 min-w-0">
         {activeTab === 'dashboard' && <DashboardPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'scenarios'  && <ScenariosPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'knowledge'  && <KnowledgeBasesPage pinnedCompanyId={pinnedCompanyId} />}
@@ -142,7 +158,8 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         {activeTab === 'sessions'  && <SessionsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'campaigns' && <CampaignsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'audit'     && isSuper && !isWorkspace && <AuditPage />}
-      </main>
+        </main>
+      </div>
     </div>
   );
 }

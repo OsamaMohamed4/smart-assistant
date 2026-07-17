@@ -67,7 +67,7 @@ export function ClientsPage() {
 
   return (
     <div className="p-6 sm:p-8 max-w-6xl mx-auto" dir="rtl">
-      <header className="flex items-start justify-between mb-6 gap-4">
+      <header className="flex flex-col sm:flex-row sm:items-start sm:justify-between mb-6 gap-4">
         <div>
           <h1 className="text-[22px] font-bold text-ink-900 tracking-tight">عملاء الشركة</h1>
           <p className="text-[13px] text-ink-500 mt-1">العملاء الذين تم منحهم حق محادثة المساعد الذكي.</p>
@@ -112,7 +112,8 @@ export function ClientsPage() {
         />
       ) : (
         <div className="bg-white border border-ink-100 rounded-2xl overflow-hidden">
-          <table className="w-full text-[13px]">
+          <div className="x-scroll">
+          <table className="w-full text-[13px] min-w-[520px]">
             <thead className="bg-ink-50 text-ink-600 text-[11.5px] uppercase tracking-wider">
               <tr>
                 <th className="text-right px-4 py-3 font-semibold">الاسم</th>
@@ -146,6 +147,7 @@ export function ClientsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -193,7 +195,7 @@ function CreateClientModal({ open, companyId, onClose, onCreated }) {
       open={open}
       onClose={onClose}
       title="عميل جديد"
-      description="ستُنشأ كلمة سر تلقائياً — احفظها لإرسالها للعميل."
+      description="ستُنشأ كلمة مرور تلقائياً — احفظها لإرسالها للعميل."
       size="sm"
       footer={<>
         <Button variant="brand" onClick={submit} loading={busy} disabled={!email || !companyId}>إنشاء الحساب</Button>
@@ -237,8 +239,8 @@ function NewCredentialsModal({ cred, companyId, onClose }) {
   const loginLink = `${window.location.origin}/c/${companyId}`;
   const copy = (text, label) => {
     navigator.clipboard.writeText(text).then(
-      () => push(`${label} اتنسخ`, 'success'),
-      () => push('ما قدرتش أنسخ تلقائياً', 'error'),
+      () => push(`تم نسخ ${label}`, 'success'),
+      () => push('تعذّر النسخ. انسخه يدوياً.', 'error'),
     );
   };
 
@@ -247,14 +249,14 @@ function NewCredentialsModal({ cred, companyId, onClose }) {
       open={!!cred}
       onClose={onClose}
       title="بيانات الدخول"
-      description="انسخها وأرسلها للعميل — لن تظهر كلمة السر مرة أخرى."
+      description="انسخها وأرسلها للعميل — لن تظهر كلمة المرور مرة أخرى."
       size="sm"
       footer={<Button variant="primary" onClick={onClose}>حسنًا</Button>}
     >
       <div className="space-y-4">
         <div className="rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-[12.5px] text-amber-900">
           <KeyRound className="w-3.5 h-3.5 inline ml-1" />
-          <strong>تنبيه:</strong> كلمة السر تظهر مرة واحدة فقط. عند فقدها يلزم إنشاء حساب جديد.
+          <strong>تنبيه:</strong> كلمة المرور تظهر مرة واحدة فقط. عند فقدها يلزم إنشاء حساب جديد.
         </div>
 
         <div>
@@ -278,10 +280,10 @@ function NewCredentialsModal({ cred, companyId, onClose }) {
         </div>
 
         <div>
-          <Label>كلمة السر</Label>
+          <Label>كلمة المرور</Label>
           <div className="flex gap-2">
             <Input value={cred.password} readOnly dir="ltr" className="flex-1 bg-ink-50 font-mono text-[14px]" />
-            <Button variant="secondary" onClick={() => copy(cred.password, 'كلمة السر')}>
+            <Button variant="secondary" onClick={() => copy(cred.password, 'كلمة المرور')}>
               <Copy className="w-3.5 h-3.5" />
             </Button>
           </div>

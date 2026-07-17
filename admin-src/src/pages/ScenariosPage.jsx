@@ -704,7 +704,7 @@ function ScenarioEditPage({ id, onBack }) {
               <RefreshCw className="w-3.5 h-3.5" /> السجل
             </Button>
             <Button variant="secondary" onClick={() => setPreviewOpen(true)} className="gap-1.5">
-              <Eye className="w-3.5 h-3.5" /> معاينة البرومبت
+              <Eye className="w-3.5 h-3.5" /> معاينة التعليمات
             </Button>
             <Button variant="secondary" onClick={() => setTestOpen(true)} className="gap-1.5">
               <MessageSquare className="w-3.5 h-3.5" /> اختبار
@@ -901,7 +901,7 @@ function PromptPreviewModal({ open, onClose, companyId, instructionPrompt }) {
   }, [open, companyId, instructionPrompt]);
 
   return (
-    <Modal open={open} onClose={onClose} size="lg" title="معاينة البرومبت النهائي"
+    <Modal open={open} onClose={onClose} size="lg" title="معاينة التعليمات النهائية"
       description="هذا بالضبط ما يصل إلى المساعد على Vapi — السيناريو + قاعدة المعرفة + قاعدة الإنهاء.">
       {busy && <div className="text-center py-8 text-ink-400 text-[13px]">جارٍ التحميل…</div>}
       {data?.error && <div className="bg-rose-50 text-rose-700 rounded-xl p-3 text-[13px]">{data.error}</div>}
@@ -1341,7 +1341,7 @@ function VoiceSettingsCard({ companyId }) {
           <p className="text-[10.5px] text-ink-400 mt-1">عند ضبطه، يقدر الوكيل يحوّل المكالمة لهذا الرقم. حدّد في السيناريو متى يحوّل.</p>
         </div>
         <div>
-          <Label>Webhook (call.completed)</Label>
+          <Label>رابط الإشعار (Webhook)</Label>
           <Input
             value={s.webhookUrl || ''}
             onChange={(e) => setS((x) => ({ ...x, webhookUrl: e.target.value }))}
@@ -1351,7 +1351,7 @@ function VoiceSettingsCard({ companyId }) {
           <Input
             value={s.webhookSecret || ''}
             onChange={(e) => setS((x) => ({ ...x, webhookSecret: e.target.value }))}
-            placeholder="Secret اختياري — توقيع X-Signature"
+            placeholder="مفتاح التوقيع (اختياري)"
             dir="ltr"
             className="mt-2"
           />

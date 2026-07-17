@@ -32,7 +32,7 @@ export function AuthPage({ onAuthed }) {
 
     if (isSignup) {
       if (password.length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
-        setError('كلمة السر لازم تكون 8 أحرف على الأقل وتحتوي على حرف ورقم');
+        setError('يجب أن تتكوّن كلمة المرور من 8 أحرف على الأقل، وتتضمّن حرفاً ورقماً.');
         return;
       }
       if (password !== confirm) {
@@ -111,7 +111,7 @@ export function AuthPage({ onAuthed }) {
             </div>
 
             <div>
-              <Label hint={isSignup ? '8+ أحرف، حرف ورقم على الأقل' : null}>كلمة السر</Label>
+              <Label hint={isSignup ? '8+ أحرف، حرف ورقم على الأقل' : null}>كلمة المرور</Label>
               <Input
                 type="password"
                 value={password}
@@ -138,7 +138,7 @@ export function AuthPage({ onAuthed }) {
 
             {isSignup && (
               <div>
-                <Label>تأكيد كلمة السر</Label>
+                <Label>تأكيد كلمة المرور</Label>
                 <Input
                   type="password"
                   value={confirm}

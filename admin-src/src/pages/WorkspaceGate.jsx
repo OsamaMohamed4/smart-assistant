@@ -114,7 +114,7 @@ function ClientLogin({ company, companyId, currentUser, onAuthed, onLogout }) {
             </div>
 
             <div>
-              <Label>كلمة السر</Label>
+              <Label>كلمة المرور</Label>
               <Input
                 type="password"
                 value={password}

@@ -37,13 +37,22 @@ function initials(label) {
   return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || s[0].toUpperCase();
 }
 
-export function Sidebar({ active, onChange, user, onLogout, workspaceMode = false }) {
+export function Sidebar({ active, onChange, user, onLogout, workspaceMode = false, mobileOpen = false, onClose }) {
   // Inside a workspace there's no "list of clients" page — that's a
   // control-plane concern. 'companies' is shown but the page itself filters
   // to a single company.
   const WORKSPACE_HIDDEN = new Set(['clients', 'audit']);
   return (
-    <aside className="w-[260px] shrink-0 bg-ink-950 text-ink-300 flex flex-col h-screen sticky top-0 border-l border-ink-800/60">
+    <>
+      {mobileOpen && (
+        <div className="fixed inset-0 z-40 bg-ink-950/60 backdrop-blur-[2px] lg:hidden" onClick={onClose} aria-hidden="true" />
+      )}
+    <aside className={cn(
+      'bg-ink-950 text-ink-300 flex flex-col h-screen border-l border-ink-800/60 z-50',
+      'fixed inset-y-0 right-0 w-[280px] max-w-[85vw] transition-transform duration-300 ease-out',
+      mobileOpen ? 'translate-x-0' : 'translate-x-full',
+      'lg:sticky lg:top-0 lg:inset-auto lg:z-30 lg:w-[260px] lg:shrink-0 lg:translate-x-0',
+    )}>
       {/* ─── Brand ─── */}
       <div className="px-5 pt-6 pb-5 border-b border-white/[0.06] dot-grid">
         <div className="flex items-center gap-3">
@@ -56,7 +65,7 @@ export function Sidebar({ active, onChange, user, onLogout, workspaceMode = fals
             <div className="text-white text-[14px] font-semibold leading-tight">Smart Assistant</div>
             <div className="text-ink-500 text-[11px] mt-0.5">لوحة التحكم</div>
           </div>
-          <button className="text-ink-500 hover:text-ink-300 w-7 h-7 rounded-md hover:bg-white/[0.06] flex items-center justify-center transition-colors">
+          <button onClick={onClose} aria-label="إغلاق القائمة" className="text-ink-500 hover:text-ink-300 w-7 h-7 rounded-md hover:bg-white/[0.06] flex items-center justify-center transition-colors">
             <ChevronsLeft className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -133,5 +142,6 @@ export function Sidebar({ active, onChange, user, onLogout, workspaceMode = fals
         )}
       </div>
     </aside>
+    </>
   );
 }

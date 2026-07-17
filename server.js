@@ -18,6 +18,8 @@ const { ingestDocument, retrieve, repairMojibake } = require('./lib/rag');
 const { END_CALL_TOOL_RULE } = require('./lib/master-prompt');
 const { lintScenario } = require('./lib/scenario-lint');
 const { TEMPLATES: SCENARIO_TEMPLATES } = require('./lib/scenario-templates');
+const { validate } = require('./lib/validate');
+const schemas = require('./lib/schemas');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
 const { router: webhookRoutes, getRecentWebhookAttempts } = require('./routes/webhook');
@@ -276,7 +278,7 @@ async function resolveAgentApiAuth(req) {
   return { error: 'invalid api key', status: 401 };
 }
 
-app.post('/api/v1/agent/chat', agentLimiter, async (req, res) => {
+app.post('/api/v1/agent/chat', agentLimiter, validate({ body: schemas.agentChatBody }), async (req, res) => {
   const auth = await resolveAgentApiAuth(req);
   if (auth.error) return res.status(auth.status).json({ success: false, error: auth.error });
 
@@ -928,7 +930,7 @@ app.get('/api/companies/:id', requireCompanyAccess, async (req, res) => {
 
 // Per-company voice + model settings. Whitelist keys so a client can't inject
 // arbitrary config; values are re-clamped at sync time regardless.
-app.patch('/api/companies/:id/settings', requireCompanyAccess, async (req, res) => {
+app.patch('/api/companies/:id/settings', requireCompanyAccess, validate({ params: schemas.companyIdParam, body: schemas.settingsBody }), async (req, res) => {
   const row = await sql.getCompany.get(req.params.id);
   if (!row) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
@@ -970,7 +972,7 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, async (req, res) 
 // ─── Per-company API keys (public Agent API) ─────────────────────
 // Superadmin-only. The plaintext key is returned ONCE at creation; only its
 // SHA-256 hash is stored, so there is no way to re-display it later.
-app.post('/api/companies/:id/api-keys', requireCompanyAdmin, async (req, res) => {
+app.post('/api/companies/:id/api-keys', requireCompanyAdmin, validate({ body: schemas.apiKeyCreateBody }), async (req, res) => {
   const name = String(req.body?.name || '').trim().slice(0, 80) || 'default';
   const raw = 'sa_' + crypto.randomBytes(24).toString('hex');
   const keyHash = crypto.createHash('sha256').update(raw).digest('hex');
@@ -994,7 +996,7 @@ app.delete('/api/companies/:id/api-keys/:keyId', requireCompanyAdmin, async (req
   res.json({ ok: true });
 });
 
-app.post('/api/companies', async (req, res) => {
+app.post('/api/companies', validate({ body: schemas.companyCreateBody }), async (req, res) => {
   const b = req.body || {};
   // systemPrompt + kbText are legacy — Scenarios replaced them. Kept for old
   // companies that still have them set; we don't require them at creation.
@@ -1021,7 +1023,7 @@ app.post('/api/companies', async (req, res) => {
   res.status(201).json(await loadCompany(b.id));
 });
 
-app.patch('/api/companies/:id', requireCompanyAccess, async (req, res) => {
+app.patch('/api/companies/:id', requireCompanyAccess, validate({ body: schemas.companyPatchBody }), async (req, res) => {
   const existing = await sql.getCompany.get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
@@ -1930,7 +1932,7 @@ app.get('/api/scenarios/:id', requireAuth, async (req, res) => {
   res.json(shapeScenario(row));
 });
 
-app.post('/api/companies/:id/scenarios', requireCompanyAccess, async (req, res) => {
+app.post('/api/companies/:id/scenarios', requireCompanyAccess, validate({ params: schemas.companyIdParam, body: schemas.scenarioCreateBody }), async (req, res) => {
   const b = req.body || {};
   const name = String(b.name || '').trim().slice(0, 200);
   // repairMojibake: if the user pastes text that was saved in a broken

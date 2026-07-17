@@ -5,6 +5,8 @@ const express = require('express');
 const { sql } = require('../db');
 const { requireCompanyAccess } = require('../lib/auth');
 const { audit } = require('../lib/audit');
+const { validate } = require('../lib/validate');
+const { campaignCreateBody } = require('../lib/schemas');
 
 const router = express.Router({ mergeParams: true });
 router.use(requireCompanyAccess);
@@ -51,7 +53,7 @@ function parseContacts(body) {
 }
 
 // Create a campaign with its contact list (draft — start explicitly).
-router.post('/', async (req, res) => {
+router.post('/', validate({ body: campaignCreateBody }), async (req, res) => {
   const b = req.body || {};
   const name = String(b.name || '').trim().slice(0, 120);
   if (!name) return res.status(400).json({ error: 'اسم الحملة مطلوب' });

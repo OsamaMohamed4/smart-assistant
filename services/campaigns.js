@@ -10,6 +10,7 @@
 //   (after retry_delay_min). Stuck 'calling' rows (webhook never arrived)
 //   are failed after 30 minutes and become retryable.
 const axios = require('axios');
+const queue = require('../lib/queue');
 const { sql } = require('../db');
 const { logger } = require('../lib/logger');
 const { loadCompany } = require('../companies');
@@ -167,9 +168,20 @@ async function handleCallEnded(callId, endedReason, durationSec) {
 
 function startCampaignWorker() {
   const interval = Number(process.env.CAMPAIGNS_TICK_MS) || 30_000;
+  // Durable path: a BullMQ repeatable job replaces setInterval so the schedule
+  // survives restarts and is safe across multiple app instances.
+  if (queue.enabled) {
+    const q = queue.makeQueue('campaigns');
+    queue.makeWorker('campaigns', async () => { await tick(); }, { concurrency: 1 });
+    queue.scheduleRepeatable(q, 'tick', interval)
+      .catch((e) => logger.error('campaign schedule failed', { err: e.message }));
+    logger.info('campaign worker started (BullMQ durable queue)', { intervalMs: interval });
+    return null;
+  }
+  // Fallback: in-process timer when no REDIS_URL is configured (dev/CI/local).
   const t = setInterval(() => tick().catch((e) => logger.error('campaign worker tick error', { err: e.message })), interval);
   t.unref();
-  logger.info('campaign worker started', { intervalMs: interval });
+  logger.info('campaign worker started (in-process timer — set REDIS_URL for durability)', { intervalMs: interval });
   return t;
 }
 

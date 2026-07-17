@@ -22,6 +22,7 @@ const { validate } = require('./lib/validate');
 const schemas = require('./lib/schemas');
 const metrics = require('./lib/metrics');
 const { enforceSecretsAtBoot } = require('./lib/secrets');
+const { shutdown: queueShutdown } = require('./lib/queue');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
 const { router: webhookRoutes, getRecentWebhookAttempts } = require('./routes/webhook');
@@ -2376,6 +2377,8 @@ function shutdown(signal) {
     process.exit(1);
   }, 25000);
   force.unref();
+  // Drain background workers (finishes the active job) before the DB closes.
+  Promise.resolve(queueShutdown()).catch((e) => logger.error('queue shutdown error', { err: e.message }));
   if (!httpServer) { process.exit(0); }
   httpServer.close((err) => {
     if (err) logger.error('http close error', { err: err.message });

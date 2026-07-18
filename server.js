@@ -610,6 +610,18 @@ app.get('/health', async (_req, res) => {
     const intervalMs = Math.max(1, Number(process.env.BACKUP_INTERVAL_HOURS) || 24) * 3600 * 1000;
     out.backup = (Date.now() - new Date(bk.lastOkAt).getTime()) > 2 * intervalMs ? 'stale' : 'ok';
   }
+  // RLS rollout signal (Task #2). `armed` = this process is sending tenant
+  // context on every query; `tables_enforced` = how many tables Postgres is
+  // actually policing. Both must read correctly BEFORE the policies are
+  // enabled, and they stay visible afterwards as ongoing observability
+  // (an uptime monitor can alert if enforcement silently drops to 0).
+  out.rls = { armed: process.env.RLS_ENABLED === '1' };
+  if (isPg) {
+    try {
+      const r = await dataGet("SELECT count(*) FILTER (WHERE rowsecurity)::int AS n FROM pg_tables WHERE schemaname = 'public'");
+      out.rls.tables_enforced = Number(r?.n ?? 0);
+    } catch { /* non-fatal: never fail the health check on a catalog probe */ }
+  }
   res.json(out);
 });
 

@@ -23,6 +23,7 @@ const schemas = require('./lib/schemas');
 const metrics = require('./lib/metrics');
 const { enforceSecretsAtBoot } = require('./lib/secrets');
 const { shutdown: queueShutdown } = require('./lib/queue');
+const { runWithContext } = require('./lib/tenant-context');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
 const { router: webhookRoutes, getRecentWebhookAttempts } = require('./routes/webhook');
@@ -173,6 +174,15 @@ app.use(async (req, res, next) => {
 // Prometheus: time every request + emit a structured access-log line (Task #6).
 app.use(metrics.httpMetricsMiddleware);
 
+// RLS tenant context (Task #2). Defaults to the system bypass so unauthenticated,
+// webhook and worker paths behave exactly as they do today. requireAuth narrows
+// it to the caller's company for client sessions; Postgres then enforces the
+// isolation even if a query forgets its company_id filter.
+app.use((req, _res, next) => {
+  req.dbContext = { bypass: true, companyId: null };
+  runWithContext(req.dbContext, next);
+});
+
 // Apply CSRF gate globally (still skips GETs and /webhook/*).
 app.use(requireXhrHeader);
 
@@ -307,6 +317,8 @@ app.post('/api/v1/agent/chat', agentLimiter, validate({ body: schemas.agentChatB
   if (!COMPANY_ID_RE.test(companyId)) {
     return res.status(400).json({ success: false, error: 'company_id is required' });
   }
+  // Pin the DB tenant context to the API key's company (Task #2 RLS).
+  if (req.dbContext) { req.dbContext.bypass = false; req.dbContext.companyId = companyId; }
   if (!customerPhone) {
     return res.status(400).json({ success: false, error: 'customer_phone is required' });
   }

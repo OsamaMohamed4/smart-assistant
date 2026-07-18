@@ -81,6 +81,28 @@ const OPENAI_TIMEOUT_MS = 25_000;
 const TTS_TIMEOUT_MS    = 15_000;
 const VAPI_TIMEOUT_MS   = 20_000;
 
+// Numeric env override with a safe fallback — used by the latency-tuning knobs
+// below so they can be A/B'd from Railway without a code change.
+const num = (v, dflt) => (Number.isFinite(Number(v)) ? Number(v) : dflt);
+
+// Speech-to-text provider. Default is the Arabic-pinned Gemini the operator
+// selected for accuracy. Profiling 145 real turns showed it is also the single
+// largest latency source (see the comment at the transcriber assignment), so
+// it is env-overridable to allow a like-for-like A/B against Vapi's own
+// performanceMetrics. Set TRANSCRIBER_JSON to a full Vapi transcriber object.
+const TRANSCRIBER = (() => {
+  const raw = (process.env.TRANSCRIBER_JSON || '').trim();
+  if (!raw) return { provider: 'google', model: 'gemini-2.5-flash', language: 'Arabic' };
+  try {
+    const t = JSON.parse(raw);
+    if (t && typeof t === 'object' && t.provider) return t;
+    console.warn('TRANSCRIBER_JSON missing "provider" — using the default transcriber');
+  } catch (e) {
+    console.warn(`TRANSCRIBER_JSON is not valid JSON (${e.message}) — using the default transcriber`);
+  }
+  return { provider: 'google', model: 'gemini-2.5-flash', language: 'Arabic' };
+})();
+
 const openai = new OpenAI({
   apiKey : process.env.OPENAI_API_KEY,
   timeout: OPENAI_TIMEOUT_MS,
@@ -1263,7 +1285,16 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
     // that are ~100% Saudi Arabic, pinning ar cuts language-confusion errors and
     // stray non-Arabic tokens vs Multilingual — and still far better than Azure
     // ar-SA. Accuracy > latency here. (User set this in Vapi and made it default.)
-    transcriber: { provider: 'google', model: 'gemini-2.5-flash', language: 'Arabic' },
+    //
+    // MEASURED COST (145 real turns, Vapi performanceMetrics): this transcriber
+    // is the dominant latency source — 2259ms median STT (47% of turn) and it
+    // does NOT scale with utterance length (2076ms for 1-3 words vs 2103ms for
+    // 4-8), i.e. it is fixed overhead, not transcription work. Because it emits
+    // no punctuated streaming partials, endpointing also falls through to the
+    // no-punctuation timeout every turn (another 1501ms / 31%). Together: 78%
+    // of turn latency. Overridable via TRANSCRIBER_JSON so an alternative can
+    // be A/B'd against the same metric; re-measure with scripts/profile-calls.js.
+    transcriber: TRANSCRIBER,
     // Post-call lead qualification: Vapi's analysis model fills this schema
     // from the transcript and sends it in the end-of-call report
     // (analysis.structuredData) — stored in calls.structured_data and shown
@@ -1332,7 +1363,24 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
     // smartEndpointingEnabled ('livekit' ML end-of-speech detection) still
     // guards against cutting the customer off mid-sentence, so the lower
     // waitSeconds only trims the dead pause at the tail of their turn.
-    startSpeakingPlan: { waitSeconds: 0.15, smartEndpointingEnabled: 'livekit' },
+    startSpeakingPlan: {
+      waitSeconds: 0.15,
+      smartEndpointingEnabled: 'livekit',
+      // MEASURED: endpointing costs 1501ms on 44 of 53 profiled turns — an
+      // exact constant, which is Vapi's onNoPunctuationSeconds default (1.5s)
+      // firing. It fires every turn because the current transcriber emits no
+      // punctuated streaming partials, so the 0.1s punctuation path never runs.
+      // Turns that avoided it came in at 100-452ms endpointing and a 2001ms
+      // TOTAL turn, vs the 4823ms median — so this is the cheapest large win
+      // available. 1.0s trims ~500ms of dead air with no effect on
+      // transcription accuracy or voice quality; raise it if callers report
+      // being cut off. Values are env-tunable for A/B without a redeploy.
+      transcriptionEndpointingPlan: {
+        onPunctuationSeconds  : num(process.env.ENDPOINT_PUNCT_S, 0.1),
+        onNoPunctuationSeconds: num(process.env.ENDPOINT_NOPUNCT_S, 1.0),
+        onNumberSeconds       : num(process.env.ENDPOINT_NUMBER_S, 0.4),
+      },
+    },
     // Aggressive interrupt: stop the agent the instant the user starts
     // speaking. numWords 1 (vs 2) means a single syllable triggers a stop;
     // voiceSeconds 0.1 (vs 0.2) shortens the voice-activity confirmation;

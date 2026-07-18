@@ -8,7 +8,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { Pool } = require('pg');
 
-const ADMIN_URL = process.env.DATABASE_URL || 'postgres://postgres:test@localhost:5433/satest';
+const ADMIN_URL = process.env.DATABASE_URL || 'postgres://postgres:test@localhost:5434/satest';
 process.env.DB_DRIVER = 'postgres';
 process.env.DATABASE_URL = ADMIN_URL;
 

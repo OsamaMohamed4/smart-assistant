@@ -31,6 +31,8 @@ const env = {
 // the pg database persists between runs and a leftover user closes bootstrap.
 async function resetPg() {
   if ((process.env.DB_DRIVER || 'sqlite') !== 'postgres') return;
+  // The RLS verification harness prepares the schema/role/policies itself.
+  if (process.env.SMOKE_SKIP_RESET === '1') { console.log('(pg reset skipped — external setup)'); return; }
   const { Client } = require('pg');
   const c = new Client({ connectionString: process.env.DATABASE_URL });
   await c.connect();

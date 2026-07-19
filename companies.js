@@ -60,11 +60,24 @@ async function buildSystemPromptWithRAG(company, userQuery, vars) {
 // Replace global template variables (agent_name, date, time, etc) in a prompt
 // at chat time. Per-call variables (customer_name, account_number…) stay
 // untouched so the model recognises them as runtime placeholders.
+// Saudi Arabia is UTC+3 year-round (no DST). {{date}} and {{time}} are SPOKEN
+// to callers in Riyadh, so rendering them in UTC made the agent state a time
+// three hours in the past — and the wrong date for the three hours around
+// midnight. Shift the clock before formatting. (services/campaigns.js applies
+// the same offset for its call window; TZ_OFFSET_HOURS keeps them consistent.)
+const TZ_OFFSET_HOURS = Number(process.env.TZ_OFFSET_HOURS) || 3;
+
+function localNow(date = new Date()) {
+  return new Date(date.getTime() + TZ_OFFSET_HOURS * 3600 * 1000);
+}
+
 function fillGlobals(text, company) {
   if (!text) return text;
-  const now = new Date();
+  const now = localNow();
   const map = {
     agent_name : company.name || 'المساعد',
+    // toISOString() always prints UTC, so we read the shifted instant back out
+    // of it — the offset is already baked in by localNow().
     date       : now.toISOString().slice(0, 10),
     time       : now.toISOString().slice(11, 16),
   };
@@ -128,5 +141,5 @@ function invalidateCache(id) {
 module.exports = {
   loadCompany, listCompanies, listCompaniesFull, invalidateCache,
   buildSystemPromptWithRAG, fillGlobals, fillRuntimeVars,
-  NoActiveScenarioError,
+  NoActiveScenarioError, localNow, TZ_OFFSET_HOURS,
 };

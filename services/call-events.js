@@ -6,6 +6,7 @@ const { sql } = require('../db');
 const { summarize } = require('../summarize');
 const { logger } = require('../lib/logger');
 const { sendCallCompleted } = require('./outbound-webhook');
+const { encryptField } = require('../lib/pii');
 
 // Resolve which company a Vapi call belongs to. Primary key is the assistant
 // ID (matches assistant_id OR assistant_id_inbound). But assistant IDs change
@@ -53,7 +54,7 @@ async function processVapiEvent(msg) {
       id            : call.id || crypto.randomUUID(),
       company_id    : companyRow?.id || null,
       assistant_id  : assistantId || null,
-      caller_number : call.customer?.number || msg.customer?.number || null,
+      caller_number : encryptField(call.customer?.number || msg.customer?.number || null),
       duration_sec  : duration,
       started_at    : startedAt || null,
       ended_at      : endedAt || null,
@@ -112,7 +113,7 @@ async function upsertVapiCall(v) {
     id            : v.id,
     company_id    : companyRow?.id || null,
     assistant_id  : assistantId,
-    caller_number : v.customer?.number || null,
+    caller_number : encryptField(v.customer?.number || null),
     duration_sec  : duration,
     started_at    : startedAt,
     ended_at      : endedAt,

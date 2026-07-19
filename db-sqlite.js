@@ -460,6 +460,32 @@ runMigration(24, 'create_evals', `
   CREATE INDEX IF NOT EXISTS idx_evalr_company ON eval_runs(company_id);
 `);
 
+// Migration 25: denormalized company_id on campaign_contacts and
+// scenario_versions. Both were reachable only through their parent, so a query
+// that forgot to join was unprotected — and campaign_contacts stores customer
+// phone numbers. The column lets Postgres RLS police them directly (audit
+// F-05); on SQLite it keeps the two drivers structurally identical.
+// Backfilled from the parent so existing rows are covered too.
+if (!hasColumn('campaign_contacts', 'company_id')) {
+  runMigration(25, 'campaign_contacts_add_company_id', `
+    ALTER TABLE campaign_contacts ADD COLUMN company_id TEXT REFERENCES companies(id) ON DELETE CASCADE;
+    UPDATE campaign_contacts
+       SET company_id = (SELECT c.company_id FROM campaigns c WHERE c.id = campaign_contacts.campaign_id)
+     WHERE company_id IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_cc_company ON campaign_contacts(company_id);
+  `);
+}
+
+if (!hasColumn('scenario_versions', 'company_id')) {
+  runMigration(26, 'scenario_versions_add_company_id', `
+    ALTER TABLE scenario_versions ADD COLUMN company_id TEXT REFERENCES companies(id) ON DELETE CASCADE;
+    UPDATE scenario_versions
+       SET company_id = (SELECT s.company_id FROM scenarios s WHERE s.id = scenario_versions.scenario_id)
+     WHERE company_id IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_scenario_versions_company ON scenario_versions(company_id);
+  `);
+}
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users
@@ -637,8 +663,10 @@ const sql = {
     ORDER BY last_at DESC
     LIMIT ?
   `),
-  getSession         : db.prepare('SELECT * FROM chats WHERE session_id = ? ORDER BY created_at ASC'),
-  setSessionSummary  : db.prepare('UPDATE chats SET summary = ? WHERE session_id = ?'),
+  // Company-scoped: session_id alone is guessable, so the tenant is always
+  // part of the predicate (belt to the route guard's braces).
+  getSession         : db.prepare('SELECT * FROM chats WHERE session_id = ? AND company_id = ? ORDER BY created_at ASC'),
+  setSessionSummary  : db.prepare('UPDATE chats SET summary = ? WHERE session_id = ? AND company_id = ?'),
 
   // calls
   upsertCall         : db.prepare(`
@@ -824,9 +852,9 @@ const sql = {
   // ─── Scenario version history (rollback) ────────────────────
   insertScenarioVersion: db.prepare(`
     INSERT INTO scenario_versions
-      (scenario_id, name, first_message, first_message_inbound, instruction_prompt, edited_by)
+      (scenario_id, company_id, name, first_message, first_message_inbound, instruction_prompt, edited_by)
     VALUES
-      (@scenario_id, @name, @first_message, @first_message_inbound, @instruction_prompt, @edited_by)
+      (@scenario_id, @company_id, @name, @first_message, @first_message_inbound, @instruction_prompt, @edited_by)
   `),
   listScenarioVersions : db.prepare(`
     SELECT id, name, edited_by, created_at,
@@ -889,8 +917,8 @@ const sql = {
     UPDATE campaigns SET status = 'completed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?
   `),
   insertCampaignContact: db.prepare(`
-    INSERT INTO campaign_contacts (campaign_id, phone, name, variables)
-    VALUES (@campaign_id, @phone, @name, @variables)
+    INSERT INTO campaign_contacts (campaign_id, company_id, phone, name, variables)
+    VALUES (@campaign_id, @company_id, @phone, @name, @variables)
   `),
   listCampaignContacts: db.prepare(`
     SELECT * FROM campaign_contacts WHERE campaign_id = ? ORDER BY id ASC LIMIT ?

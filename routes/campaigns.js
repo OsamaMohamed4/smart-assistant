@@ -2,7 +2,8 @@
 // (mergeParams) behind requireAuth + requireCompanyAccess, so every route is
 // tenant-scoped; sub-resources re-verify the campaign belongs to :id.
 const express = require('express');
-const { sql } = require('../db');
+const { sql, withTransaction } = require('../db');
+const { encryptField, decryptRows, CONTACT_PII_FIELDS } = require('../lib/pii');
 const { requireCompanyAccess } = require('../lib/auth');
 const { audit } = require('../lib/audit');
 const { validate } = require('../lib/validate');
@@ -23,14 +24,22 @@ async function loadOwnedCampaign(req, res) {
   return campaign;
 }
 
+// Returns { contacts, rejected, duplicates }. Invalid numbers used to be
+// dropped silently, so an operator pasting 500 rows in the wrong format got a
+// campaign with fewer contacts and no explanation. We now report them back.
 function parseContacts(body) {
   const out = [];
-  const push = (phone, name, variables) => {
-    phone = String(phone || '').trim().replace(/[\s-]/g, '');
+  const rejected = [];
+  const push = (rawPhone, name, variables) => {
+    const original = String(rawPhone || '').trim();
+    let phone = original.replace(/[\s-]/g, '');
     // Tolerate the common Saudi paste formats: 05xxxxxxxx / 9665xxxxxxxx.
     if (/^05\d{8}$/.test(phone)) phone = '+966' + phone.slice(1);
     if (/^9665\d{8}$/.test(phone)) phone = '+' + phone;
-    if (!E164.test(phone)) return;
+    if (!E164.test(phone)) {
+      if (original) rejected.push(original.slice(0, 40));
+      return;
+    }
     out.push({ phone, name: String(name || '').trim().slice(0, 80) || null, variables: variables || null });
   };
   if (Array.isArray(body.contacts)) {
@@ -43,13 +52,20 @@ function parseContacts(body) {
   if (typeof body.numbersText === 'string') {
     // One contact per line: "phone" or "phone,name"
     for (const line of body.numbersText.split(/\r?\n/)) {
+      if (!line.trim()) continue;
       const [phone, name] = line.split(',');
       if (phone?.trim()) push(phone, name);
     }
   }
   // Dedupe by phone, keep first occurrence.
   const seen = new Set();
-  return out.filter((c) => (seen.has(c.phone) ? false : (seen.add(c.phone), true)));
+  let duplicates = 0;
+  const contacts = out.filter((c) => {
+    if (seen.has(c.phone)) { duplicates++; return false; }
+    seen.add(c.phone);
+    return true;
+  });
+  return { contacts, rejected, duplicates };
 }
 
 // Create a campaign with its contact list (draft — start explicitly).
@@ -57,26 +73,54 @@ router.post('/', validate({ body: campaignCreateBody }), async (req, res) => {
   const b = req.body || {};
   const name = String(b.name || '').trim().slice(0, 120);
   if (!name) return res.status(400).json({ error: 'اسم الحملة مطلوب' });
-  const contacts = parseContacts(b);
-  if (!contacts.length) return res.status(400).json({ error: 'لا توجد أرقام صالحة (الصيغة: ‎+9665xxxxxxxx أو 05xxxxxxxx)' });
+  const { contacts, rejected, duplicates } = parseContacts(b);
+  if (!contacts.length) {
+    return res.status(400).json({
+      error: 'لا توجد أرقام صالحة (الصيغة: ‎+9665xxxxxxxx أو 05xxxxxxxx)',
+      rejectedSample: rejected.slice(0, 10),
+      rejectedCount : rejected.length,
+    });
+  }
   if (contacts.length > MAX_CONTACTS) return res.status(400).json({ error: `الحد الأقصى ${MAX_CONTACTS} رقم لكل حملة` });
 
   const clampInt = (v, lo, hi, dflt) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : dflt);
-  const insert = await sql.insertCampaign.run({
-    company_id     : req.params.id,
-    name,
-    start_hour     : clampInt(b.startHour, 0, 23, 10),
-    end_hour       : clampInt(b.endHour, 0, 23, 21),
-    max_concurrent : clampInt(b.maxConcurrent, 1, 10, 2),
-    max_attempts   : clampInt(b.maxAttempts, 1, 5, 2),
-    retry_delay_min: clampInt(b.retryDelayMin, 5, 24 * 60, 60),
+
+  // Campaign + all contacts in ONE transaction. Previously the contacts were
+  // inserted one-by-one outside any transaction: on Postgres that is a round
+  // trip per row (minutes for a 5k list) and a crash mid-loop left a
+  // half-imported campaign that would start dialling an incomplete list.
+  let campaignId;
+  await withTransaction(async () => {
+    const insert = await sql.insertCampaign.run({
+      company_id     : req.params.id,
+      name,
+      start_hour     : clampInt(b.startHour, 0, 23, 10),
+      end_hour       : clampInt(b.endHour, 0, 23, 21),
+      max_concurrent : clampInt(b.maxConcurrent, 1, 10, 2),
+      max_attempts   : clampInt(b.maxAttempts, 1, 5, 2),
+      retry_delay_min: clampInt(b.retryDelayMin, 5, 24 * 60, 60),
+    });
+    campaignId = Number(insert.lastInsertRowid);
+    for (const c of contacts) {
+      await sql.insertCampaignContact.run({
+        campaign_id: campaignId,
+        company_id : req.params.id,   // denormalized so RLS covers this table
+        phone      : encryptField(c.phone),
+        name       : c.name,
+        variables  : c.variables,
+      });
+    }
   });
-  const campaignId = Number(insert.lastInsertRowid);
-  for (const c of contacts) {
-    await sql.insertCampaignContact.run({ campaign_id: campaignId, phone: c.phone, name: c.name, variables: c.variables });
-  }
-  audit(req, 'campaign.create', `companies/${req.params.id}/campaigns/${campaignId}`, { name, contacts: contacts.length });
-  res.status(201).json({ id: campaignId, name, contacts: contacts.length, status: 'draft' });
+
+  audit(req, 'campaign.create', `companies/${req.params.id}/campaigns/${campaignId}`,
+    { name, contacts: contacts.length, rejected: rejected.length, duplicates });
+  res.status(201).json({
+    id: campaignId, name, contacts: contacts.length, status: 'draft',
+    // Surfaced so the UI can tell the operator exactly what didn't import.
+    rejectedCount : rejected.length,
+    rejectedSample: rejected.slice(0, 10),
+    duplicates,
+  });
 });
 
 // List campaigns with progress stats.
@@ -98,7 +142,9 @@ router.get('/:campaignId', async (req, res) => {
   const stats = {};
   for (const s of await sql.campaignContactStats.all(campaign.id)) stats[s.status] = s.n;
   const contacts = await sql.listCampaignContacts.all(campaign.id, Math.min(500, Number(req.query.limit) || 200));
-  res.json({ ...campaign, stats, contacts });
+  // phone is encrypted at rest when DATA_ENCRYPTION_KEY is set; the UI needs
+  // it readable. Passthrough for plaintext rows written before that.
+  res.json({ ...campaign, stats, contacts: decryptRows(contacts, CONTACT_PII_FIELDS) });
 });
 
 // Start / pause / cancel.

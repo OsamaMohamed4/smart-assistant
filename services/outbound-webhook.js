@@ -6,8 +6,12 @@
 const crypto = require('crypto');
 const axios = require('axios');
 const { logger } = require('../lib/logger');
+const { assertSafeUrl } = require('../lib/ssrf');
 
 const TIMEOUT_MS = 5_000;
+// Never follow redirects: a public URL that 302s to 169.254.169.254 would
+// otherwise walk straight past the SSRF check we just performed.
+const MAX_REDIRECTS = 0;
 
 function buildPayload(companyId, callRow) {
   return JSON.stringify({
@@ -41,10 +45,21 @@ function sendCallCompleted(company, callRow) {
     headers['X-Signature'] = crypto.createHmac('sha256', secret).update(body).digest('hex');
   }
 
-  const post = () => axios.post(url, body, { headers, timeout: TIMEOUT_MS });
+  // Re-check against live DNS on every send. The write-time check can be
+  // defeated by DNS rebinding, and settings may predate that check entirely.
+  const post = async () => {
+    await assertSafeUrl(url);
+    return axios.post(url, body, { headers, timeout: TIMEOUT_MS, maxRedirects: MAX_REDIRECTS });
+  };
   post()
     .then(() => logger.info('outbound webhook delivered', { companyId: company.id, callId: callRow.id }))
     .catch((e1) => {
+      // A blocked URL is a configuration error, not a transient failure —
+      // retrying cannot help and would just repeat the SSRF attempt.
+      if (/^blocked url:/.test(e1.message)) {
+        logger.warn('outbound webhook blocked', { companyId: company.id, callId: callRow.id, err: e1.message });
+        return;
+      }
       setTimeout(() => {
         post()
           .then(() => logger.info('outbound webhook delivered (retry)', { companyId: company.id, callId: callRow.id }))

@@ -208,8 +208,10 @@ const sql = {
      GROUP BY session_id
      ORDER BY last_at DESC
      LIMIT $2`),
-  getSession: stmt(`SELECT * FROM chats WHERE session_id = $1 ORDER BY created_at ASC`),
-  setSessionSummary: stmt(`UPDATE chats SET summary = $1 WHERE session_id = $2`),
+  // Both are company-scoped: session_id alone is a guessable key, so the
+  // tenant is always part of the predicate (belt to the route guard's braces).
+  getSession: stmt(`SELECT * FROM chats WHERE session_id = $1 AND company_id = $2 ORDER BY created_at ASC`),
+  setSessionSummary: stmt(`UPDATE chats SET summary = $1 WHERE session_id = $2 AND company_id = $3`),
 
   // ─── calls ───────────────────────────────────────────────
   upsertCall: stmt(
@@ -354,11 +356,13 @@ const sql = {
   restoreScenario: stmt(`UPDATE scenarios SET deleted_at = NULL WHERE id = $1`),
 
   // ─── scenario versions ───────────────────────────────────
+  // company_id denormalized from the parent scenario so RLS covers version
+  // history too (it mirrors the full prompt text). See lib/migrations-pg.js.
   insertScenarioVersion: stmt(
     `INSERT INTO scenario_versions
-       (scenario_id, name, first_message, first_message_inbound, instruction_prompt, edited_by)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    ['scenario_id', 'name', 'first_message', 'first_message_inbound', 'instruction_prompt', 'edited_by'],
+       (scenario_id, company_id, name, first_message, first_message_inbound, instruction_prompt, edited_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    ['scenario_id', 'company_id', 'name', 'first_message', 'first_message_inbound', 'instruction_prompt', 'edited_by'],
   ),
   listScenarioVersions: stmt(`
     SELECT id, name, edited_by, created_at,
@@ -426,10 +430,13 @@ const sql = {
      WHERE id = $1 AND status IN ('draft','paused')`),
   completeCampaign: stmt(`
     UPDATE campaigns SET status = 'completed', completed_at = ${NOW}, updated_at = ${NOW} WHERE id = $1`),
+  // company_id is denormalized from the parent campaign so RLS can police this
+  // table directly (it holds customer phone numbers). Written on insert, and
+  // backfilled for pre-existing rows by lib/migrations-pg.js.
   insertCampaignContact: stmt(
-    `INSERT INTO campaign_contacts (campaign_id, phone, name, variables)
-     VALUES ($1, $2, $3, $4) RETURNING id`,
-    ['campaign_id', 'phone', 'name', 'variables'],
+    `INSERT INTO campaign_contacts (campaign_id, company_id, phone, name, variables)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    ['campaign_id', 'company_id', 'phone', 'name', 'variables'],
   ),
   listCampaignContacts: stmt(`SELECT * FROM campaign_contacts WHERE campaign_id = $1 ORDER BY id ASC LIMIT $2`),
   campaignContactStats: stmt(`
@@ -570,6 +577,12 @@ async function initDb() {
   await q(DDL);
   await q(`CREATE INDEX IF NOT EXISTS idx_kbchunks_embedding
            ON kb_chunks USING hnsw (embedding vector_cosine_ops)`);
+  // Structural changes the IF NOT EXISTS DDL above cannot apply to an
+  // existing database: denormalized company_id columns and the foreign keys
+  // that were missing entirely on Postgres (audit F-03/F-05). Idempotent and
+  // non-fatal — see lib/migrations-pg.js.
+  const { runPgMigrations } = require('./lib/migrations-pg');
+  await runPgMigrations(q);
 }
 
 module.exports = {

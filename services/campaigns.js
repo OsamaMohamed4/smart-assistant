@@ -15,6 +15,7 @@ const { sql } = require('../db');
 const { logger } = require('../lib/logger');
 const { loadCompany } = require('../companies');
 const { dailyCap, checkAndBumpUsage } = require('./usage');
+const { encryptField, decryptField } = require('../lib/pii');
 
 const VAPI_TIMEOUT_MS = 20_000;
 const STALE_CALLING_MIN = 30;
@@ -45,6 +46,15 @@ async function placeCall(company, campaign, contact) {
   try { vars = contact.variables ? JSON.parse(contact.variables) : {}; } catch {}
   if (contact.name && !vars.customer_name) vars.customer_name = contact.name;
 
+  // The stored phone may be ciphertext (DATA_ENCRYPTION_KEY set). Vapi needs
+  // the real E.164 number, so decrypt at the last possible moment. Guard the
+  // result: dialling a ciphertext string would fail the call and, worse, log
+  // it — so refuse loudly instead.
+  const dialNumber = decryptField(contact.phone);
+  if (!/^\+[1-9]\d{7,14}$/.test(String(dialNumber || ''))) {
+    throw new Error('contact phone is unreadable (decryption failed or malformed)');
+  }
+
   const overrides = { variableValues: vars, firstMessageMode: 'assistant-speaks-first' };
   const activeScenario = await sql.getActiveScenarioForCompany.get(company.id);
   if (activeScenario?.first_message) overrides.firstMessage = activeScenario.first_message;
@@ -54,7 +64,7 @@ async function placeCall(company, campaign, contact) {
     {
       assistantId       : company.assistantId,
       phoneNumberId     : company.settings?.outboundPhoneNumberId || process.env.VAPI_PHONE_NUMBER_ID,
-      customer          : { number: contact.phone },
+      customer          : { number: dialNumber },
       assistantOverrides: overrides,
     },
     { headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' }, timeout: VAPI_TIMEOUT_MS },
@@ -122,7 +132,11 @@ async function tickCampaign(campaign) {
       const callId = await placeCall(company, campaign, contact);
       await sql.setContactCallId.run({ id: contact.id, call_id: callId });
       await sql.insertOutboundCallStub.run({
-        id: callId, company_id: company.id, assistant_id: company.assistantId, caller_number: contact.phone,
+        id: callId, company_id: company.id, assistant_id: company.assistantId,
+        // contact.phone is ALREADY in storage form (ciphertext when the key is
+        // set, plaintext otherwise) — passing it through keeps calls.caller_number
+        // consistent without re-encrypting an already-encrypted value.
+        caller_number: contact.phone,
       });
       placed++;
     } catch (e) {

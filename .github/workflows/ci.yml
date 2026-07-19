@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -19,6 +19,16 @@ jobs:
         ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      # Required by the BullMQ durable-queue suite. Without it that suite is
+      # skipped silently, which is how a broken queue reaches production.
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -45,6 +55,52 @@ jobs:
 
       - name: Build admin UI
         run: npm run build
+
+      # ── Driver-independent proof suites ──────────────────────────
+      # These were the gap: 66+ assertions — including the entire tenant
+      # isolation proof — previously ran only when someone remembered to run
+      # them locally, so an RLS or authorization regression could merge silently.
+
+      - name: Request validation (Zod schemas)
+        run: node --test scripts/test-validation.js
+
+      - name: Secret enforcement (fail-fast boot)
+        run: node --test scripts/test-secrets.js
+
+      - name: Authorization + hardening (F-01/F-06/F-10/F-11/F-12/F-14)
+        run: node --test scripts/test-authz.js
+
+      - name: PDPL — encryption, redaction, retention
+        run: node --test scripts/test-pii.js
+
+      - name: PDPL — crypto primitives
+        run: node --test scripts/test-pdpl.js
+
+      - name: Durable queue (BullMQ + Redis)
+        env:
+          REDIS_URL: redis://localhost:6379
+        run: node --test scripts/test-queue.js
+
+      # ── Postgres-backed suites ───────────────────────────────────
+
+      - name: Schema migrations — foreign keys, cascades, backfill
+        env:
+          DB_DRIVER: postgres
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/smartassistant
+        run: node --test scripts/test-migrations-pg.js
+
+      - name: RLS — tenant isolation policies
+        env:
+          DB_DRIVER: postgres
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/smartassistant
+        run: node --test scripts/test-rls.js
+
+      - name: RLS — request-context adoption + system bypass
+        env:
+          ADMIN_DATABASE_URL: postgres://postgres:ci@localhost:5432/smartassistant
+        run: node --test scripts/test-rls-adoption.js
+
+      # ── End-to-end smoke, both drivers ───────────────────────────
 
       - name: Smoke test — sqlite driver
         run: npm run test:smoke

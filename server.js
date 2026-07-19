@@ -14,7 +14,7 @@ const { db, sql, get: dataGet, all: dataAll, run: dataRun, withTransaction, init
 const NOW_SQL = isPg ? `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')` : `datetime('now')`;
 const { loadCompany, listCompaniesFull, invalidateCache, buildSystemPromptWithRAG, fillGlobals } = require('./companies');
 const { summarize, chatToTranscript } = require('./summarize');
-const { ingestDocument, retrieve, repairMojibake } = require('./lib/rag');
+const { ingestDocument, retrieve, repairMojibake, invalidateChunkCache } = require('./lib/rag');
 const { END_CALL_TOOL_RULE } = require('./lib/master-prompt');
 const { lintScenario } = require('./lib/scenario-lint');
 const { TEMPLATES: SCENARIO_TEMPLATES } = require('./lib/scenario-templates');
@@ -24,6 +24,8 @@ const metrics = require('./lib/metrics');
 const { enforceSecretsAtBoot } = require('./lib/secrets');
 const { shutdown: queueShutdown } = require('./lib/queue');
 const { runWithContext } = require('./lib/tenant-context');
+const { isSafeUrl } = require('./lib/ssrf');
+const { encryptField, decryptField, decryptRow, decryptRows, CALL_PII_FIELDS } = require('./lib/pii');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
 const { router: webhookRoutes, getRecentWebhookAttempts } = require('./routes/webhook');
@@ -31,6 +33,7 @@ const campaignsRoutes = require('./routes/campaigns');
 const evalsRoutes = require('./routes/evals');
 const { upsertVapiCall, startDrainTimer } = require('./services/call-events');
 const { startCampaignWorker } = require('./services/campaigns');
+const { startRetentionWorker } = require('./services/retention');
 const { dailyCap, checkAndBumpUsage } = require('./services/usage');
 const { audit } = require('./lib/audit');
 const { requireAuth, requireCompanyAccess, requireCompanyAdmin, canChatWithCompany, startSessionCleanup } = require('./lib/auth');
@@ -78,7 +81,6 @@ const uploadAudio = multer({
 // streaming fast but the connection establishment may stall; Vapi sync is
 // occasional and slow.
 const OPENAI_TIMEOUT_MS = 25_000;
-const TTS_TIMEOUT_MS    = 15_000;
 const VAPI_TIMEOUT_MS   = 20_000;
 
 // Numeric env override with a safe fallback — used by the latency-tuning knobs
@@ -456,7 +458,6 @@ const COMPANY_ID_RE  = /^[a-z0-9-]{1,40}$/;
 const MAX_HISTORY    = 20;        // max messages forwarded to the LLM per turn
 const MAX_MSG_CHARS  = 2000;      // per-message cap
 const MAX_USER_MSG_CHARS = 4000;  // per-user-turn cap
-const TTS_DAILY_CAP_CHARS = 60000;       // ~60k chars/day = a few hours of voice
 
 async function resolveCompany(req, res) {
   const companyId = String(req.body?.companyId || '');
@@ -508,8 +509,10 @@ async function askGPT(company, message, history, vars) {
     { role: 'user', content: message },
   ];
   const t0 = Date.now();
+  // Same model the live voice agent runs on — see resolveAgentModel().
+  const m = resolveAgentModel(company);
   const completion = await openai.chat.completions.create({
-    model: 'gpt-4o-mini', messages, max_tokens: 300, temperature: 0.7,
+    model: m.model, messages, max_tokens: m.maxTokens, temperature: m.temperature,
   });
   return { reply: completion.choices[0].message.content, ms: Date.now() - t0, usage: completion.usage };
 }
@@ -523,6 +526,30 @@ const KB_INJECT_CAP = 15000; // chars — headroom for a few docs of real conten
 // phone numbers). Kept first when the KB overflows the cap so key info isn't
 // the part that gets truncated.
 const KB_PRIORITY_RE = /[0-9٠-٩]|ريال|سعر|أسعار|السعر|ضمان|هاتف|جوال|رقم|مساحة|متر|نسبة|بالمئة|٪|%/;
+
+// ─── Single source of truth for the agent's model settings ───────
+// Every path that SIMULATES the live agent (voice sync, draft tester, text
+// chat) must resolve the model the same way, or an operator tunes wording
+// against behaviour that will never ship. Previously the draft tester ran
+// gpt-4o-mini@0.6 and /chat ran gpt-4o-mini@0.7 while production voice ran
+// gpt-4.1@0.3 — same prompt, three different models.
+//
+// Deliberately NOT routed through here (they are meta-tasks, not the agent):
+//   - scenario generation  (writes a scenario; gpt-4o-mini is sufficient)
+//   - eval judge           (services/evals.js — grading must stay independent
+//                           of the model under test, or it grades itself)
+//   - transcript summarize (summarize.js — post-call batch work)
+const ALLOWED_MODELS = ['gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4o-mini'];
+const clampNum = (v, lo, hi, dflt) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt);
+
+function resolveAgentModel(company) {
+  const s = company?.settings || {};
+  return {
+    model      : ALLOWED_MODELS.includes(s.model) ? s.model : 'gpt-4.1',
+    temperature: clampNum(s.temperature, 0, 1, 0.3),
+    maxTokens  : clampNum(s.maxTokens, 50, 800, 400),
+  };
+}
 async function composeSystemPrompt(company, instructionPrompt) {
   let systemContent = fillGlobals(instructionPrompt || '', company);
   const chunks = await sql.listAllChunksForCompany.all(company.id);
@@ -572,21 +599,6 @@ async function upsertVapiAssistant(cfg, existingId, vapiOpts, log) {
   if (id) await axios.patch(`https://api.vapi.ai/assistant/${id}`, cfg, vapiOpts);
   else { const r = await axios.post('https://api.vapi.ai/assistant', cfg, vapiOpts); id = r.data.id; }
   return id;
-}
-
-function ttsStream(text, voiceId) {
-  return axios.post(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
-    {
-      text, model_id: 'eleven_flash_v2_5', output_format: 'mp3_44100_64',
-      voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-    },
-    {
-      headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' },
-      responseType: 'stream',
-      timeout: TTS_TIMEOUT_MS,
-    }
-  );
 }
 
 function getOrMakeSessionId(req) {
@@ -696,6 +708,19 @@ const PLAYGROUND_VOICES = [
 ];
 const PLAYGROUND_VOICE_IDS = new Set(PLAYGROUND_VOICES.map((v) => v.id));
 
+// Voices a company may select in settings. The Playground catalog plus any
+// ids added via EXTRA_VOICE_IDS (comma-separated) so a new ElevenLabs voice
+// can be enabled from Railway without a code change.
+const EXTRA_VOICE_IDS = new Set(
+  String(process.env.EXTRA_VOICE_IDS || '')
+    .split(',').map((s) => s.trim()).filter(Boolean),
+);
+function isAllowedVoiceId(id) {
+  const v = String(id || '').trim();
+  if (!v) return false;
+  return PLAYGROUND_VOICE_IDS.has(v) || EXTRA_VOICE_IDS.has(v);
+}
+
 app.get('/api/voices', requireAuth, async (_req, res) => {
   res.json(PLAYGROUND_VOICES);
 });
@@ -770,7 +795,7 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
         id            : r.data.id,
         company_id    : c.id,
         assistant_id  : c.assistantId,
-        caller_number : phoneNumber,
+        caller_number : encryptField(phoneNumber),
       });
     } catch (e) {
       req.log.error('outbound-call stub insert failed', { err: e.message });
@@ -859,6 +884,8 @@ app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, 
 app.use('/webhook', webhookRoutes);
 startDrainTimer();
 startCampaignWorker();
+// PDPL retention. No-op unless RETENTION_DAYS_* is configured (audit F-04a).
+startRetentionWorker();
 
 // ─── Admin: backfill recent calls from Vapi ──────────────────────
 // Superadmin-only. Pulls the most recent calls straight from Vapi's REST
@@ -995,10 +1022,35 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, validate({ params
   if (!row) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
   const clean = {};
-  if (typeof b.voiceId === 'string')          clean.voiceId = b.voiceId.slice(0, 60);
-  if (['gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4o-mini'].includes(b.model)) clean.model = b.model;
-  for (const k of ['temperature', 'maxTokens', 'stability', 'similarityBoost', 'optimizeStreamingLatency', 'voiceSpeed', 'dailyMessageCap', 'dailyOutboundCap']) {
+  // Voice must be one we actually have on the ElevenLabs account. An
+  // unvalidated id is accepted here but only fails much later, at Vapi sync,
+  // as "Couldn't Find 11labs Voice" — which is exactly the production
+  // incident this guards against. EXTRA_VOICE_IDS lets an operator add a new
+  // voice without a deploy.
+  if (typeof b.voiceId === 'string') {
+    const v = b.voiceId.trim();
+    if (!isAllowedVoiceId(v)) {
+      return res.status(400).json({ error: 'معرّف الصوت غير معروف. اختر صوتاً من القائمة المتاحة.', voiceId: v });
+    }
+    clean.voiceId = v;
+  }
+  if (ALLOWED_MODELS.includes(b.model)) clean.model = b.model;
+  for (const k of ['temperature', 'maxTokens', 'stability', 'similarityBoost', 'optimizeStreamingLatency', 'voiceSpeed']) {
     if (b[k] !== undefined && Number.isFinite(Number(b[k]))) clean[k] = Number(b[k]);
+  }
+  // Spending caps are the platform's cost circuit-breaker (services/usage.js
+  // reads settings BEFORE the env default), so the tenant they limit must not
+  // be able to raise them. Superadmin-only; a client sending these gets 403
+  // rather than a silent drop, so a broken integration is visible.
+  const CAP_KEYS = ['dailyMessageCap', 'dailyOutboundCap'];
+  const attemptedCaps = CAP_KEYS.filter((k) => b[k] !== undefined);
+  if (attemptedCaps.length) {
+    if (req.user.role !== 'superadmin') {
+      return res.status(403).json({ error: 'تعديل الحدود اليومية متاح للمسؤول فقط', keys: attemptedCaps });
+    }
+    for (const k of attemptedCaps) {
+      if (Number.isFinite(Number(b[k]))) clean[k] = Number(b[k]);
+    }
   }
   // Per-company Vapi phone-number IDs (outbound is used to place calls;
   // inbound is stored for reference — inbound routing is bound in Vapi).
@@ -1011,11 +1063,20 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, validate({ params
     if (t === '' || /^\+[0-9]{8,15}$/.test(t)) clean.transferPhoneNumber = t;
     else return res.status(400).json({ error: 'رقم التحويل يجب أن يكون بصيغة دولية مثل +9665xxxxxxxx' });
   }
-  // Outgoing webhook (call.completed). Empty string clears.
+  // Outgoing webhook (call.completed). Empty string clears. The URL is
+  // SSRF-checked here so the operator gets an immediate reason; it is checked
+  // AGAIN at send time against live DNS (services/outbound-webhook.js).
   if (typeof b.webhookUrl === 'string') {
     const u = b.webhookUrl.trim();
-    if (u === '' || /^https?:\/\/.{4,300}$/i.test(u)) clean.webhookUrl = u.slice(0, 300);
-    else return res.status(400).json({ error: 'رابط الـ webhook غير صالح' });
+    if (u === '') {
+      clean.webhookUrl = '';
+    } else if (u.length > 300) {
+      return res.status(400).json({ error: 'رابط الـ webhook طويل جداً' });
+    } else {
+      const safe = isSafeUrl(u);
+      if (!safe.ok) return res.status(400).json({ error: `رابط الـ webhook غير صالح: ${safe.reason}` });
+      clean.webhookUrl = u;
+    }
   }
   if (typeof b.webhookSecret === 'string') clean.webhookSecret = b.webhookSecret.trim().slice(0, 128);
   // Merge over the existing settings: a partial PATCH (one key) must not
@@ -1115,40 +1176,53 @@ app.get('/api/companies/:id/sessions', requireCompanyAccess, async (req, res) =>
 });
 
 // Verify the session belongs to a company the user can access.
+// Authorization mirrors requireCompanyAccess EXACTLY: superadmins see
+// everything, a client sees only the company on their own user row.
+// (This used to test `companies.user_id = req.user.id` — the legacy "owner"
+// model. Client users are linked the other way, via users.company_id, so that
+// check could never pass and every client got a 404 on conversation details.)
+function userCanAccessCompany(user, companyId) {
+  if (!user || !companyId) return false;
+  if (user.role === 'superadmin') return true;
+  return user.role === 'client' && !!user.companyId && user.companyId === companyId;
+}
+
 async function ensureSessionOwned(req, res, next) {
   const row = await dataGet('SELECT DISTINCT company_id FROM chats WHERE session_id = ?', [req.params.sessionId]);
   if (!row) return res.status(404).json({ error: 'session not found' });
-  if (req.user.role === 'superadmin') return next();
-  const owns = await dataGet('SELECT 1 AS one FROM companies WHERE id = ? AND user_id = ?', [row.company_id, req.user.id]);
-  if (!owns) return res.status(404).json({ error: 'session not found' });
+  if (!userCanAccessCompany(req.user, row.company_id)) {
+    return res.status(404).json({ error: 'session not found' });
+  }
+  req._sessionCompanyId = row.company_id;   // scopes the follow-up queries
   next();
 }
 
 app.get('/api/sessions/:sessionId', ensureSessionOwned, async (req, res) => {
-  res.json(await sql.getSession.all(req.params.sessionId));
+  res.json(await sql.getSession.all(req.params.sessionId, req._sessionCompanyId));
 });
 
 app.post('/api/sessions/:sessionId/summarize', ensureSessionOwned, async (req, res) => {
-  const rows = await sql.getSession.all(req.params.sessionId);
+  const rows = await sql.getSession.all(req.params.sessionId, req._sessionCompanyId);
   if (!rows.length) return res.status(404).json({ error: 'session not found' });
   const transcript = chatToTranscript(rows);
   const summary = await summarize(transcript);
-  if (summary) await sql.setSessionSummary.run(summary, req.params.sessionId);
+  if (summary) await sql.setSessionSummary.run(summary, req.params.sessionId, req._sessionCompanyId);
   res.json({ summary });
 });
 
 app.get('/api/companies/:id/calls', requireCompanyAccess, async (req, res) => {
-  res.json(await sql.listCallsForCompany.all(req.params.id, Number(req.query.limit) || 50));
+  const rows = await sql.listCallsForCompany.all(req.params.id, Number(req.query.limit) || 50);
+  res.json(decryptRows(rows, CALL_PII_FIELDS));
 });
 
-// Verify the call belongs to a company the user can access.
+// Verify the call belongs to a company the user can access. Same authorization
+// rule as ensureSessionOwned / requireCompanyAccess — see the note above.
 async function ensureCallOwned(req, res, next) {
   const c = await sql.getCall.get(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
-  if (req.user.role === 'superadmin') { req._call = c; return next(); }
-  if (!c.company_id) return res.status(404).json({ error: 'not found' });
-  const owns = await dataGet('SELECT 1 AS one FROM companies WHERE id = ? AND user_id = ?', [c.company_id, req.user.id]);
-  if (!owns) return res.status(404).json({ error: 'not found' });
+  if (!userCanAccessCompany(req.user, c.company_id)) {
+    return res.status(404).json({ error: 'not found' });
+  }
   req._call = c;
   next();
 }
@@ -1196,7 +1270,7 @@ app.get('/api/calls/:id', ensureCallOwned, async (req, res) => {
       req.log.warn('vapi call refresh failed', { err: e.message, callId: call.id });
     }
   }
-  res.json(call);
+  res.json(decryptRow(call, CALL_PII_FIELDS));
 });
 
 app.post('/api/calls/:id/summarize', ensureCallOwned, async (req, res) => {
@@ -1249,12 +1323,9 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   // Quality-first defaults (real-estate call center): full gpt-4.1 is far more
   // faithful to the KB and hallucinates less in Arabic than the mini models.
   // Legacy mini selections are honored if a company explicitly picked one.
-  const ALLOWED_MODELS = ['gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4o-mini'];
-  const model         = ALLOWED_MODELS.includes(s.model) ? s.model : 'gpt-4.1';
-  // Lower temperature → sticks to facts, invents fewer details. 0.3 default.
-  const temperature   = clamp(s.temperature, 0, 1, 0.3);
-  // Roomier cap so property explanations aren't cut off mid-sentence.
-  const maxTokens     = clamp(s.maxTokens, 50, 800, 400);
+  // Resolved by the SAME helper the draft tester and text chat use, so all
+  // three channels are guaranteed to agree.
+  const { model, temperature, maxTokens } = resolveAgentModel(c);
   const stability     = clamp(s.stability, 0, 1, 0.8);
   const similarity    = clamp(s.similarityBoost, 0, 1, 0.8);
   const streamLatency = clamp(s.optimizeStreamingLatency, 0, 4, 3);
@@ -1564,6 +1635,7 @@ app.delete('/api/companies/:id/documents/:docId', requireCompanyAccess, async (r
     await sql.deleteDocument.run(req.params.docId);
     await sql.purgeDocumentChunks.run(req.params.docId);
   });
+  invalidateChunkCache(req.params.id);   // deleted chunks must leave the keyword leg
   audit(req, 'document.delete', `companies/${req.params.id}/documents/${req.params.docId}`, { filename: doc.filename });
   res.json({ deleted: 1 });
 });
@@ -1818,7 +1890,7 @@ app.get('/api/conversations', async (req, res) => {
       direction   : c.direction || 'inbound',
       timestamp   : c.ts,
       user        : null,
-      phoneNumber : c.caller_number || null,
+      phoneNumber : decryptField(c.caller_number) || null,
       companyId   : c.company_id,
       companyName : companyMap.get(c.company_id) || c.company_id,
       scenario    : companyMap.get(c.company_id) || c.company_id,
@@ -1871,7 +1943,8 @@ app.get('/api/conversations', async (req, res) => {
 // this is the cheapest possible CRM bridge.
 app.get('/api/companies/:id/calls.csv', requireCompanyAccess, async (req, res) => {
   const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit, 10) || 1000));
-  const rows = await sql.listCallsForCompany.all(req.params.id, limit);
+  // Sales teams need real numbers to call back, so the export decrypts.
+  const rows = decryptRows(await sql.listCallsForCompany.all(req.params.id, limit), CALL_PII_FIELDS);
   const esc = (v) => {
     const s = v === null || v === undefined ? '' : String(v);
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -2073,6 +2146,7 @@ app.patch('/api/scenarios/:id', requireAuth, async (req, res) => {
     try {
       await sql.insertScenarioVersion.run({
         scenario_id           : existing.id,
+        company_id            : existing.company_id,   // denormalized for RLS
         name                  : existing.name,
         first_message         : existing.first_message,
         first_message_inbound : existing.first_message_inbound || '',
@@ -2149,6 +2223,7 @@ app.post('/api/scenarios/:id/rollback/:versionId', requireAuth, async (req, res)
   try {
     await sql.insertScenarioVersion.run({
       scenario_id           : existing.id,
+      company_id            : existing.company_id,     // denormalized for RLS
       name                  : existing.name,
       first_message         : existing.first_message,
       first_message_inbound : existing.first_message_inbound || '',
@@ -2211,11 +2286,14 @@ app.post('/api/companies/:id/scenarios/test-draft', chatLimiter, requireCompanyA
   const systemContent = await composeSystemPrompt(c, draft);
   try {
     const t0 = Date.now();
+    // The whole point of the draft tester is to preview what will ship, so it
+    // must run the company's OWN model/temperature — not a cheaper stand-in.
+    const m = resolveAgentModel(c);
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini', temperature: 0.6, max_tokens: 250,
+      model: m.model, temperature: m.temperature, max_tokens: m.maxTokens,
       messages: [{ role: 'system', content: systemContent }, ...history, { role: 'user', content: message }],
     });
-    res.json({ reply: completion.choices[0].message.content, ms: Date.now() - t0 });
+    res.json({ reply: completion.choices[0].message.content, ms: Date.now() - t0, model: m.model });
   } catch (e) {
     req.log.error('test-draft error', { err: e.message, companyId: c.id });
     res.status(502).json({ error: 'تعذّر تشغيل الاختبار. حاول مرة ثانية.' });

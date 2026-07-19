@@ -13,7 +13,9 @@
     "build:ui": "vite build",
     "build": "vite build",
     "test:apis": "node --use-system-ca test-apis.js",
-    "test:smoke": "node scripts/smoke-test.js"
+    "test:smoke": "node scripts/smoke-test.js",
+    "test:unit": "node --test scripts/test-validation.js scripts/test-secrets.js scripts/test-authz.js scripts/test-pii.js scripts/test-pdpl.js",
+    "test:pg": "node --test scripts/test-migrations-pg.js scripts/test-rls.js"
   },
   "keywords": [],
   "author": "",
@@ -22,7 +24,6 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1085.0",
     "@sentry/node": "^10.65.0",
-    "@vapi-ai/web": "^2.5.2",
     "@vitejs/plugin-react": "^6.0.2",
     "autoprefixer": "^10.5.0",
     "axios": "^1.16.1",

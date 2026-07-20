@@ -414,10 +414,23 @@ const sql = {
 
   // ─── Campaigns (outbound dialer) ─────────────────────────
   insertCampaign: stmt(
-    `INSERT INTO campaigns (company_id, name, status, start_hour, end_hour, max_concurrent, max_attempts, retry_delay_min)
-     VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7) RETURNING id`,
-    ['company_id', 'name', 'start_hour', 'end_hour', 'max_concurrent', 'max_attempts', 'retry_delay_min'],
+    `INSERT INTO campaigns (company_id, name, status, start_hour, end_hour, max_concurrent, max_attempts, retry_delay_min, created_by)
+     VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8) RETURNING id`,
+    ['company_id', 'name', 'start_hour', 'end_hour', 'max_concurrent', 'max_attempts', 'retry_delay_min', 'created_by'],
   ),
+  // Campaign report: one round trip joining every contact to its call row.
+  // LEFT JOIN because a contact may not have been dialled yet, or the
+  // end-of-call webhook may not have landed. All report fields come from
+  // here — no second query, no AI pass.
+  campaignReportRows: stmt(`
+    SELECT cc.id, cc.phone, cc.name, cc.status, cc.attempts, cc.last_attempt_at,
+           cc.call_id, cc.last_error, cc.created_at,
+           c.duration_sec, c.started_at AS call_started_at, c.ended_at AS call_ended_at,
+           c.ended_reason, c.summary, c.structured_data, c.recording_url
+      FROM campaign_contacts cc
+      LEFT JOIN calls c ON c.id = cc.call_id
+     WHERE cc.campaign_id = $1
+     ORDER BY cc.id ASC`),
   getCampaign: stmt(`SELECT * FROM campaigns WHERE id = $1`),
   listCampaignsForCompany: stmt(`SELECT * FROM campaigns WHERE company_id = $1 ORDER BY created_at DESC`),
   listRunningCampaigns: stmt(`SELECT * FROM campaigns WHERE status = 'running'`),

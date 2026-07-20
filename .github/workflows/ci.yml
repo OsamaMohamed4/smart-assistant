@@ -76,6 +76,9 @@ jobs:
       - name: PDPL — crypto primitives
         run: node --test scripts/test-pdpl.js
 
+      - name: Campaign reporting — lead scoring, filters, CSV
+        run: node --test scripts/test-campaign-report.js
+
       - name: Durable queue (BullMQ + Redis)
         env:
           REDIS_URL: redis://localhost:6379

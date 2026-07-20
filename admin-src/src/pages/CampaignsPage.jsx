@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { PhoneOutgoing, Plus, Play, Pause, XCircle, RefreshCw, Users, ChevronLeft } from 'lucide-react';
+import { PhoneOutgoing, Plus, Play, Pause, XCircle, RefreshCw, Users, ChevronLeft, BarChart3 } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -9,6 +9,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { useToast } from '../components/ui/Toast';
 import { api } from '../lib/api';
 import { relTime } from '../lib/utils';
+import { CampaignReportPage } from './CampaignReportPage';
 
 const STATUS_META = {
   draft    : { label: 'مسودة',    tone: 'neutral' },
@@ -33,6 +34,7 @@ export function CampaignsPage({ pinnedCompanyId }) {
   const [campaigns, setCampaigns] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [detailOf, setDetailOf] = useState(null);
+  const [reportOf, setReportOf] = useState(null);
   const [cancelOf, setCancelOf] = useState(null);
 
   useEffect(() => {
@@ -64,6 +66,19 @@ export function CampaignsPage({ pinnedCompanyId }) {
 
   const total = (c) => Object.values(c.stats || {}).reduce((s, n) => s + n, 0);
   const done  = (c) => (c.stats?.completed || 0) + (c.stats?.no_answer || 0) + (c.stats?.failed || 0) + (c.stats?.cancelled || 0);
+
+  // The report is a full page rather than a modal — cards, filters and a wide
+  // table don't fit a dialog on a phone. Placed AFTER every hook above so the
+  // hook order stays identical on each render.
+  if (reportOf) {
+    return (
+      <CampaignReportPage
+        companyId={companyId}
+        campaign={reportOf}
+        onBack={() => { setReportOf(null); load(); }}
+      />
+    );
+  }
 
   return (
     <div>
@@ -130,7 +145,10 @@ export function CampaignsPage({ pinnedCompanyId }) {
                       </Button>
                     )}
                     <Button variant="ghost" size="sm" onClick={() => setDetailOf(c)} className="gap-1">
-                      التفاصيل <ChevronLeft className="w-3 h-3" />
+                      التفاصيل
+                    </Button>
+                    <Button variant="secondary" size="sm" onClick={() => setReportOf(c)} className="gap-1">
+                      <BarChart3 className="w-3 h-3" /> التقرير <ChevronLeft className="w-3 h-3" />
                     </Button>
                   </div>
                 </div>

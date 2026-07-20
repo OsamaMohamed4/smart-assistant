@@ -1383,8 +1383,26 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
             callback_requested  : { type: 'boolean', description: 'هل طلب العميل التواصل معه لاحقاً' },
             appointment_requested: { type: 'boolean', description: 'هل طلب العميل موعد معاينة أو زيارة' },
             notes               : { type: 'string', description: 'ملاحظة مهمة واحدة للمبيعات إن وجدت' },
+            // Added for the campaign report. Vapi's analysis model fills these
+            // from the transcript it already has, so they cost no extra call
+            // and no caller-facing latency. Calls made BEFORE this sync simply
+            // lack them — lib/lead-scoring composes equivalents from the
+            // fields above, which is why the report works on historical data.
+            customer_intent     : { type: 'string', description: 'ماذا يريد العميل بالضبط في جملة واحدة قصيرة' },
+            next_action         : { type: 'string', description: 'الإجراء التالي المقترح لفريق المبيعات في جملة واحدة' },
           },
         },
+      },
+      // Summaries were coming back in ENGLISH for Arabic calls (Vapi's default
+      // prompt), which makes the report unreadable for a Saudi sales team.
+      // This is analysis configuration, not agent instructions — it does not
+      // touch the operator's scenario text.
+      summaryPlan: {
+        enabled: true,
+        messages: [
+          { role: 'system', content: 'أنت محلل مكالمات. لخّص المكالمة بالعربية في جملتين إلى ثلاث جمل كحد أقصى. اذكر ما طلبه العميل ونتيجة المكالمة فقط. لا تخترع معلومات غير موجودة في النص.' },
+          { role: 'user', content: 'نص المكالمة:\n\n{{transcript}}' },
+        ],
       },
     },
     // Inbound default: the assistant-level firstMessage is what an unknown

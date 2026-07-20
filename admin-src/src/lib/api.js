@@ -86,6 +86,20 @@ export const api = {
   startCampaign     : (id, campaignId) => request(`/api/companies/${id}/campaigns/${campaignId}/start`, { method: 'POST', body: '{}' }),
   pauseCampaign     : (id, campaignId) => request(`/api/companies/${id}/campaigns/${campaignId}/pause`, { method: 'POST', body: '{}' }),
   cancelCampaign    : (id, campaignId) => request(`/api/companies/${id}/campaigns/${campaignId}/cancel`, { method: 'POST', body: '{}' }),
+  // Campaign report. `filters` mirrors the server's query params exactly, so
+  // the CSV export below returns the same rows the table is showing.
+  campaignReport    : (id, campaignId, filters = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(filters).filter(([, v]) => v !== '' && v !== null && v !== undefined && v !== 'all'),
+    ).toString();
+    return request(`/api/companies/${id}/campaigns/${campaignId}/report${qs ? `?${qs}` : ''}`);
+  },
+  campaignReportCsvUrl: (id, campaignId, filters = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(filters).filter(([, v]) => v !== '' && v !== null && v !== undefined && v !== 'all'),
+    ).toString();
+    return `/api/companies/${id}/campaigns/${campaignId}/report.csv${qs ? `?${qs}` : ''}`;
+  },
 
   // Evals (golden questions + runs)
   listEvalQuestions : (id) => request(`/api/companies/${id}/evals/questions`),

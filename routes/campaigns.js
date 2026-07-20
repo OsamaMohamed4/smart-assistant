@@ -8,6 +8,7 @@ const { requireCompanyAccess } = require('../lib/auth');
 const { audit } = require('../lib/audit');
 const { validate } = require('../lib/validate');
 const { campaignCreateBody } = require('../lib/schemas');
+const { buildReport, applyFilters, toCsv } = require('../services/campaign-report');
 
 const router = express.Router({ mergeParams: true });
 router.use(requireCompanyAccess);
@@ -99,6 +100,9 @@ router.post('/', validate({ body: campaignCreateBody }), async (req, res) => {
       max_concurrent : clampInt(b.maxConcurrent, 1, 10, 2),
       max_attempts   : clampInt(b.maxAttempts, 1, 5, 2),
       retry_delay_min: clampInt(b.retryDelayMin, 5, 24 * 60, 60),
+      // Report shows an owner. Email rather than user id so the report stays
+      // readable if the account is later removed.
+      created_by     : req.user?.email || null,
     });
     campaignId = Number(insert.lastInsertRowid);
     for (const c of contacts) {
@@ -145,6 +149,55 @@ router.get('/:campaignId', async (req, res) => {
   // phone is encrypted at rest when DATA_ENCRYPTION_KEY is set; the UI needs
   // it readable. Passthrough for plaintext rows written before that.
   res.json({ ...campaign, stats, contacts: decryptRows(contacts, CONTACT_PII_FIELDS) });
+});
+
+// ─── Campaign report ──────────────────────────────────────────────
+// Every field is read from data that already exists (campaign_contacts joined
+// to calls, plus Vapi's structured_data) and derived deterministically. No
+// LLM runs here — see lib/lead-scoring.js for why.
+router.get('/:campaignId/report', async (req, res) => {
+  const campaign = await loadOwnedCampaign(req, res);
+  if (!campaign) return;
+
+  const { rows, summary } = await buildReport(campaign);
+  const filtered = applyFilters(rows, req.query);
+
+  res.json({
+    campaign: {
+      id          : campaign.id,
+      name        : campaign.name,
+      status      : campaign.status,
+      createdBy   : campaign.created_by || null,
+      createdAt   : campaign.created_at || null,
+      startedAt   : campaign.started_at || null,
+      completedAt : campaign.completed_at || null,
+      startHour   : campaign.start_hour,
+      endHour     : campaign.end_hour,
+      maxAttempts : campaign.max_attempts,
+    },
+    // Rollup is over ALL rows so the cards describe the campaign, not the
+    // current filter; `filteredCount` tells the UI what the table is showing.
+    summary,
+    filteredCount: filtered.length,
+    rows: filtered,
+  });
+});
+
+// CSV export. Honours the same query filters as the report above, so what you
+// see is what you export.
+router.get('/:campaignId/report.csv', async (req, res) => {
+  const campaign = await loadOwnedCampaign(req, res);
+  if (!campaign) return;
+
+  const { rows } = await buildReport(campaign);
+  const filtered = applyFilters(rows, req.query);
+  const stamp = new Date().toISOString().slice(0, 10);
+  const safeName = String(campaign.name || 'campaign').replace(/[^\w؀-ۿ-]+/g, '_').slice(0, 40);
+
+  audit(req, 'campaign.export_csv', `campaigns/${campaign.id}`, { rows: filtered.length });
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(`${safeName}-${stamp}.csv`)}`);
+  res.send(toCsv(filtered));
 });
 
 // Start / pause / cancel.

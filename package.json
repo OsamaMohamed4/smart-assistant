@@ -14,7 +14,7 @@
     "build": "vite build",
     "test:apis": "node --use-system-ca test-apis.js",
     "test:smoke": "node scripts/smoke-test.js",
-    "test:unit": "node --test scripts/test-validation.js scripts/test-secrets.js scripts/test-authz.js scripts/test-pii.js scripts/test-pdpl.js",
+    "test:unit": "node --test scripts/test-validation.js scripts/test-secrets.js scripts/test-authz.js scripts/test-pii.js scripts/test-pdpl.js scripts/test-campaign-report.js",
     "test:pg": "node --test scripts/test-migrations-pg.js scripts/test-rls.js"
   },
   "keywords": [],

@@ -486,6 +486,15 @@ if (!hasColumn('scenario_versions', 'company_id')) {
   `);
 }
 
+// Migration 27: who created a campaign. The campaign report shows an owner
+// ("Created by") and this was the ONLY report field with no existing source —
+// everything else derives from campaigns / campaign_contacts / calls /
+// structured_data. Nullable, so historical campaigns simply show "—".
+if (!hasColumn('campaigns', 'created_by')) {
+  runMigration(27, 'campaigns_add_created_by',
+    `ALTER TABLE campaigns ADD COLUMN created_by TEXT`);
+}
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users
@@ -900,8 +909,22 @@ const sql = {
 
   // ─── Campaigns (outbound dialer) ─────────────────────────────
   insertCampaign     : db.prepare(`
-    INSERT INTO campaigns (company_id, name, status, start_hour, end_hour, max_concurrent, max_attempts, retry_delay_min)
-    VALUES (@company_id, @name, 'draft', @start_hour, @end_hour, @max_concurrent, @max_attempts, @retry_delay_min)
+    INSERT INTO campaigns (company_id, name, status, start_hour, end_hour, max_concurrent, max_attempts, retry_delay_min, created_by)
+    VALUES (@company_id, @name, 'draft', @start_hour, @end_hour, @max_concurrent, @max_attempts, @retry_delay_min, @created_by)
+  `),
+  // Campaign report: one round trip joining every contact to its call row.
+  // LEFT JOIN because a contact may not have been dialled yet, or the
+  // end-of-call webhook may not have landed. All report fields come from
+  // here — no second query, no AI pass.
+  campaignReportRows : db.prepare(`
+    SELECT cc.id, cc.phone, cc.name, cc.status, cc.attempts, cc.last_attempt_at,
+           cc.call_id, cc.last_error, cc.created_at,
+           c.duration_sec, c.started_at AS call_started_at, c.ended_at AS call_ended_at,
+           c.ended_reason, c.summary, c.structured_data, c.recording_url
+      FROM campaign_contacts cc
+      LEFT JOIN calls c ON c.id = cc.call_id
+     WHERE cc.campaign_id = ?
+     ORDER BY cc.id ASC
   `),
   getCampaign        : db.prepare('SELECT * FROM campaigns WHERE id = ?'),
   listCampaignsForCompany: db.prepare('SELECT * FROM campaigns WHERE company_id = ? ORDER BY created_at DESC'),

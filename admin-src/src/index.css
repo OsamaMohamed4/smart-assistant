@@ -124,3 +124,46 @@ dialog::backdrop { background: rgba(14,15,18,0.45); backdrop-filter: blur(2px); 
 
 /* Reusable helper: horizontal scroll container for tables/wide content. */
 .x-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* ─── Print / PDF export ──────────────────────────────────────────
+   The campaign report's "PDF" button calls window.print(), so the browser's
+   own Save-as-PDF produces the file. This is deliberate: a real PDF generator
+   (pdfmake/jsPDF) is ~300-500KB of JS shipped to every user, needs an Arabic
+   font embedded to render RTL text at all, and would still produce a worse
+   layout than the page we already styled. The rules below turn the on-screen
+   report into a clean document: no chrome, no interactive affordances, and
+   cards/tables that survive a page break. */
+@media print {
+  @page { margin: 12mm; size: A4; }
+
+  html, body {
+    background: #fff !important;
+    /* Keep the gradient lead cards readable rather than printing as white. */
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* App chrome has no meaning on paper. */
+  aside, nav, header.app-header, .print\:hidden { display: none !important; }
+
+  /* Let the report use the full sheet. */
+  main, .app-main { overflow: visible !important; height: auto !important; }
+
+  /* Never split a card, a table row, or a section heading across pages. */
+  table { page-break-inside: auto; }
+  tr    { page-break-inside: avoid; page-break-after: auto; }
+  thead { display: table-header-group; }   /* repeat headers on every page */
+  h1, h2 { page-break-after: avoid; }
+
+  /* Flatten shadows — they render as grey smudges. */
+  .shadow-card { box-shadow: none !important; }
+
+  /* Clamped summary text must expand: the whole point of the PDF is the detail. */
+  .line-clamp-2 {
+    -webkit-line-clamp: unset !important;
+    display: block !important;
+    overflow: visible !important;
+  }
+
+  a[href]::after { content: ''; }          /* don't append raw URLs */
+}

@@ -35,6 +35,8 @@ async function buildReport(campaign) {
       // ── derived, never invented ──
       lead             : q.lead,
       leadLabel        : q.leadLabel,
+      outcome          : q.outcome,
+      outcomeLabel     : q.outcomeLabel,
       callbackRequested: q.callbackRequested,
       interestLevel    : q.interestLevel,
       intent           : q.intent,
@@ -66,6 +68,7 @@ function applyFilters(rows, f = {}) {
       else if (r.lead !== f.lead) return false;
     }
     if (f.status && f.status !== 'all' && r.status !== f.status) return false;
+    if (f.outcome && f.outcome !== 'all' && r.outcome !== f.outcome) return false;
     if (minDur !== null && r.durationSec < minDur) return false;
     if (maxDur !== null && r.durationSec > maxDur) return false;
     if (from && (r.lastAttemptAt || r.callStartedAt || '') < from) return false;
@@ -86,7 +89,7 @@ function applyFilters(rows, f = {}) {
 const CSV_COLUMNS = [
   ['phone',         'رقم الجوال'],
   ['name',          'اسم العميل'],
-  ['statusLabel',   'حالة المكالمة'],
+  ['outcomeLabelAr', 'نتيجة المكالمة'],
   ['durationSec',   'مدة المكالمة (ثانية)'],
   ['leadLabelAr',   'تصنيف العميل'],
   ['interestLevel', 'مستوى الاهتمام'],
@@ -117,7 +120,7 @@ function toCsv(rows) {
   for (const r of rows) {
     const flat = {
       ...r,
-      statusLabel : STATUS_AR[r.status] || r.status,
+      outcomeLabelAr: r.outcomeLabel?.ar || r.outcome,
       leadLabelAr : r.leadLabel?.ar || r.lead,
       callbackYesNo: r.callbackRequested ? 'نعم' : 'لا',
     };

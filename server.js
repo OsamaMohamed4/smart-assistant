@@ -26,6 +26,7 @@ const { shutdown: queueShutdown } = require('./lib/queue');
 const { runWithContext } = require('./lib/tenant-context');
 const { isSafeUrl } = require('./lib/ssrf');
 const { encryptField, decryptField, decryptRow, decryptRows, CALL_PII_FIELDS } = require('./lib/pii');
+const { qualifyCall, LEAD } = require('./lib/lead-scoring');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
 const { router: webhookRoutes, getRecentWebhookAttempts } = require('./routes/webhook');
@@ -1967,18 +1968,30 @@ app.get('/api/companies/:id/calls.csv', requireCompanyAccess, async (req, res) =
     const s = v === null || v === undefined ? '' : String(v);
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
+  // Arabic headers up front: the operator asked to see "interested or not"
+  // when downloading records, so the derived lead qualification + call outcome
+  // lead the sheet, followed by the raw extracted fields.
   const header = [
     'call_id', 'direction', 'caller_number', 'started_at', 'duration_sec',
+    'تصنيف العميل', 'مهتم؟', 'نتيجة المكالمة',
     'ended_reason', 'interest_level', 'property_type', 'budget',
     'preferred_area', 'callback_requested', 'appointment_requested',
     'summary', 'recording_url',
   ];
   const lines = [header.join(',')];
+  // "Interested?" is a plain yes/no rollup of the lead tier, so a manager
+  // scanning the column sees intent without reading the classification.
+  const INTERESTED = new Set([LEAD.HOT, LEAD.WARM]);
+  const NOT_A_LEAD = new Set([LEAD.NO_ANSWER, LEAD.INVALID, LEAD.PENDING]);
   for (const r of rows) {
     let lead = {};
     try { if (r.structured_data) lead = JSON.parse(r.structured_data) || {}; } catch {}
+    const q = qualifyCall(r);
+    const interested = INTERESTED.has(q.lead) ? 'نعم'
+      : NOT_A_LEAD.has(q.lead) ? '—' : 'لا';
     lines.push([
       r.id, r.direction, r.caller_number, r.started_at, r.duration_sec,
+      q.leadLabel?.ar || q.lead, interested, q.outcomeLabel?.ar || q.outcome,
       r.ended_reason, lead.interest_level, lead.property_type, lead.budget,
       lead.preferred_area, lead.callback_requested, lead.appointment_requested,
       r.summary, r.recording_url,

@@ -9,7 +9,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  LEAD, qualifyContact, summarizeReport, composeIntent, deriveNextAction,
+  LEAD, OUTCOME, qualifyContact, qualifyCall, classifyOutcome,
+  summarizeReport, composeIntent, deriveNextAction,
 } = require('../lib/lead-scoring');
 const { applyFilters, toCsv } = require('../services/campaign-report');
 
@@ -129,15 +130,119 @@ test('next action is derived per lead tier', () => {
   assert.match(deriveNextAction(LEAD.INVALID, false, {}), /صحة الرقم/);
 });
 
+// ─── Call outcome axis (the fixed KPI table) ──────────────────────
+const oc = (reason, dur, status = 'completed', extra = {}) =>
+  classifyOutcome({ status }, { ended_reason: reason, duration_sec: dur, ...extra });
+
+test('assistant-ended with a conversation → Completed', () => {
+  assert.equal(oc('assistant-ended-call', 90), OUTCOME.COMPLETED);
+});
+
+test('customer-ended with a conversation → Ended Early', () => {
+  assert.equal(oc('customer-ended-call', 12), OUTCOME.ENDED_EARLY);
+});
+
+test('the real SIP-407 trunk fault → Connection Failed, NOT No Answer', () => {
+  // 44 real calls hit this. Counting them as "no answer" would make the
+  // answer-rate meaningless — they never reached the customer's phone.
+  const o = oc('call.in-progress.error-providerfault-outbound-sip-407-proxy-authentication-required', 0, 'failed');
+  assert.equal(o, OUTCOME.FAILED);
+});
+
+test('customer-did-not-answer → No Answer', () => {
+  assert.equal(oc('customer-did-not-answer', 0, 'no_answer'), OUTCOME.NO_ANSWER);
+});
+
+test('busy line → Busy', () => {
+  assert.equal(oc('customer-busy', 0, 'no_answer'), OUTCOME.BUSY);
+});
+
+test('unreachable / powered off → Switched Off', () => {
+  assert.equal(oc('customer-unreachable', 0, 'failed'), OUTCOME.SWITCHED_OFF);
+});
+
+test('unallocated number → Invalid Number', () => {
+  assert.equal(oc('twilio-number-unallocated', 0, 'failed'), OUTCOME.INVALID);
+});
+
+test('a transfer to a human → Transferred', () => {
+  assert.equal(oc('assistant-forwarded-call', 40), OUTCOME.TRANSFERRED);
+});
+
+test('silence-timed-out on a connected call → Ended Early', () => {
+  assert.equal(oc('silence-timed-out', 15), OUTCOME.ENDED_EARLY);
+});
+
+test('not dialled → Pending outcome', () => {
+  assert.equal(classifyOutcome({ status: 'pending' }, null), OUTCOME.PENDING);
+});
+
+test('a connected call with no explicit ender still counts as Completed', () => {
+  assert.equal(classifyOutcome({ status: 'completed' }, { duration_sec: 0, transcript: 'مرحبا' }), OUTCOME.COMPLETED);
+});
+
+test('qualifyContact exposes BOTH axes on one row', () => {
+  const q = qualifyContact(contact(), call(REAL_HOT));
+  assert.equal(q.lead, LEAD.HOT, 'lead axis');
+  assert.equal(q.outcome, OUTCOME.COMPLETED, 'outcome axis');
+  assert.ok(q.outcomeLabel.ar && q.outcomeLabel.en);
+});
+
+// ─── qualifyCall: standalone records export ───────────────────────
+test('qualifyCall qualifies a plain call for the records export', () => {
+  const q = qualifyCall({ duration_sec: 90, ended_reason: 'assistant-ended-call', structured_data: JSON.stringify(REAL_HOT) });
+  assert.equal(q.lead, LEAD.HOT);
+  assert.equal(q.outcome, OUTCOME.COMPLETED);
+});
+
+test('qualifyCall on a missed call → No Answer, not a fabricated lead', () => {
+  const q = qualifyCall({ duration_sec: 0, ended_reason: 'customer-did-not-answer' });
+  assert.equal(q.lead, LEAD.NO_ANSWER);
+  assert.equal(q.outcome, OUTCOME.NO_ANSWER);
+});
+
+test('qualifyCall tolerates a null call', () => {
+  assert.doesNotThrow(() => qualifyCall(null));
+});
+
+// ─── Outcome counts in the rollup ─────────────────────────────────
+test('rollup breaks calls down by every outcome', () => {
+  const rows = [
+    { lead: LEAD.HOT,  outcome: OUTCOME.COMPLETED,   status: 'completed', durationSec: 90, callbackRequested: false },
+    { lead: LEAD.WARM, outcome: OUTCOME.ENDED_EARLY, status: 'completed', durationSec: 12, callbackRequested: false },
+    { lead: LEAD.NO_ANSWER, outcome: OUTCOME.NO_ANSWER, status: 'no_answer', durationSec: 0, callbackRequested: false },
+    { lead: LEAD.INVALID, outcome: OUTCOME.FAILED,    status: 'failed', durationSec: 0, callbackRequested: false },
+    { lead: LEAD.PENDING, outcome: OUTCOME.PENDING,   status: 'pending', durationSec: 0, callbackRequested: false },
+  ];
+  const s = summarizeReport(rows);
+  assert.equal(s.outcomes.completed, 1);
+  assert.equal(s.outcomes.ended_early, 1);
+  assert.equal(s.outcomes.no_answer, 1);
+  assert.equal(s.outcomes.failed, 1);
+  assert.equal(s.dialled, 4, 'pending excluded');
+  assert.equal(s.answered, 2, 'completed + ended_early connected; no-answer + failed did not');
+  assert.equal(s.notAnswered, 2);
+});
+
+test('a SIP-failed campaign does not report a fake 0% or inflated no-answer', () => {
+  const rows = Array.from({ length: 5 }, () => ({
+    lead: LEAD.INVALID, outcome: OUTCOME.FAILED, status: 'failed', durationSec: 0, callbackRequested: false,
+  }));
+  const s = summarizeReport(rows);
+  assert.equal(s.outcomes.failed, 5);
+  assert.equal(s.outcomes.no_answer, 0, 'infra failures are NOT counted as no-answer');
+  assert.equal(s.answered, 0);
+});
+
 // ─── Campaign rollup ──────────────────────────────────────────────
 const rowsFixture = [
-  { lead: LEAD.HOT,            status: 'completed', durationSec: 90, callbackRequested: false },
-  { lead: LEAD.WARM,           status: 'completed', durationSec: 67, callbackRequested: true },
-  { lead: LEAD.COLD,           status: 'completed', durationSec: 30, callbackRequested: false },
-  { lead: LEAD.NOT_INTERESTED, status: 'completed', durationSec: 37, callbackRequested: false },
-  { lead: LEAD.NO_ANSWER,      status: 'no_answer', durationSec: 0,  callbackRequested: false },
-  { lead: LEAD.INVALID,        status: 'failed',    durationSec: 0,  callbackRequested: false },
-  { lead: LEAD.PENDING,        status: 'pending',   durationSec: 0,  callbackRequested: false },
+  { lead: LEAD.HOT,            outcome: OUTCOME.COMPLETED,   status: 'completed', durationSec: 90, callbackRequested: false },
+  { lead: LEAD.WARM,           outcome: OUTCOME.COMPLETED,   status: 'completed', durationSec: 67, callbackRequested: true },
+  { lead: LEAD.COLD,           outcome: OUTCOME.COMPLETED,   status: 'completed', durationSec: 30, callbackRequested: false },
+  { lead: LEAD.NOT_INTERESTED, outcome: OUTCOME.COMPLETED,   status: 'completed', durationSec: 37, callbackRequested: false },
+  { lead: LEAD.NO_ANSWER,      outcome: OUTCOME.NO_ANSWER,   status: 'no_answer', durationSec: 0,  callbackRequested: false },
+  { lead: LEAD.INVALID,        outcome: OUTCOME.INVALID,     status: 'failed',    durationSec: 0,  callbackRequested: false },
+  { lead: LEAD.PENDING,        outcome: OUTCOME.PENDING,     status: 'pending',   durationSec: 0,  callbackRequested: false },
 ];
 
 test('rollup counts each lead category', () => {

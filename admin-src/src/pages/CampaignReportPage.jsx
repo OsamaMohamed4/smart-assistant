@@ -22,13 +22,18 @@ const LEAD_META = {
   unqualified   : { label: 'غير مصنّف',    tone: 'outline', icon: Users,          card: 'from-ink-300 to-ink-400' },
   pending       : { label: 'لم يُتصل بعد', tone: 'neutral', icon: Clock,          card: 'from-ink-200 to-ink-300' },
 };
-const STATUS_META = {
-  pending  : { label: 'بالانتظار',    tone: 'neutral' },
-  calling  : { label: 'جارٍ الاتصال', tone: 'warning' },
-  completed: { label: 'تمت',          tone: 'success' },
-  no_answer: { label: 'لم يرد',       tone: 'info' },
-  failed   : { label: 'فشلت',         tone: 'danger' },
-  cancelled: { label: 'ملغاة',        tone: 'neutral' },
+// Per-call operational outcome (separate axis from lead qualification).
+// Mirrors lib/lead-scoring.js OUTCOME.
+const OUTCOME_META = {
+  completed   : { label: 'أكمل الحوار',  tone: 'success' },
+  ended_early : { label: 'أُنهيت مبكراً', tone: 'warning' },
+  transferred : { label: 'حُوّلت لموظف',  tone: 'brand' },
+  no_answer   : { label: 'لم يتم الرد',  tone: 'info' },
+  busy        : { label: 'مشغول',        tone: 'warning' },
+  switched_off: { label: 'مغلق',         tone: 'neutral' },
+  invalid     : { label: 'رقم غير صحيح', tone: 'danger' },
+  failed      : { label: 'تعذّر الاتصال', tone: 'danger' },
+  pending     : { label: 'لم يُتصل بعد', tone: 'neutral' },
 };
 
 const fmtDur = (s) => {
@@ -51,7 +56,7 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
   const [loading, setLoading] = useState(true);
   const [detailRow, setDetailRow] = useState(null);
   const [filters, setFilters] = useState({
-    lead: 'all', status: 'all', search: '', minDuration: '', from: '', to: '',
+    lead: 'all', status: 'all', outcome: 'all', search: '', minDuration: '', from: '', to: '',
   });
 
   const load = useCallback(() => {
@@ -117,13 +122,19 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
         <section>
           <SectionTitle>نظرة عامة</SectionTitle>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
-            <Stat label="إجمالي الأرقام" value={s?.totalContacts} />
-            <Stat label="تم الاتصال" value={s?.dialled} />
+            <Stat label="إجمالي العملاء" value={s?.totalContacts} />
+            <Stat label="المكالمات المنفذة" value={s?.dialled} />
             <Stat label="ردّ العميل" value={s?.answered} tone="emerald" />
             <Stat label="لم يرد" value={s?.notAnswered} tone="ink" />
-            <Stat label="نسبة الرد" value={s ? `${s.successRate}%` : null} tone="sky" />
+            <Stat label="نسبة الاتصال" value={s ? `${s.successRate}%` : null} tone="sky" />
             <Stat label="متوسط المدة" value={s ? fmtDur(s.avgDurationSec) : null} />
           </div>
+        </section>
+
+        {/* ── fixed KPI table (present in every campaign) ── */}
+        <section>
+          <SectionTitle>مؤشرات الحملة</SectionTitle>
+          <KpiTable s={s} onPickOutcome={(o) => setF('outcome', filters.outcome === o ? 'all' : o)} activeOutcome={filters.outcome} />
         </section>
 
         {/* ── lead cards ── */}
@@ -164,10 +175,10 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
                 </Select>
               </div>
               <div>
-                <Label>حالة المكالمة</Label>
-                <Select value={filters.status} onChange={(e) => setF('status', e.target.value)}>
-                  <option value="all">كل الحالات</option>
-                  {Object.entries(STATUS_META).map(([k, m]) => <option key={k} value={k}>{m.label}</option>)}
+                <Label>نتيجة المكالمة</Label>
+                <Select value={filters.outcome} onChange={(e) => setF('outcome', e.target.value)}>
+                  <option value="all">كل النتائج</option>
+                  {Object.entries(OUTCOME_META).filter(([k]) => k !== 'pending').map(([k, m]) => <option key={k} value={k}>{m.label}</option>)}
                 </Select>
               </div>
               <div>
@@ -182,7 +193,7 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
               <div className="flex items-end">
                 {filtersActive && (
                   <Button variant="ghost" size="md" className="w-full"
-                    onClick={() => setFilters({ lead: 'all', status: 'all', search: '', minDuration: '', from: '', to: '' })}>
+                    onClick={() => setFilters({ lead: 'all', status: 'all', outcome: 'all', search: '', minDuration: '', from: '', to: '' })}>
                     مسح الفلاتر
                   </Button>
                 )}
@@ -215,14 +226,14 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
                   <table className="w-full text-[12.5px]">
                     <thead>
                       <tr className="bg-ink-50/70 text-ink-600 text-[10.5px] uppercase tracking-wide">
-                        <Th>العميل</Th><Th>الحالة</Th><Th>المدة</Th><Th>التصنيف</Th>
+                        <Th>العميل</Th><Th>نتيجة المكالمة</Th><Th>المدة</Th><Th>التصنيف</Th>
                         <Th>طلب العميل</Th><Th>الملخص</Th><Th>الإجراء التالي</Th>
                       </tr>
                     </thead>
                     <tbody>
                       {data.rows.map((r) => {
                         const lm = LEAD_META[r.lead] || LEAD_META.pending;
-                        const sm = STATUS_META[r.status] || STATUS_META.pending;
+                        const om = OUTCOME_META[r.outcome] || OUTCOME_META.pending;
                         return (
                           <tr key={r.id} onClick={() => setDetailRow(r)}
                             className="border-t border-ink-100 hover:bg-ink-50/50 cursor-pointer align-top">
@@ -230,7 +241,7 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
                               <div className="font-mono text-ink-900" dir="ltr">{r.phone}</div>
                               {r.name && <div className="text-[11px] text-ink-500">{r.name}</div>}
                             </Td>
-                            <Td><Badge tone={sm.tone}>{sm.label}</Badge></Td>
+                            <Td><Badge tone={om.tone}>{om.label}</Badge></Td>
                             <Td className="tabular-nums">{fmtDur(r.durationSec)}</Td>
                             <Td>
                               <div className="flex flex-col gap-1 items-start">
@@ -253,7 +264,7 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
               <div className="lg:hidden space-y-2">
                 {data.rows.map((r) => {
                   const lm = LEAD_META[r.lead] || LEAD_META.pending;
-                  const sm = STATUS_META[r.status] || STATUS_META.pending;
+                  const om = OUTCOME_META[r.outcome] || OUTCOME_META.pending;
                   return (
                     <button key={r.id} onClick={() => setDetailRow(r)}
                       className="w-full text-right bg-white border border-ink-100 rounded-2xl shadow-card p-3.5 focus-ring">
@@ -265,7 +276,7 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
                         <Badge tone={lm.tone} dot>{lm.label}</Badge>
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                        <Badge tone={sm.tone}>{sm.label}</Badge>
+                        <Badge tone={om.tone}>{om.label}</Badge>
                         <span className="text-[11px] text-ink-500 tabular-nums">{fmtDur(r.durationSec)}</span>
                         {r.callbackRequested && <Badge tone="brand">معاودة اتصال</Badge>}
                       </div>
@@ -280,6 +291,62 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
       </div>
 
       <ContactDetailModal row={detailRow} onClose={() => setDetailRow(null)} />
+    </div>
+  );
+}
+
+/* ── fixed KPI table — every metric present in every campaign ── */
+// Rows mirror the agreed spec. `outcome` (when set) makes the row a live filter
+// on the results table below; metric rows without one are pure totals.
+const KPI_ROWS = [
+  { label: 'إجمالي العملاء',           hint: 'عدد العملاء المستهدفين',        get: (s) => s?.totalContacts },
+  { label: 'عدد المكالمات المنفذة',    hint: 'كم مكالمة نُفّذت',              get: (s) => s?.dialled },
+  { label: 'نسبة الاتصال',             hint: 'نسبة العملاء الذين تم الرد عليهم', get: (s) => s == null ? null : `${s.successRate}%` },
+  { label: 'عدد المكالمات غير المجابة', hint: 'لم يتم الرد',                   get: (s) => s?.outcomes?.no_answer, outcome: 'no_answer' },
+  { label: 'مشغول',                    hint: 'الخط مشغول',                    get: (s) => s?.outcomes?.busy, outcome: 'busy' },
+  { label: 'رقم غير صحيح',             hint: 'رقم غير صالح أو خارج الخدمة',    get: (s) => s?.outcomes?.invalid, outcome: 'invalid' },
+  { label: 'مغلق',                     hint: 'الجهاز مغلق أو خارج التغطية',    get: (s) => s?.outcomes?.switched_off, outcome: 'switched_off' },
+  { label: 'تعذّر الاتصال',            hint: 'فشل فني في الشبكة أو المزوّد',   get: (s) => s?.outcomes?.failed, outcome: 'failed', warn: true },
+  { label: 'متوسط مدة المكالمة',       hint: 'لكل مكالمة تم الرد عليها',       get: (s) => s == null ? null : fmtDur(s.avgDurationSec) },
+  { label: 'عدد المكالمات المحولة',    hint: 'تم تحويلها لموظف',              get: (s) => s?.outcomes?.transferred, outcome: 'transferred' },
+  { label: 'عدد المكالمات المكتملة',   hint: 'أكمل العميل الحوار',            get: (s) => s?.outcomes?.completed, outcome: 'completed' },
+  { label: 'عدد المكالمات المنتهية مبكراً', hint: 'أغلق قبل إكمال السيناريو',  get: (s) => s?.outcomes?.ended_early, outcome: 'ended_early' },
+];
+
+function KpiTable({ s, onPickOutcome, activeOutcome }) {
+  return (
+    <div className="bg-white border border-ink-100 rounded-2xl shadow-card overflow-hidden">
+      <table className="w-full text-[12.5px]">
+        <thead>
+          <tr className="bg-ink-50/70 text-ink-600 text-[10.5px] uppercase tracking-wide">
+            <th className="text-right font-medium px-4 py-2.5">المؤشر</th>
+            <th className="text-right font-medium px-4 py-2.5 w-[42%]">الوصف</th>
+            <th className="text-left font-medium px-4 py-2.5 w-[80px]">القيمة</th>
+          </tr>
+        </thead>
+        <tbody>
+          {KPI_ROWS.map((row) => {
+            const clickable = !!row.outcome;
+            const active = clickable && activeOutcome === row.outcome;
+            const val = s ? row.get(s) : null;
+            return (
+              <tr key={row.label}
+                onClick={clickable ? () => onPickOutcome(row.outcome) : undefined}
+                aria-pressed={clickable ? active : undefined}
+                className={`border-t border-ink-100 ${clickable ? 'cursor-pointer hover:bg-ink-50/60' : ''} ${active ? 'bg-brand-50' : ''}`}>
+                <td className="px-4 py-2.5 font-medium text-ink-800">
+                  {row.label}
+                  {clickable && <span className="text-[9.5px] text-ink-400 mr-1.5 print:hidden">{active ? '· إلغاء' : '· تصفية'}</span>}
+                </td>
+                <td className="px-4 py-2.5 text-ink-500">{row.hint}</td>
+                <td className={`px-4 py-2.5 text-left tabular-nums font-semibold ${row.warn && Number(val) > 0 ? 'text-rose-600' : 'text-ink-900'}`}>
+                  {val ?? (val === 0 ? 0 : '—')}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -342,7 +409,7 @@ function CallbackCard({ n, active, onClick }) {
 function ContactDetailModal({ row, onClose }) {
   if (!row) return null;
   const lm = LEAD_META[row.lead] || LEAD_META.pending;
-  const sm = STATUS_META[row.status] || STATUS_META.pending;
+  const om = OUTCOME_META[row.outcome] || OUTCOME_META.pending;
   return (
     <Modal open={!!row} onClose={onClose} size="lg" title={row.name || row.phone}
       description="تحليل المكالمة — مستخرج من تسجيل المكالمة نفسها."
@@ -350,7 +417,7 @@ function ContactDetailModal({ row, onClose }) {
       <div className="space-y-4">
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge tone={lm.tone} dot>{lm.label}</Badge>
-          <Badge tone={sm.tone}>{sm.label}</Badge>
+          <Badge tone={om.tone}>{om.label}</Badge>
           {row.callbackRequested && <Badge tone="brand">طلب معاودة اتصال</Badge>}
           <span className="text-[11.5px] text-ink-500 tabular-nums">المدة {fmtDur(row.durationSec)}</span>
         </div>

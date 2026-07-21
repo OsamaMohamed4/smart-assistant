@@ -703,6 +703,15 @@ app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
 // Per-company overrides still win via settings.voiceId (set in the admin UI).
 const DEFAULT_VOICE_ID = 'MI88rOZjXbH22N8KHXUo'; // Ali علي — الصوت الافتراضي (مختبَر وجيد)
 
+// Voice pacing defaults applied at every Vapi sync (env-tunable, no deploy):
+//   speed 1.2 (faster speech) + optimizeStreamingLatency 4 (fastest streaming),
+//   both per the operator's request. Clamped to ElevenLabs' valid ranges.
+const VOICE_SPEED_DEFAULT   = clampRange(process.env.VOICE_SPEED_DEFAULT, 0.7, 1.2, 1.2);
+const VOICE_LATENCY_DEFAULT = clampRange(process.env.VOICE_LATENCY_DEFAULT, 0, 4, 4);
+function clampRange(v, lo, hi, dflt) {
+  return Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt;
+}
+
 const PLAYGROUND_VOICES = [
   { id: 'MI88rOZjXbH22N8KHXUo', name: 'Ali', label: 'علي', description: 'صوت هادئ وواضح', gender: 'male', accent: 'arabic' },
   { id: 'cFUFIbKkO2iZFwS8cRnY', name: 'Nasser', label: 'ناصر', description: 'صوت سعودي طبيعي', gender: 'male', accent: 'saudi' },
@@ -1329,10 +1338,16 @@ app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) 
   const { model, temperature, maxTokens } = resolveAgentModel(c);
   const stability     = clamp(s.stability, 0, 1, 0.8);
   const similarity    = clamp(s.similarityBoost, 0, 1, 0.8);
-  const streamLatency = clamp(s.optimizeStreamingLatency, 0, 4, 3);
-  // Speaking pace. 1.0 = ElevenLabs default; below 1.0 is slower. 0.95 is a
-  // touch calmer than default without sounding sluggish.
-  const voiceSpeed    = clamp(s.voiceSpeed, 0.7, 1.2, 0.95);
+  // optimizeStreamingLatency default is 4 (max) — the operator asked sync to
+  // produce the fastest streaming. A company can still override it via the
+  // voice-settings slider; env VOICE_LATENCY_DEFAULT tunes the default without
+  // a deploy. NOTE: level 4 is the most aggressive and trims some ElevenLabs
+  // text normalization, so if numbers/prices start sounding off, drop to 3.
+  const streamLatency = clamp(s.optimizeStreamingLatency, 0, 4, VOICE_LATENCY_DEFAULT);
+  // Speaking pace. 1.0 = ElevenLabs default. Default is 1.2 (faster) per the
+  // operator's request; no per-company UI, so this is what every sync uses
+  // unless VOICE_SPEED_DEFAULT overrides it.
+  const voiceSpeed    = clamp(s.voiceSpeed, 0.7, 1.2, VOICE_SPEED_DEFAULT);
 
   const cfg = {
     name: `smart-assistant:${c.id}`,

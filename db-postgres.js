@@ -414,9 +414,9 @@ const sql = {
 
   // ─── Campaigns (outbound dialer) ─────────────────────────
   insertCampaign: stmt(
-    `INSERT INTO campaigns (company_id, name, status, start_hour, end_hour, max_concurrent, max_attempts, retry_delay_min, created_by)
-     VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8) RETURNING id`,
-    ['company_id', 'name', 'start_hour', 'end_hour', 'max_concurrent', 'max_attempts', 'retry_delay_min', 'created_by'],
+    `INSERT INTO campaigns (company_id, name, status, start_hour, start_minute, end_hour, end_minute, max_concurrent, max_attempts, retry_delay_min, created_by)
+     VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+    ['company_id', 'name', 'start_hour', 'start_minute', 'end_hour', 'end_minute', 'max_concurrent', 'max_attempts', 'retry_delay_min', 'created_by'],
   ),
   // Campaign report: one round trip joining every contact to its call row.
   // LEFT JOIN because a contact may not have been dialled yet, or the

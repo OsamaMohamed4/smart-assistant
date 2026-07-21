@@ -31,12 +31,39 @@ function saudiHour() {
   return (new Date().getUTCHours() + 3) % 24;
 }
 
-function inCallWindow(campaign) {
-  const h = saudiHour();
-  const { start_hour: s, end_hour: e } = campaign;
+// Minutes since Saudi midnight — the unit the window is compared in now that
+// campaigns support HH:MM, not just whole hours.
+function saudiMinutesOfDay(now = new Date()) {
+  return ((now.getUTCHours() + 3) % 24) * 60 + now.getUTCMinutes();
+}
+
+const windowStart = (c) => (Number(c.start_hour) || 0) * 60 + (Number(c.start_minute) || 0);
+const windowEnd   = (c) => (Number(c.end_hour) || 0) * 60 + (Number(c.end_minute) || 0);
+
+function inCallWindow(campaign, now = new Date()) {
+  const m = saudiMinutesOfDay(now);
+  const s = windowStart(campaign);
+  const e = windowEnd(campaign);
   if (s === e) return true;                    // degenerate: always open
-  if (s < e) return h >= s && h < e;           // e.g. 10 → 21
-  return h >= s || h < e;                      // overnight window e.g. 20 → 02
+  if (s < e) return m >= s && m < e;           // e.g. 10:00 → 21:30
+  return m >= s || m < e;                      // overnight window e.g. 20:00 → 02:00
+}
+
+// Everything the UI needs to explain a running-but-idle campaign, so "pending"
+// is never a mystery. `opensInMin` is how long until the window reopens.
+function windowState(campaign, now = new Date()) {
+  const open = inCallWindow(campaign, now);
+  const s = windowStart(campaign);
+  const m = saudiMinutesOfDay(now);
+  let opensInMin = null;
+  if (!open) opensInMin = ((s - m) % 1440 + 1440) % 1440;   // minutes until start, wrapping midnight
+  const hhmm = (mins) => `${String(Math.floor(mins / 60) % 24).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+  return {
+    open,
+    startLabel: hhmm(s),
+    endLabel  : hhmm(windowEnd(campaign)),
+    opensInMin,
+  };
 }
 
 // Place one Vapi call for a contact. Mirrors the Playground outbound-call
@@ -199,4 +226,4 @@ function startCampaignWorker() {
   return t;
 }
 
-module.exports = { startCampaignWorker, tick, tickCampaign, handleCallEnded, inCallWindow, saudiHour };
+module.exports = { startCampaignWorker, tick, tickCampaign, handleCallEnded, inCallWindow, windowState, saudiHour, saudiMinutesOfDay };

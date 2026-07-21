@@ -495,6 +495,16 @@ if (!hasColumn('campaigns', 'created_by')) {
     `ALTER TABLE campaigns ADD COLUMN created_by TEXT`);
 }
 
+// Migration 28: minute-precision call window. Campaigns stored only whole
+// hours (start_hour/end_hour); the operator wants HH:MM. Nullable-with-default
+// so every existing campaign keeps its exact behaviour (minute 0 = on the hour).
+if (!hasColumn('campaigns', 'start_minute')) {
+  runMigration(28, 'campaigns_add_window_minutes', `
+    ALTER TABLE campaigns ADD COLUMN start_minute INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE campaigns ADD COLUMN end_minute   INTEGER NOT NULL DEFAULT 0;
+  `);
+}
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users
@@ -909,8 +919,8 @@ const sql = {
 
   // ─── Campaigns (outbound dialer) ─────────────────────────────
   insertCampaign     : db.prepare(`
-    INSERT INTO campaigns (company_id, name, status, start_hour, end_hour, max_concurrent, max_attempts, retry_delay_min, created_by)
-    VALUES (@company_id, @name, 'draft', @start_hour, @end_hour, @max_concurrent, @max_attempts, @retry_delay_min, @created_by)
+    INSERT INTO campaigns (company_id, name, status, start_hour, start_minute, end_hour, end_minute, max_concurrent, max_attempts, retry_delay_min, created_by)
+    VALUES (@company_id, @name, 'draft', @start_hour, @start_minute, @end_hour, @end_minute, @max_concurrent, @max_attempts, @retry_delay_min, @created_by)
   `),
   // Campaign report: one round trip joining every contact to its call row.
   // LEFT JOIN because a contact may not have been dialled yet, or the

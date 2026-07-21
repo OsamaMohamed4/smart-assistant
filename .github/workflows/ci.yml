@@ -79,6 +79,9 @@ jobs:
       - name: Campaign reporting — lead scoring, filters, CSV
         run: node --test scripts/test-campaign-report.js
 
+      - name: Campaign call window — minute precision, UI state
+        run: node --test scripts/test-campaign-window.js
+
       - name: Durable queue (BullMQ + Redis)
         env:
           REDIS_URL: redis://localhost:6379

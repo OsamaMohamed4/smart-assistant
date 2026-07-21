@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { PhoneOutgoing, Plus, Play, Pause, XCircle, RefreshCw, Users, ChevronLeft, BarChart3 } from 'lucide-react';
+import { PhoneOutgoing, Plus, Play, Pause, XCircle, RefreshCw, Users, ChevronLeft, BarChart3, Clock, FileUp } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -25,6 +25,17 @@ const CONTACT_META = {
   no_answer: { label: 'لم يرد', tone: 'info' },
   failed   : { label: 'فشلت', tone: 'danger' },
   cancelled: { label: 'ملغاة', tone: 'neutral' },
+};
+
+// HH:MM from separate hour/minute columns (fallback when the server didn't
+// send a window object, e.g. an older cached response).
+const hhmm = (h, m) => `${String(Number(h) || 0).padStart(2, '0')}:${String(Number(m) || 0).padStart(2, '0')}`;
+// "بعد ٢ ساعة و١٥ دقيقة" style wait label from a minutes count.
+const fmtWait = (mins) => {
+  const h = Math.floor(mins / 60), m = mins % 60;
+  if (h && m) return `${h} ساعة و${m} دقيقة`;
+  if (h) return `${h} ساعة`;
+  return `${m} دقيقة`;
 };
 
 export function CampaignsPage({ pinnedCompanyId }) {
@@ -122,8 +133,20 @@ export function CampaignsPage({ pinnedCompanyId }) {
                       <Badge tone={meta.tone} dot>{meta.label}</Badge>
                     </div>
                     <div className="mt-1 text-[11.5px] text-ink-500">
-                      {t} رقم · نافذة {c.start_hour}:00–{c.end_hour}:00 · تزامن {c.max_concurrent} · محاولات {c.max_attempts} · {relTime(c.created_at)}
+                      {t} رقم · نافذة {c.window?.startLabel || hhmm(c.start_hour, c.start_minute)}–{c.window?.endLabel || hhmm(c.end_hour, c.end_minute)} · تزامن {c.max_concurrent} · محاولات {c.max_attempts} · {relTime(c.created_at)}
                     </div>
+                    {/* Explain a running-but-idle campaign so "pending" is never a mystery. */}
+                    {c.status === 'running' && c.window && !c.window.open && (
+                      <div className="mt-1.5 inline-flex items-center gap-1.5 text-[11px] text-amber-700 bg-amber-50 ring-1 ring-amber-200/60 rounded-md px-2 py-0.5">
+                        <Clock className="w-3 h-3" />
+                        خارج نافذة الاتصال الآن — يستأنف الساعة {c.window.startLabel} {c.window.opensInMin != null ? `(بعد ${fmtWait(c.window.opensInMin)})` : ''}
+                      </div>
+                    )}
+                    {c.status === 'running' && c.window?.open && done(c) === 0 && t > 0 && (
+                      <div className="mt-1.5 inline-flex items-center gap-1.5 text-[11px] text-emerald-700 bg-emerald-50 ring-1 ring-emerald-200/60 rounded-md px-2 py-0.5">
+                        <PhoneOutgoing className="w-3 h-3" /> داخل النافذة — يبدأ الاتصال خلال لحظات
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     {['draft', 'paused'].includes(c.status) && (
@@ -186,23 +209,101 @@ export function CampaignsPage({ pinnedCompanyId }) {
   );
 }
 
+// Parse an imported CSV/text file into "phone,name" lines the backend already
+// understands. Handles a header row, quoted fields, and BOM, and finds the
+// phone + name columns by content rather than assuming a fixed order — so a
+// sheet exported from anywhere Just Works.
+function parseCsvToLines(text) {
+  const raw = String(text || '').replace(/^﻿/, '');           // strip BOM
+  const rows = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map(splitCsvRow);
+  if (!rows.length) return { lines: '', count: 0 };
+
+  const phoneLike = (v) => /[+0-9][0-9\s()-]{6,}/.test(String(v || ''));
+  // Detect a header: first row has no phone-looking cell.
+  const hasHeader = !rows[0].some(phoneLike);
+  let phoneCol = 0, nameCol = 1;
+  if (hasHeader) {
+    const head = rows[0].map((h) => h.toLowerCase());
+    const pi = head.findIndex((h) => /phone|جوال|رقم|mobile|tel|هاتف/.test(h));
+    const ni = head.findIndex((h) => /name|اسم|عميل|client/.test(h));
+    if (pi >= 0) phoneCol = pi;
+    if (ni >= 0) nameCol = ni;
+  } else {
+    // No header — pick the phone column by content from the first data row.
+    const pi = rows[0].findIndex(phoneLike);
+    if (pi >= 0) { phoneCol = pi; nameCol = pi === 0 ? 1 : 0; }
+  }
+
+  const out = [];
+  for (const r of rows.slice(hasHeader ? 1 : 0)) {
+    const phone = (r[phoneCol] || '').trim();
+    if (!phone) continue;
+    const name = (r[nameCol] || '').trim();
+    out.push(name ? `${phone},${name}` : phone);
+  }
+  return { lines: out.join('\n'), count: out.length };
+}
+
+// Minimal CSV field splitter: handles "quoted, fields" and doubled quotes.
+function splitCsvRow(line) {
+  const out = [];
+  let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQ) {
+      if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
+      else cur += ch;
+    } else if (ch === '"') inQ = true;
+    else if (ch === ',' || ch === ';' || ch === '\t') { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
 function CreateCampaignModal({ open, onClose, companyId, onCreated, push }) {
   const [name, setName] = useState('');
   const [numbersText, setNumbersText] = useState('');
-  const [startHour, setStartHour] = useState(10);
-  const [endHour, setEndHour] = useState(21);
+  const [importInfo, setImportInfo] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
+  // Times as "HH:MM" strings — native, clean, minute-precision.
+  const [startTime, setStartTime] = useState('10:00');
+  const [endTime, setEndTime] = useState('21:00');
   const [maxConcurrent, setMaxConcurrent] = useState(2);
   const [maxAttempts, setMaxAttempts] = useState(2);
   const [saving, setSaving] = useState(false);
 
   const lines = numbersText.split('\n').filter((l) => l.trim()).length;
+  const [sh, sm] = startTime.split(':').map(Number);
+  const [eh, em] = endTime.split(':').map(Number);
+
+  const importFile = async (file) => {
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { push('الملف كبير جداً (الحد ٥ ميجابايت)', 'error'); return; }
+    try {
+      const text = await file.text();
+      const { lines: parsed, count } = parseCsvToLines(text);
+      if (!count) { push('لم يُعثر على أرقام في الملف', 'error'); return; }
+      // Append to whatever is already there so import + manual can be combined.
+      setNumbersText((prev) => (prev.trim() ? `${prev.trim()}\n${parsed}` : parsed));
+      setImportInfo({ file: file.name, count });
+      push(`تم استيراد ${count} رقم من ${file.name}`, 'success');
+    } catch { push('تعذّرت قراءة الملف', 'error'); }
+  };
 
   const create = async () => {
     setSaving(true);
     try {
-      const r = await api.createCampaign(companyId, { name, numbersText, startHour, endHour, maxConcurrent, maxAttempts });
-      push(`أُنشئت الحملة (${r.contacts} رقم صالح)`, 'success');
-      setName(''); setNumbersText('');
+      const r = await api.createCampaign(companyId, {
+        name, numbersText,
+        startHour: sh, startMinute: sm, endHour: eh, endMinute: em,
+        maxConcurrent, maxAttempts,
+      });
+      let msg = `أُنشئت الحملة (${r.contacts} رقم صالح)`;
+      if (r.rejectedCount) msg += ` · ${r.rejectedCount} رقم غير صالح تم تجاهله`;
+      if (r.duplicates)    msg += ` · ${r.duplicates} مكرر`;
+      push(msg, r.rejectedCount ? 'warning' : 'success');
+      setName(''); setNumbersText(''); setImportInfo(null);
       onCreated();
     } catch (e) { push(e.message, 'error'); }
     finally { setSaving(false); }
@@ -212,7 +313,7 @@ function CreateCampaignModal({ open, onClose, companyId, onCreated, push }) {
     <Modal open={open} onClose={onClose} title="حملة صادرة جديدة" size="lg"
       description="الوكيل سيتصل بكل رقم داخل النافذة الزمنية بالسيناريو المفعّل."
       footer={<>
-        <Button variant="brand" onClick={create} loading={saving} disabled={!name.trim() || !lines}>إنشاء ({lines} سطر)</Button>
+        <Button variant="brand" onClick={create} loading={saving} disabled={!name.trim() || !lines}>إنشاء ({lines} رقم)</Button>
         <Button variant="ghost" onClick={onClose}>إلغاء</Button>
       </>}>
       <div className="space-y-4">
@@ -220,22 +321,59 @@ function CreateCampaignModal({ open, onClose, companyId, onCreated, push }) {
           <Label>اسم الحملة</Label>
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="مثلاً: عملاء معرض الرياض" />
         </div>
+
+        {/* CSV import dropzone */}
         <div>
-          <Label>الأرقام (سطر لكل رقم — «رقم» أو «رقم,اسم»)</Label>
-          <textarea value={numbersText} onChange={(e) => setNumbersText(e.target.value)}
-            rows={7} dir="ltr"
+          <Label>قائمة الأرقام</Label>
+          <label
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => { e.preventDefault(); setDragOver(false); importFile(e.dataTransfer.files?.[0]); }}
+            className={`flex items-center justify-center gap-2 h-20 rounded-xl border-2 border-dashed cursor-pointer transition-colors
+              ${dragOver ? 'border-brand-400 bg-brand-50' : 'border-ink-200 bg-ink-50/40 hover:border-ink-300'}`}>
+            <FileUp className="w-4 h-4 text-ink-400" />
+            <span className="text-[12.5px] text-ink-600">
+              {importInfo ? `${importInfo.file} — ${importInfo.count} رقم` : 'استورد ملف CSV / Excel (اسحبه هنا أو اضغط للاختيار)'}
+            </span>
+            <input type="file" accept=".csv,.txt,text/csv,text/plain" className="hidden"
+              onChange={(e) => { importFile(e.target.files?.[0]); e.target.value = ''; }} />
+          </label>
+          <p className="text-[10.5px] text-ink-400 mt-1">
+            الأعمدة المتوقعة: رقم الجوال (والاسم اختياري). يتعرّف تلقائياً على صف العناوين.
+          </p>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between">
+            <Label>أو الصق الأرقام يدوياً</Label>
+            {lines > 0 && <span className="text-[10.5px] text-ink-500 tabular-nums">{lines} سطر</span>}
+          </div>
+          <textarea value={numbersText}
+            onChange={(e) => { setNumbersText(e.target.value); setImportInfo(null); }}
+            rows={5} dir="ltr"
             placeholder={'+966501234567,أبو خالد\n0559876543,أم فهد\n+966512345678'}
             className="w-full px-3 py-2 bg-white border border-ink-200 rounded-xl text-[13px] font-mono focus-ring" />
-          <p className="text-[10.5px] text-ink-400 mt-1">تُقبل الصيغ: ‎+9665xxxxxxxx‎ أو 05xxxxxxxx — المكرر يُحذف تلقائياً.</p>
+          <p className="text-[10.5px] text-ink-400 mt-1">تُقبل الصيغ: ‎+9665xxxxxxxx‎ أو 05xxxxxxxx — المكرر والأرقام غير الصالحة تُحذف تلقائياً.</p>
         </div>
-        <div className="grid grid-cols-4 gap-3">
-          <NumField label="من الساعة" value={startHour} set={setStartHour} min={0} max={23} />
-          <NumField label="إلى الساعة" value={endHour} set={setEndHour} min={0} max={23} />
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <TimeField label="من الساعة" value={startTime} set={setStartTime} />
+          <TimeField label="إلى الساعة" value={endTime} set={setEndTime} />
           <NumField label="مكالمات متزامنة" value={maxConcurrent} set={setMaxConcurrent} min={1} max={10} />
           <NumField label="محاولات لكل رقم" value={maxAttempts} set={setMaxAttempts} min={1} max={5} />
         </div>
+        <p className="text-[10.5px] text-ink-400 -mt-1">النافذة بتوقيت السعودية. لو وقت البداية بعد النهاية تُعتبر نافذة ليلية تمتد لليوم التالي.</p>
       </div>
     </Modal>
+  );
+}
+
+function TimeField({ label, value, set }) {
+  return (
+    <div>
+      <Label>{label}</Label>
+      <Input type="time" value={value} onChange={(e) => set(e.target.value || '00:00')} dir="ltr" className="tabular-nums" />
+    </div>
   );
 }
 

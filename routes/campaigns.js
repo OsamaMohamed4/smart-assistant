@@ -9,6 +9,7 @@ const { audit } = require('../lib/audit');
 const { validate } = require('../lib/validate');
 const { campaignCreateBody } = require('../lib/schemas');
 const { buildReport, applyFilters, toCsv } = require('../services/campaign-report');
+const { windowState } = require('../services/campaigns');
 
 const router = express.Router({ mergeParams: true });
 router.use(requireCompanyAccess);
@@ -96,7 +97,9 @@ router.post('/', validate({ body: campaignCreateBody }), async (req, res) => {
       company_id     : req.params.id,
       name,
       start_hour     : clampInt(b.startHour, 0, 23, 10),
+      start_minute   : clampInt(b.startMinute, 0, 59, 0),
       end_hour       : clampInt(b.endHour, 0, 23, 21),
+      end_minute     : clampInt(b.endMinute, 0, 59, 0),
       max_concurrent : clampInt(b.maxConcurrent, 1, 10, 2),
       max_attempts   : clampInt(b.maxAttempts, 1, 5, 2),
       retry_delay_min: clampInt(b.retryDelayMin, 5, 24 * 60, 60),
@@ -127,14 +130,17 @@ router.post('/', validate({ body: campaignCreateBody }), async (req, res) => {
   });
 });
 
-// List campaigns with progress stats.
+// List campaigns with progress stats + why each running one is/ isn't dialing.
 router.get('/', async (req, res) => {
   const rows = await sql.listCampaignsForCompany.all(req.params.id);
   const out = [];
   for (const c of rows) {
     const stats = {};
     for (const s of await sql.campaignContactStats.all(c.id)) stats[s.status] = s.n;
-    out.push({ ...c, stats });
+    // Turn "running but nothing happening" into an explanation the operator can
+    // read: is the call window open right now, and if not, when does it reopen?
+    const w = windowState(c);
+    out.push({ ...c, stats, window: w });
   }
   res.json(out);
 });

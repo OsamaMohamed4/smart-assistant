@@ -9,7 +9,7 @@ const { audit } = require('../lib/audit');
 const { validate } = require('../lib/validate');
 const { campaignCreateBody } = require('../lib/schemas');
 const { buildReport, applyFilters, toCsv } = require('../services/campaign-report');
-const { windowState } = require('../services/campaigns');
+const { windowState, diagnoseCampaign, tickCampaign, getWorkerHealth } = require('../services/campaigns');
 
 const router = express.Router({ mergeParams: true });
 router.use(requireCompanyAccess);
@@ -133,6 +133,7 @@ router.post('/', validate({ body: campaignCreateBody }), async (req, res) => {
 // List campaigns with progress stats + why each running one is/ isn't dialing.
 router.get('/', async (req, res) => {
   const rows = await sql.listCampaignsForCompany.all(req.params.id);
+  const worker = getWorkerHealth();   // same for every row; lets the UI warn if the worker is down
   const out = [];
   for (const c of rows) {
     const stats = {};
@@ -140,7 +141,7 @@ router.get('/', async (req, res) => {
     // Turn "running but nothing happening" into an explanation the operator can
     // read: is the call window open right now, and if not, when does it reopen?
     const w = windowState(c);
-    out.push({ ...c, stats, window: w });
+    out.push({ ...c, stats, window: w, worker });
   }
   res.json(out);
 });
@@ -204,6 +205,39 @@ router.get('/:campaignId/report.csv', async (req, res) => {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(`${safeName}-${stamp}.csv`)}`);
   res.send(toCsv(filtered));
+});
+
+// ─── Diagnostics ──────────────────────────────────────────────────
+// Read-only "why is this campaign (not) dialing right now?" — no side effects.
+// Includes the worker heartbeat so a stuck campaign can be told apart from a
+// stuck WORKER at a glance.
+router.get('/:campaignId/diagnose', async (req, res) => {
+  const campaign = await loadOwnedCampaign(req, res);
+  if (!campaign) return;
+  const diagnosis = await diagnoseCampaign(campaign);
+  res.json({ campaignId: campaign.id, status: campaign.status, ...diagnosis, worker: getWorkerHealth() });
+});
+
+// Force ONE tick of this campaign right now and return exactly what happened —
+// dialed N, or the precise skip reason (outside_window with the time compare,
+// not_published, no_number, no_slots, daily_cap, no_pending). This gives the
+// operator the root cause instantly instead of waiting for the 30s scheduler
+// or digging through logs. It runs the real tick, so it will actually place
+// calls if the campaign is eligible.
+router.post('/:campaignId/run-now', async (req, res) => {
+  const campaign = await loadOwnedCampaign(req, res);
+  if (!campaign) return;
+  if (campaign.status !== 'running') {
+    return res.status(409).json({ error: `الحملة حالتها ${campaign.status} — شغّلها أولاً`, reason: campaign.status });
+  }
+  try {
+    const result = await tickCampaign(campaign);
+    audit(req, 'campaign.run_now', `campaigns/${campaign.id}`, { reason: result.reason, placed: result.placed });
+    res.json({ campaignId: campaign.id, ...result, worker: getWorkerHealth() });
+  } catch (e) {
+    req.log.error('campaign run-now failed', { campaignId: campaign.id, err: e.message });
+    res.status(500).json({ error: e.message, reason: 'error' });
+  }
 });
 
 // Start / pause / cancel.

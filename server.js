@@ -33,7 +33,7 @@ const { router: webhookRoutes, getRecentWebhookAttempts } = require('./routes/we
 const campaignsRoutes = require('./routes/campaigns');
 const evalsRoutes = require('./routes/evals');
 const { upsertVapiCall, startDrainTimer } = require('./services/call-events');
-const { startCampaignWorker } = require('./services/campaigns');
+const { startCampaignWorker, getWorkerHealth: getCampaignWorkerHealth } = require('./services/campaigns');
 const { startRetentionWorker } = require('./services/retention');
 const { dailyCap, checkAndBumpUsage } = require('./services/usage');
 const { audit } = require('./lib/audit');
@@ -657,6 +657,18 @@ app.get('/health', async (_req, res) => {
       out.rls.tables_enforced = Number(r?.n ?? 0);
     } catch { /* non-fatal: never fail the health check on a catalog probe */ }
   }
+  // Campaign worker heartbeat — proves the outbound scheduler is executing.
+  // `healthy:false` here (or a stale lastTickAt) is the direct answer to
+  // "why are my campaigns stuck pending?" when the worker isn't running.
+  try {
+    const w = getCampaignWorkerHealth();
+    out.campaign_worker = {
+      mode: w.mode, healthy: w.healthy, lastTickAt: w.lastTickAt,
+      ticks: w.ticks, running: w.lastRunningCount, lastPlaced: w.lastPlaced,
+      ...(w.lastError ? { lastError: w.lastError } : {}),
+    };
+    if (!w.healthy) out.degraded = 'campaign worker not ticking';
+  } catch { /* non-fatal */ }
   res.json(out);
 });
 

@@ -86,6 +86,9 @@ export const api = {
   startCampaign     : (id, campaignId) => request(`/api/companies/${id}/campaigns/${campaignId}/start`, { method: 'POST', body: '{}' }),
   pauseCampaign     : (id, campaignId) => request(`/api/companies/${id}/campaigns/${campaignId}/pause`, { method: 'POST', body: '{}' }),
   cancelCampaign    : (id, campaignId) => request(`/api/companies/${id}/campaigns/${campaignId}/cancel`, { method: 'POST', body: '{}' }),
+  // Diagnostics: why is a campaign (not) dialing, and force one tick now.
+  campaignDiagnose  : (id, campaignId) => request(`/api/companies/${id}/campaigns/${campaignId}/diagnose`),
+  campaignRunNow    : (id, campaignId) => request(`/api/companies/${id}/campaigns/${campaignId}/run-now`, { method: 'POST', body: '{}' }),
   // Campaign report. `filters` mirrors the server's query params exactly, so
   // the CSV export below returns the same rows the table is showing.
   campaignReport    : (id, campaignId, filters = {}) => {

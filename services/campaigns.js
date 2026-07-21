@@ -26,6 +26,17 @@ function utcStamp(msAgo = 0) {
   return new Date(Date.now() - msAgo).toISOString().replace('T', ' ').slice(0, 19);
 }
 
+// Extract a bindable STRING from any thrown error. Providers return error
+// bodies in wildly different shapes — Vapi's `message` is frequently an array
+// of validation strings — so a naive `.slice()` yields a non-string that then
+// fails to bind to SQL. Always returns a short string, never throws.
+function errToString(e) {
+  let m = e?.response?.data?.message ?? e?.response?.data?.error ?? e?.message ?? 'call failed';
+  if (Array.isArray(m)) m = m.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join('; ');
+  else if (m && typeof m === 'object') m = JSON.stringify(m);
+  return String(m).slice(0, 300);
+}
+
 // Saudi Arabia is UTC+3 year-round (no DST).
 function saudiHour() {
   return (new Date().getUTCHours() + 3) % 24;
@@ -99,8 +110,15 @@ async function placeCall(company, campaign, contact) {
   return r.data.id;
 }
 
-// One tick for one campaign. Exposed for tests.
+// One tick for one campaign. Returns a STRUCTURED result — { placed, done,
+// reason, detail } — so the worker, the logs, and the manual run-now endpoint
+// all report exactly why a campaign did or didn't dial. `reason` is one of:
+//   dialed | no_pending | completed | outside_window | no_slots |
+//   not_published | no_number | daily_cap
+// Exposed for tests.
 async function tickCampaign(campaign) {
+  const done = (reason, detail) => ({ placed: 0, done: reason === 'completed', reason, detail: detail || null });
+
   // 1. Recycle stuck 'calling' rows (lost webhooks) into retryable failures.
   await sql.requeueStaleCalling.run(campaign.id, utcStamp(STALE_CALLING_MIN * 60 * 1000));
 
@@ -114,31 +132,38 @@ async function tickCampaign(campaign) {
   if (remaining === 0) {
     await sql.completeCampaign.run(campaign.id);
     logger.info('campaign completed', { campaignId: campaign.id });
-    return { placed: 0, done: true };
+    return done('completed');
   }
 
-  // 4. Respect the call window.
-  if (!inCallWindow(campaign)) return { placed: 0, done: false, outsideWindow: true };
+  // 4. Respect the call window. Report the exact time comparison so a
+  //    timezone problem would be visible in the reason itself.
+  if (!inCallWindow(campaign)) {
+    const w = windowState(campaign);
+    return done('outside_window', {
+      saudiTime: hhmmNow(), window: `${w.startLabel}-${w.endLabel}`, opensInMin: w.opensInMin,
+    });
+  }
 
   // 5. Concurrency budget.
   const calling = (await sql.countCallingContacts.get(campaign.id))?.n || 0;
   const slots = Math.min(campaign.max_concurrent - calling, PER_TICK_CAP);
-  if (slots <= 0) return { placed: 0, done: false };
+  if (slots <= 0) return done('no_slots', { calling, maxConcurrent: campaign.max_concurrent });
 
   const company = await loadCompany(campaign.company_id);
   if (!company?.assistantId) {
-    logger.warn('campaign company not published — pausing', { campaignId: campaign.id });
+    logger.warn('campaign company not published — pausing', { campaignId: campaign.id, companyId: campaign.company_id });
     await sql.setCampaignStatus.run({ id: campaign.id, status: 'paused' });
-    return { placed: 0, done: false };
+    return done('not_published');
   }
   if (!(company.settings?.outboundPhoneNumberId || process.env.VAPI_PHONE_NUMBER_ID)) {
-    logger.warn('campaign has no outbound number — pausing', { campaignId: campaign.id });
+    logger.warn('campaign has no outbound number — pausing', { campaignId: campaign.id, companyId: campaign.company_id });
     await sql.setCampaignStatus.run({ id: campaign.id, status: 'paused' });
-    return { placed: 0, done: false };
+    return done('no_number');
   }
 
   const contacts = await sql.pickPendingContacts.all(campaign.id, slots);
   let placed = 0;
+  let dailyCapHit = false;
   for (const contact of contacts) {
     // CLAIM FIRST (atomic pending→calling flip), place the call second. The
     // reverse order let an overlapping tick re-pick a contact mid-placement
@@ -153,6 +178,7 @@ async function tickCampaign(campaign) {
     if (!capOk) {
       await sql.markContactError.run({ id: contact.id, err: 'daily outbound cap reached' });
       logger.warn('campaign hit daily outbound cap — waiting for tomorrow', { campaignId: campaign.id });
+      dailyCapHit = true;
       break;
     }
     try {
@@ -167,28 +193,114 @@ async function tickCampaign(campaign) {
       });
       placed++;
     } catch (e) {
-      const err = (e.response?.data?.message || e.message || 'call failed').slice(0, 300);
+      // Vapi returns validation errors with `message` as an ARRAY, so the old
+      // `.slice()` produced an array that then failed to bind to SQL — which
+      // threw out of the whole tick, was swallowed by the per-campaign catch,
+      // and left the contact stuck. Always coerce to a plain string.
+      const err = errToString(e);
       await sql.markContactError.run({ id: contact.id, err });
       logger.warn('campaign call failed to place', { campaignId: campaign.id, contactId: contact.id, err });
     }
   }
   if (placed) logger.info('campaign tick placed calls', { campaignId: campaign.id, placed });
-  return { placed, done: false };
+  const reason = placed ? 'dialed' : (dailyCapHit ? 'daily_cap' : 'no_pending');
+  return { placed, done: false, reason, detail: { slots, contactsPicked: contacts.length } };
+}
+
+// Current Saudi wall-clock as HH:MM, for logging/diagnostics — proves which
+// timezone the window check actually used.
+function hhmmNow(now = new Date()) {
+  const m = saudiMinutesOfDay(now);
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}
+
+// Read-only diagnosis for the UI/API: WHY is this campaign (not) dialing right
+// now, without mutating anything. Mirrors tickCampaign's decision order.
+async function diagnoseCampaign(campaign) {
+  const w = windowState(campaign);
+  const stats = {};
+  for (const s of await sql.campaignContactStats.all(campaign.id)) stats[s.status] = s.n;
+  const pending = stats.pending || 0;
+  const calling = stats.calling || 0;
+
+  let reason = 'idle';
+  if (campaign.status !== 'running') reason = campaign.status;      // draft/paused/completed/cancelled
+  else if (!w.open) reason = 'outside_window';
+  else if (pending === 0 && calling === 0) reason = 'no_pending';
+  else if (calling >= campaign.max_concurrent) reason = 'no_slots';
+  else {
+    const company = await loadCompany(campaign.company_id);
+    if (!company?.assistantId) reason = 'not_published';
+    else if (!(company.settings?.outboundPhoneNumberId || process.env.VAPI_PHONE_NUMBER_ID)) reason = 'no_number';
+    else reason = 'dialing';                                        // healthy: should place calls next tick
+  }
+  return { reason, window: w, saudiTime: hhmmNow(), pending, calling };
 }
 
 let ticking = false;
 
+// Worker heartbeat — proves the scheduler is actually executing and records
+// what each tick did. Exposed via /health (campaign_worker) so "is the worker
+// running?" has a definitive answer instead of a guess.
+const health = {
+  mode: null,             // 'bullmq' | 'timer' | null (not started)
+  startedAt: null,
+  lastTickAt: null,
+  lastTickMs: null,
+  ticks: 0,
+  lastRunningCount: 0,
+  lastPlaced: 0,
+  lastError: null,
+};
+function getWorkerHealth() {
+  const stale = health.lastTickAt
+    ? (Date.now() - new Date(health.lastTickAt).getTime()) > (Number(process.env.CAMPAIGNS_TICK_MS) || 30_000) * 3
+    : true;
+  return { ...health, healthy: !!health.lastTickAt && !stale };
+}
+
+// Remember the last logged skip reason per campaign so routine skips
+// (outside_window every 30s) log ONCE on change, not on every tick.
+const lastReason = new Map();
+
 async function tick() {
   if (ticking) return;                 // ticks never overlap (belt) — the
   ticking = true;                      // atomic claim is the suspenders
+  const t0 = Date.now();
+  let placedTotal = 0;
   try {
     const running = await sql.listRunningCampaigns.all();
+    health.lastRunningCount = running.length;
     for (const campaign of running) {
-      try { await tickCampaign(campaign); } catch (e) {
+      try {
+        const res = await tickCampaign(campaign);
+        placedTotal += res.placed || 0;
+        // Log the reason only when it CHANGES for this campaign, so the log
+        // shows exactly why a campaign is idle without spamming every 30s.
+        const key = String(campaign.id);
+        if (lastReason.get(key) !== res.reason) {
+          lastReason.set(key, res.reason);
+          const lvl = res.reason === 'dialed' || res.reason === 'completed' ? 'info' : 'info';
+          logger[lvl]('campaign tick reason', {
+            campaignId: campaign.id, reason: res.reason, placed: res.placed, ...res.detail,
+          });
+        }
+      } catch (e) {
         logger.error('campaign tick failed', { campaignId: campaign.id, err: e.message });
+        lastReason.set(String(campaign.id), 'error');
       }
     }
+    health.lastError = null;
+  } catch (e) {
+    // A failure fetching the campaign list means NOTHING dials — surface it
+    // loudly rather than letting every campaign sit silently pending.
+    health.lastError = e.message;
+    logger.error('campaign tick loop failed', { err: e.message });
   } finally {
+    health.ticks += 1;
+    health.lastTickAt = new Date().toISOString();
+    health.lastTickMs = Date.now() - t0;
+    health.lastPlaced = placedTotal;
     ticking = false;
   }
 }
@@ -207,23 +319,59 @@ async function handleCallEnded(callId, endedReason, durationSec) {
   if (r.changes) logger.info('campaign contact updated from call', { callId, status });
 }
 
-function startCampaignWorker() {
-  const interval = Number(process.env.CAMPAIGNS_TICK_MS) || 30_000;
-  // Durable path: a BullMQ repeatable job replaces setInterval so the schedule
-  // survives restarts and is safe across multiple app instances.
-  if (queue.enabled) {
-    const q = queue.makeQueue('campaigns');
-    queue.makeWorker('campaigns', async () => { await tick(); }, { concurrency: 1 });
-    queue.scheduleRepeatable(q, 'tick', interval)
-      .catch((e) => logger.error('campaign schedule failed', { err: e.message }));
-    logger.info('campaign worker started (BullMQ durable queue)', { intervalMs: interval });
-    return null;
-  }
-  // Fallback: in-process timer when no REDIS_URL is configured (dev/CI/local).
+// Start the in-process timer scheduler. Always works; the only downside vs
+// BullMQ is it must run on exactly one instance.
+function startTimer(interval, reason) {
   const t = setInterval(() => tick().catch((e) => logger.error('campaign worker tick error', { err: e.message })), interval);
   t.unref();
-  logger.info('campaign worker started (in-process timer — set REDIS_URL for durability)', { intervalMs: interval });
+  health.mode = 'timer';
+  health.startedAt = new Date().toISOString();
+  logger.info(`campaign worker started (in-process timer${reason ? ` — ${reason}` : ''})`, { intervalMs: interval });
+  // Kick immediately so the first tick (and its heartbeat) don't wait a full
+  // interval — makes "is it running?" answerable within seconds of boot.
+  tick().catch(() => {});
   return t;
 }
 
-module.exports = { startCampaignWorker, tick, tickCampaign, handleCallEnded, inCallWindow, windowState, saudiHour, saudiMinutesOfDay };
+function startCampaignWorker() {
+  const interval = Number(process.env.CAMPAIGNS_TICK_MS) || 30_000;
+
+  if (!queue.enabled) {
+    return startTimer(interval, 'set REDIS_URL for durability');
+  }
+
+  // Durable path: BullMQ repeatable job. BUT the pooled Redis connection never
+  // fails a command (it retries forever), so a broken/misconfigured Redis would
+  // make scheduleRepeatable HANG and the worker would silently never tick.
+  // Verify connectivity first; if Redis isn't reachable, fall back to the timer
+  // so campaigns ALWAYS dial rather than sitting pending with no explanation.
+  queue.ping(3000).then((ok) => {
+    if (!ok) {
+      logger.error('campaign worker: REDIS_URL set but Redis unreachable — falling back to in-process timer');
+      startTimer(interval, 'redis unreachable, degraded to timer');
+      return;
+    }
+    const q = queue.makeQueue('campaigns');
+    queue.makeWorker('campaigns', async () => { await tick(); }, { concurrency: 1 });
+    queue.scheduleRepeatable(q, 'tick', interval)
+      .then(() => {
+        health.mode = 'bullmq';
+        health.startedAt = new Date().toISOString();
+        logger.info('campaign worker started (BullMQ durable queue)', { intervalMs: interval });
+      })
+      .catch((e) => {
+        logger.error('campaign schedule failed — falling back to in-process timer', { err: e.message });
+        startTimer(interval, 'bullmq schedule failed, degraded to timer');
+      });
+  }).catch((e) => {
+    logger.error('campaign worker: redis ping errored — falling back to in-process timer', { err: e.message });
+    startTimer(interval, 'redis ping errored, degraded to timer');
+  });
+  return null;
+}
+
+module.exports = {
+  startCampaignWorker, tick, tickCampaign, handleCallEnded,
+  inCallWindow, windowState, saudiHour, saudiMinutesOfDay, hhmmNow,
+  diagnoseCampaign, getWorkerHealth,
+};

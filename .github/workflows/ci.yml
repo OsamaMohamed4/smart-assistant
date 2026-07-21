@@ -82,6 +82,9 @@ jobs:
       - name: Campaign call window — minute precision, UI state
         run: node --test scripts/test-campaign-window.js
 
+      - name: Campaign worker — state transitions, skip reasons, error handling
+        run: node --test scripts/test-campaign-worker.js
+
       - name: Durable queue (BullMQ + Redis)
         env:
           REDIS_URL: redis://localhost:6379

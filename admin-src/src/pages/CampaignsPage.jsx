@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { PhoneOutgoing, Plus, Play, Pause, XCircle, RefreshCw, Users, ChevronLeft, BarChart3, Clock, FileUp } from 'lucide-react';
+import { PhoneOutgoing, Plus, Play, Pause, XCircle, RefreshCw, Users, ChevronLeft, BarChart3, Clock, FileUp, Zap, AlertTriangle } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -26,6 +26,21 @@ const CONTACT_META = {
   failed   : { label: 'فشلت', tone: 'danger' },
   cancelled: { label: 'ملغاة', tone: 'neutral' },
 };
+
+// Human Arabic explanation for a tick/diagnose reason — turns the engine's
+// machine reason into something the operator can act on.
+const REASON_AR = {
+  dialed        : (r) => `تم بدء ${r.placed} مكالمة الآن`,
+  no_pending    : () => 'لا توجد أرقام بانتظار الاتصال',
+  completed     : () => 'اكتملت الحملة — كل الأرقام تمت',
+  outside_window: (r) => `خارج نافذة الاتصال — تستأنف ${r.detail?.window?.split('-')[0] || ''}`,
+  no_slots      : (r) => `بلغت الحد الأقصى للمكالمات المتزامنة (${r.detail?.calling || ''})`,
+  not_published : () => 'الشركة غير منشورة على Vapi — انشرها أولاً',
+  no_number     : () => 'لا يوجد رقم صادر مضبوط لهذه الشركة',
+  daily_cap     : () => 'بلغت الحد اليومي للمكالمات الصادرة',
+  error         : (r) => `خطأ: ${r.error || 'غير معروف'}`,
+};
+const reasonText = (r) => (REASON_AR[r.reason] || (() => `الحالة: ${r.reason}`))(r);
 
 // HH:MM from separate hour/minute columns (fallback when the server didn't
 // send a window object, e.g. an older cached response).
@@ -75,6 +90,21 @@ export function CampaignsPage({ pinnedCompanyId }) {
     catch (e) { push(e.message, 'error'); }
   };
 
+  // Force one tick now and tell the operator EXACTLY what happened / why not.
+  const runNow = async (c) => {
+    try {
+      const r = await api.campaignRunNow(companyId, c.id);
+      const tone = r.reason === 'dialed' ? 'success'
+        : ['not_published', 'no_number', 'error'].includes(r.reason) ? 'error' : 'warning';
+      push(reasonText(r), tone);
+      load();
+    } catch (e) { push(e.message, 'error'); }
+  };
+
+  // Is the outbound worker actually executing? Surfaced so a stuck WORKER is
+  // never mistaken for a stuck campaign.
+  const worker = campaigns?.[0]?.worker || null;
+
   const total = (c) => Object.values(c.stats || {}).reduce((s, n) => s + n, 0);
   const done  = (c) => (c.stats?.completed || 0) + (c.stats?.no_answer || 0) + (c.stats?.failed || 0) + (c.stats?.cancelled || 0);
 
@@ -113,6 +143,13 @@ export function CampaignsPage({ pinnedCompanyId }) {
       />
 
       <div className="px-8 py-7 max-w-4xl">
+        {/* Worker down = EVERY campaign is stuck. Say so loudly, once. */}
+        {worker && worker.healthy === false && (
+          <div className="mb-4 flex items-center gap-2 text-[12.5px] text-rose-700 bg-rose-50 ring-1 ring-rose-200/70 rounded-xl px-4 py-2.5">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>مشغّل الحملات لا يعمل حالياً — لن تُجرى مكالمات حتى يعود. آخر تنفيذ: {worker.lastTickAt ? relTime(worker.lastTickAt) : 'لم يبدأ بعد'}.</span>
+          </div>
+        )}
         {campaigns && campaigns.length === 0 && (
           <EmptyState icon={PhoneOutgoing} title="لا توجد حملات بعد"
             description="أنشئ حملة، الصق الأرقام، ثم اضغط تشغيل — الوكيل يتصل بها تلقائياً داخل النافذة الزمنية."
@@ -156,10 +193,16 @@ export function CampaignsPage({ pinnedCompanyId }) {
                       </Button>
                     )}
                     {c.status === 'running' && (
-                      <Button variant="secondary" size="sm" className="gap-1"
-                        onClick={() => act(() => api.pauseCampaign(companyId, c.id), 'توقفت مؤقتاً')}>
-                        <Pause className="w-3 h-3" /> إيقاف
-                      </Button>
+                      <>
+                        <Button variant="ghost" size="sm" className="gap-1" title="شغّل تحديث الآن واعرف السبب"
+                          onClick={() => runNow(c)}>
+                          <Zap className="w-3 h-3" /> شغّل الآن
+                        </Button>
+                        <Button variant="secondary" size="sm" className="gap-1"
+                          onClick={() => act(() => api.pauseCampaign(companyId, c.id), 'توقفت مؤقتاً')}>
+                          <Pause className="w-3 h-3" /> إيقاف
+                        </Button>
+                      </>
                     )}
                     {!['completed', 'cancelled'].includes(c.status) && (
                       <Button variant="ghost" size="sm" className="gap-1 text-rose-600"

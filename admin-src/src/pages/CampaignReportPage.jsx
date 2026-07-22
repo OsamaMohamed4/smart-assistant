@@ -146,11 +146,11 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
           <SectionTitle>نظرة عامة</SectionTitle>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
             <Stat label="إجمالي العملاء" value={s?.totalContacts} />
-            <Stat label="المكالمات المنفذة" value={s?.dialled} />
-            <Stat label="ردّ العميل" value={s?.answered} tone="emerald" />
-            <Stat label="لم يرد" value={s?.notAnswered} tone="ink" />
-            <Stat label="نسبة الاتصال" value={s ? `${s.successRate}%` : null} tone="sky" />
-            <Stat label="متوسط المدة" value={s ? fmtDur(s.avgDurationSec) : null} />
+            <Stat label="عدد المكالمات المنفذة" value={s?.dialled} />
+            <Stat label="عدد المكالمات المجابة" value={s?.answered} tone="emerald" />
+            <Stat label="عدد المكالمات غير المجابة" value={s?.notAnswered} tone="ink" />
+            <Stat label="معدل الرد (%)" value={s ? `${s.successRate}%` : null} tone="sky" />
+            <Stat label="متوسط مدة المكالمة" value={s ? fmtDur(s.avgDurationSec) : null} />
           </div>
         </section>
 

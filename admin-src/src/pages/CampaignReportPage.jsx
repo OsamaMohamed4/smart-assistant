@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   ArrowRight, Download, RefreshCw, Search, Flame, ThermometerSun, Snowflake,
-  PhoneMissed, PhoneOff, PhoneForwarded, Clock, TrendingUp, Users, FileText, Printer,
+  PhoneMissed, PhoneOff, PhoneForwarded, Clock, Users, FileText, Printer,
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -36,6 +36,23 @@ const OUTCOME_META = {
   failed      : { label: 'تعذّر الاتصال', tone: 'danger' },
   pending     : { label: 'لم يُتصل بعد', tone: 'neutral' },
 };
+
+// The five headline campaign results (النتائج الرئيسية). Each is derived from
+// data the report already computes — no new field, no AI. `filter` wires the
+// card to the same server-side filters the table uses, so clicking a card
+// narrows the results below it.
+//   مهتم بالشراء     = hot + warm (both expressed buying intent)
+//   يحتاج متابعة      = cold / متردد (interested but undecided)
+//   غير مهتم          = not_interested
+//   تم التحويل للمبيعات = transferred to a human agent (outcome axis)
+//   طلب معاودة الاتصال = callback flag
+const RESULT_CARDS = [
+  { key: 'interested',     label: 'مهتم بالشراء',       sub: 'ساخن + دافئ',    icon: Flame,          card: 'from-emerald-500 to-teal-600',   get: (s) => (s?.leads?.hot || 0) + (s?.leads?.warm || 0), filter: { kind: 'lead', val: 'interested' } },
+  { key: 'cold',           label: 'يحتاج متابعة',       sub: 'مهتم لكنه متردد', icon: ThermometerSun, card: 'from-sky-400 to-sky-500',        get: (s) => s?.leads?.cold,                              filter: { kind: 'lead', val: 'cold' } },
+  { key: 'not_interested', label: 'غير مهتم',           sub: 'لا يحتاج متابعة', icon: PhoneOff,       card: 'from-ink-400 to-ink-500',        get: (s) => s?.leads?.not_interested,                    filter: { kind: 'lead', val: 'not_interested' } },
+  { key: 'transferred',    label: 'تم التحويل للمبيعات', sub: 'حُوّلت لموظف',    icon: PhoneForwarded, card: 'from-violet-500 to-indigo-600',  get: (s) => s?.outcomes?.transferred,                    filter: { kind: 'outcome', val: 'transferred' } },
+  { key: 'callback',       label: 'طلب معاودة الاتصال', sub: 'طلب اتصالاً لاحقاً', icon: Users,       card: 'from-brand-500 to-brand-600',    get: (s) => s?.callbacks,                                filter: { kind: 'lead', val: 'callback' } },
+];
 
 // The exact provider signal for a row: Vapi's endedReason, falling back to any
 // technical placement error. Shown verbatim so an operator sees the real cause
@@ -143,20 +160,13 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
           <KpiTable s={s} onPickOutcome={(o) => setF('outcome', filters.outcome === o ? 'all' : o)} activeOutcome={filters.outcome} />
         </section>
 
-        {/* ── lead cards ── */}
+        {/* ── campaign results (النتائج الرئيسية) ── */}
         <section>
-          <SectionTitle>تصنيف العملاء</SectionTitle>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
-            <LeadCard k="hot"  n={s?.leads?.hot}  active={filters.lead === 'hot'}  onClick={() => setF('lead', filters.lead === 'hot' ? 'all' : 'hot')} />
-            <LeadCard k="warm" n={s?.leads?.warm} active={filters.lead === 'warm'} onClick={() => setF('lead', filters.lead === 'warm' ? 'all' : 'warm')} />
-            <LeadCard k="cold" n={s?.leads?.cold} active={filters.lead === 'cold'} onClick={() => setF('lead', filters.lead === 'cold' ? 'all' : 'cold')} />
-            <CallbackCard n={s?.callbacks} active={filters.lead === 'callback'} onClick={() => setF('lead', filters.lead === 'callback' ? 'all' : 'callback')} />
-            <LeadCard k="no_answer" n={s?.leads?.no_answer} active={filters.lead === 'no_answer'} onClick={() => setF('lead', filters.lead === 'no_answer' ? 'all' : 'no_answer')} />
-            <div className="rounded-xl p-3 bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-card">
-              <div className="flex items-center gap-1.5 text-[11px] opacity-90"><TrendingUp className="w-3.5 h-3.5" /> نسبة التحويل</div>
-              <div className="text-[22px] font-bold tabular-nums mt-1">{s ? `${s.conversionRate}%` : '—'}</div>
-              <div className="text-[10px] opacity-80">ساخن + دافئ من الذين ردّوا</div>
-            </div>
+          <SectionTitle>نتائج الحملة</SectionTitle>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+            {RESULT_CARDS.map((c) => (
+              <ResultCard key={c.key} c={c} s={s} filters={filters} setF={setF} />
+            ))}
           </div>
         </section>
 
@@ -176,6 +186,7 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
                 <Label>التصنيف</Label>
                 <Select value={filters.lead} onChange={(e) => setF('lead', e.target.value)}>
                   <option value="all">كل التصنيفات</option>
+                  <option value="interested">مهتم بالشراء (ساخن + دافئ)</option>
                   {Object.entries(LEAD_META).map(([k, m]) => <option key={k} value={k}>{m.label}</option>)}
                   <option value="callback">طلب معاودة اتصال</option>
                 </Select>
@@ -388,28 +399,22 @@ function Stat({ label, value, tone = 'ink' }) {
     </div>
   );
 }
-function LeadCard({ k, n, active, onClick }) {
-  const m = LEAD_META[k];
-  const Icon = m.icon;
+function ResultCard({ c, s, filters, setF }) {
+  const Icon = c.icon;
+  const isOutcome = c.filter.kind === 'outcome';
+  const active = isOutcome ? filters.outcome === c.filter.val : filters.lead === c.filter.val;
+  const toggle = () => {
+    const key = isOutcome ? 'outcome' : 'lead';
+    setF(key, active ? 'all' : c.filter.val);
+  };
+  const n = s ? c.get(s) : null;
   return (
-    <button onClick={onClick}
-      aria-pressed={active}
-      className={`text-right rounded-xl p-3 shadow-card transition-all focus-ring bg-gradient-to-br ${m.card} text-white
+    <button onClick={toggle} aria-pressed={active}
+      className={`text-right rounded-xl p-3 shadow-card transition-all focus-ring bg-gradient-to-br ${c.card} text-white
         ${active ? 'ring-2 ring-offset-2 ring-ink-900 scale-[0.98]' : 'hover:brightness-110'}`}>
-      <div className="flex items-center gap-1.5 text-[11px] opacity-90"><Icon className="w-3.5 h-3.5" /> {m.label}</div>
+      <div className="flex items-center gap-1.5 text-[11px] opacity-90"><Icon className="w-3.5 h-3.5" /> {c.label}</div>
       <div className="text-[22px] font-bold tabular-nums mt-1">{n ?? '—'}</div>
-      <div className="text-[10px] opacity-80">{active ? 'اضغط لإلغاء الفلتر' : 'اضغط للتصفية'}</div>
-    </button>
-  );
-}
-function CallbackCard({ n, active, onClick }) {
-  return (
-    <button onClick={onClick} aria-pressed={active}
-      className={`text-right rounded-xl p-3 shadow-card transition-all focus-ring bg-gradient-to-br from-brand-500 to-brand-600 text-white
-        ${active ? 'ring-2 ring-offset-2 ring-ink-900 scale-[0.98]' : 'hover:brightness-110'}`}>
-      <div className="flex items-center gap-1.5 text-[11px] opacity-90"><PhoneForwarded className="w-3.5 h-3.5" /> طلب معاودة</div>
-      <div className="text-[22px] font-bold tabular-nums mt-1">{n ?? '—'}</div>
-      <div className="text-[10px] opacity-80">{active ? 'اضغط لإلغاء الفلتر' : 'اضغط للتصفية'}</div>
+      <div className="text-[10px] opacity-80">{active ? 'اضغط لإلغاء الفلتر' : (c.sub || 'اضغط للتصفية')}</div>
     </button>
   );
 }

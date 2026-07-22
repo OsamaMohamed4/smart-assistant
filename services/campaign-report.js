@@ -65,6 +65,10 @@ function applyFilters(rows, f = {}) {
   return rows.filter((r) => {
     if (f.lead && f.lead !== 'all') {
       if (f.lead === 'callback') { if (!r.callbackRequested) return false; }
+      // 'interested' is the "مهتم بالشراء" card: hot + warm combined, since both
+      // expressed buying intent. Kept as a pseudo-category so the card and the
+      // dropdown can filter on it without a real lead value.
+      else if (f.lead === 'interested') { if (r.lead !== 'hot' && r.lead !== 'warm') return false; }
       else if (r.lead !== f.lead) return false;
     }
     if (f.status && f.status !== 'all' && r.status !== f.status) return false;

@@ -343,6 +343,12 @@ test('the callback pseudo-category filters on the flag', () => {
   assert.equal(out[0].phone, '+966500000002');
 });
 
+test('the "interested" pseudo-category is hot + warm combined (the مهتم بالشراء card)', () => {
+  const out = applyFilters(filterRows, { lead: 'interested' });
+  assert.equal(out.length, 2, 'both the hot and the warm row');
+  assert.deepEqual(out.map((r) => r.lead).sort(), [LEAD.HOT, LEAD.WARM].sort());
+});
+
 test('filter by call status', () => {
   assert.equal(applyFilters(filterRows, { status: 'no_answer' }).length, 1);
 });

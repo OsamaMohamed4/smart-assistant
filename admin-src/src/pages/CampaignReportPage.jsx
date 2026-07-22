@@ -312,18 +312,13 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
 // Rows mirror the agreed spec. `outcome` (when set) makes the row a live filter
 // on the results table below; metric rows without one are pure totals.
 const KPI_ROWS = [
-  { label: 'إجمالي العملاء',           hint: 'عدد العملاء المستهدفين',        get: (s) => s?.totalContacts },
-  { label: 'عدد المكالمات المنفذة',    hint: 'كم مكالمة نُفّذت',              get: (s) => s?.dialled },
-  { label: 'نسبة الاتصال',             hint: 'نسبة العملاء الذين تم الرد عليهم', get: (s) => s == null ? null : `${s.successRate}%` },
-  { label: 'عدد المكالمات غير المجابة', hint: 'لم يتم الرد',                   get: (s) => s?.outcomes?.no_answer, outcome: 'no_answer' },
-  { label: 'مشغول',                    hint: 'الخط مشغول',                    get: (s) => s?.outcomes?.busy, outcome: 'busy' },
-  { label: 'رقم غير صحيح',             hint: 'رقم غير صالح أو خارج الخدمة',    get: (s) => s?.outcomes?.invalid, outcome: 'invalid' },
-  { label: 'مغلق',                     hint: 'الجهاز مغلق أو خارج التغطية',    get: (s) => s?.outcomes?.switched_off, outcome: 'switched_off' },
-  { label: 'تعذّر الاتصال',            hint: 'فشل فني في الشبكة أو المزوّد',   get: (s) => s?.outcomes?.failed, outcome: 'failed', warn: true },
-  { label: 'متوسط مدة المكالمة',       hint: 'لكل مكالمة تم الرد عليها',       get: (s) => s == null ? null : fmtDur(s.avgDurationSec) },
-  { label: 'عدد المكالمات المحولة',    hint: 'تم تحويلها لموظف',              get: (s) => s?.outcomes?.transferred, outcome: 'transferred' },
-  { label: 'عدد المكالمات المكتملة',   hint: 'أكمل العميل الحوار',            get: (s) => s?.outcomes?.completed, outcome: 'completed' },
-  { label: 'عدد المكالمات المنتهية مبكراً', hint: 'أغلق قبل إكمال السيناريو',  get: (s) => s?.outcomes?.ended_early, outcome: 'ended_early' },
+  { label: 'عدد المكالمات المشغولة',       hint: 'الخط مشغول',                   get: (s) => s?.outcomes?.busy, outcome: 'busy' },
+  { label: 'عدد الأرقام غير الصحيحة',      hint: 'رقم غير صالح أو خارج الخدمة',   get: (s) => s?.outcomes?.invalid, outcome: 'invalid' },
+  { label: 'عدد الأرقام المغلقة',          hint: 'الجهاز مغلق أو خارج التغطية',   get: (s) => s?.outcomes?.switched_off, outcome: 'switched_off' },
+  { label: 'عدد المكالمات المحولة لموظف',  hint: 'تم تحويلها لموظف بشري',         get: (s) => s?.outcomes?.transferred, outcome: 'transferred' },
+  { label: 'عدد المكالمات المكتملة',       hint: 'أكمل العميل الحوار',           get: (s) => s?.outcomes?.completed, outcome: 'completed' },
+  { label: 'عدد المكالمات المنتهية مبكراً', hint: 'أُغلق قبل إكمال السيناريو',    get: (s) => s?.outcomes?.ended_early, outcome: 'ended_early' },
+  { label: 'معدل إكمال المكالمة',          hint: 'نسبة المكتملة من المكالمات المُجابة', get: (s) => s == null ? null : `${s.completionRate}%` },
 ];
 
 function KpiTable({ s, onPickOutcome, activeOutcome }) {

@@ -294,6 +294,20 @@ test('pending contacts are excluded from the dialled denominator', () => {
   assert.equal(s.successRate, Math.round((4 / 6) * 100));
 });
 
+test('completion rate = completed as a share of answered calls', () => {
+  // rowsFixture: 4 completed, 0 ended_early, 0 transferred → answered = 4.
+  const s = summarizeReport(rowsFixture);
+  assert.equal(s.completionRate, Math.round((4 / 4) * 100));
+  // A mix where not every answered call completed.
+  const mixed = summarizeReport([
+    { lead: LEAD.HOT,  outcome: OUTCOME.COMPLETED,   status: 'completed', durationSec: 40, callbackRequested: false },
+    { lead: LEAD.WARM, outcome: OUTCOME.ENDED_EARLY, status: 'completed', durationSec: 8,  callbackRequested: false },
+    { lead: LEAD.NO_ANSWER, outcome: OUTCOME.NO_ANSWER, status: 'no_answer', durationSec: 0, callbackRequested: false },
+  ]);
+  assert.equal(mixed.completionRate, 50, '1 completed of 2 answered = 50% (no-answer excluded)');
+  assert.equal(summarizeReport([]).completionRate, 0, 'no answered calls → 0, never NaN');
+});
+
 test('conversion = hot+warm as a share of answered calls', () => {
   const s = summarizeReport(rowsFixture);
   assert.equal(s.conversionRate, 50, '2 qualified of 4 answered');

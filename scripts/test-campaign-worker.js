@@ -22,6 +22,7 @@ axios.post = async () => { vapiCalls++; return { data: { id: `call-${vapiCalls}`
 
 const { sql, db } = require('../db');
 const camp = require('../services/campaigns');
+const { currentContext } = require('../lib/tenant-context');
 
 const nowSaudi = (new Date().getUTCHours() + 3) % 24;
 const openStart = (nowSaudi - 1 + 24) % 24;   // window open right now
@@ -142,6 +143,47 @@ test('a Vapi error with an array message does NOT crash the tick', async () => {
   const err = db.prepare('SELECT last_error FROM campaign_contacts WHERE campaign_id=?').get(cid).last_error;
   assert.equal(typeof err, 'string');
   assert.match(err, /assistantId|invalid number/, 'array joined into a readable string');
+});
+
+// ─── RLS context: the real "stops after one call / must press Run" bug ──
+// The worker runs outside any HTTP request, so it has no RLS tenant context.
+// Under RLS every campaign table is fail-closed, so a context-less query returns
+// ZERO rows and the worker never dials — only the HTTP run-now path (which
+// carries a context) does, which is exactly why a Run press was needed per call.
+// Prove the worker now establishes a tenant context around each campaign's tick.
+test('tick() runs each campaign inside its tenant RLS context (companyId set, not context-less)', async () => {
+  db.prepare("UPDATE campaigns SET status='paused' WHERE status='running'").run();
+  const cid = await makeCampaign({ name: 'ctx', contacts: 1 });
+  const company = get(cid).company_id;
+  let seen = 'unset';
+  const saved = axios.post;
+  axios.post = async () => { seen = currentContext(); return { data: { id: 'call-ctx' } }; };
+  try {
+    await camp.tick();                       // the WORKER path, not tickCampaign directly
+  } finally { axios.post = saved; }
+  assert.notEqual(seen, 'unset', 'a dial happened');
+  assert.ok(seen, 'a tenant context was active during the worker dial (would be null pre-fix)');
+  assert.equal(seen.companyId, company, 'context is pinned to the campaign company');
+  assert.equal(seen.bypass, false);
+});
+
+// The headline symptom: after one call the campaign stopped and needed a manual
+// Run. Prove the worker now advances to the NEXT contact on its own once a call
+// completes and frees the concurrency slot.
+test('campaign auto-continues: worker dials the next contact after one completes (no manual run-now)', async () => {
+  db.prepare("UPDATE campaigns SET status='paused' WHERE status='running'").run();
+  const cid = await makeCampaign({ name: 'seq', contacts: 3, maxConcurrent: 1 });
+  const placed = [];
+  for (let i = 0; i < 3; i++) {
+    await camp.tick();                       // worker places ONE (maxConcurrent=1)
+    const row = db.prepare("SELECT id, call_id FROM campaign_contacts WHERE campaign_id=? AND status='calling'").get(cid);
+    assert.ok(row, `tick ${i + 1} placed the next call automatically`);
+    placed.push(row.call_id);
+    await camp.handleCallEnded(row.call_id, 'customer-ended', 30);   // Vapi end-of-call frees the slot
+  }
+  assert.equal(new Set(placed).size, 3, 'three distinct contacts dialled in sequence, unattended');
+  const done = db.prepare("SELECT COUNT(*) n FROM campaign_contacts WHERE campaign_id=? AND status='completed'").get(cid).n;
+  assert.equal(done, 3, 'all three completed without pressing Run');
 });
 
 // ─── Heartbeat ────────────────────────────────────────────────────

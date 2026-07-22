@@ -16,6 +16,7 @@
 const queue = require('../lib/queue');
 const { purge, config } = require('../lib/retention');
 const { logger } = require('../lib/logger');
+const { runWithContext } = require('../lib/tenant-context');
 const data = require('../db');
 
 // Whitelist of purgeable tables. The table name is interpolated into SQL, so
@@ -35,7 +36,13 @@ async function deleteOlderThan(table, dateCol, cutoffIso) {
 async function runPurge() {
   const cfg = config();
   if (!cfg.length) return { skipped: 'no retention windows configured' };
-  const results = await purge(deleteOlderThan);
+  // Runs outside any HTTP request → no RLS tenant context. `calls` and `chats`
+  // are FORCE-RLS tenant tables, so a context-less DELETE would match ZERO rows
+  // (fail-closed) and silently purge nothing. This is a cross-tenant
+  // maintenance job, so run it under the system bypass.
+  const results = await runWithContext(
+    { bypass: true, companyId: null }, () => purge(deleteOlderThan),
+  );
   const total = results.reduce((n, r) => n + (r.deleted || 0), 0);
   if (total) logger.info('retention purge complete', { total, tables: results.length });
   return { results, total };

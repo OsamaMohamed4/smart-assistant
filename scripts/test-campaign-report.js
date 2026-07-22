@@ -76,6 +76,35 @@ test('unallocated number → Invalid Number, not No Answer', () => {
   assert.equal(q.lead, LEAD.INVALID, 'an unusable number is operationally different from a missed call');
 });
 
+test('a SIP/infra failure is Connection Failed, NOT Invalid Number (a good number is not the fault)', () => {
+  // The operator complaint: valid numbers were labelled "invalid" when the real
+  // cause was a platform/SIP failure. Reserve "invalid" for bad-number reasons.
+  const q = qualifyContact(
+    contact({ status: 'failed' }),
+    call({}, { duration_sec: 0, ended_reason: 'call.in-progress.error-providerfault-outbound-sip-407-proxy-authentication-required' }),
+  );
+  assert.equal(q.lead, LEAD.FAILED, 'infra failure ≠ invalid number');
+  assert.notEqual(q.lead, LEAD.INVALID);
+});
+
+test('a generic infra/network placement error is Connection Failed, not Invalid Number', () => {
+  // errToString of a transient Vapi/network error. No bad-number token, so it
+  // must read as a connection failure — before the fix this fell through to
+  // "invalid number" and wrongly blamed the phone.
+  for (const err of ['Request failed with status code 500', 'socket hang up', 'connect ETIMEDOUT 44.1.2.3:443']) {
+    const q = qualifyContact(contact({ status: 'failed', last_error: err }), null);
+    assert.equal(q.lead, LEAD.FAILED, `"${err}" → Connection Failed`);
+  }
+});
+
+test('a lost-webhook stale timeout still reads as No Answer (never Invalid Number)', () => {
+  // requeueStaleCalling force-fails a stuck "calling" row with this last_error;
+  // "timeout" matches the no-answer reasons, so it is a miss, not a bad number.
+  const q = qualifyContact(contact({ status: 'failed', last_error: 'timeout: no end-of-call report' }), null);
+  assert.equal(q.lead, LEAD.NO_ANSWER);
+  assert.notEqual(q.lead, LEAD.INVALID);
+});
+
 test('never dialled → Pending, not counted as a failure', () => {
   assert.equal(qualifyContact(contact({ status: 'pending' }), null).lead, LEAD.PENDING);
   assert.equal(qualifyContact(contact({ status: 'calling' }), null).lead, LEAD.PENDING);

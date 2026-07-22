@@ -103,6 +103,11 @@ const CSV_COLUMNS = [
   ['nextAction',    'الإجراء التالي'],
   ['attempts',      'عدد المحاولات'],
   ['lastAttemptAt', 'آخر محاولة'],
+  // Raw provider signal — the exact reason the call ended (Vapi's endedReason)
+  // and any technical placement error, so an operator can see WHY a call failed
+  // instead of trusting only the mapped bucket.
+  ['endedReason',   'سبب الإنهاء (من المزوّد)'],
+  ['lastError',     'الخطأ الفني'],
   ['recordingUrl',  'رابط التسجيل'],
 ];
 

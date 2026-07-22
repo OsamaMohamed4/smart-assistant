@@ -16,11 +16,12 @@ const LEAD_META = {
   hot           : { label: 'عميل ساخن',    tone: 'danger',  icon: Flame,          card: 'from-rose-500 to-orange-500' },
   warm          : { label: 'عميل دافئ',    tone: 'warning', icon: ThermometerSun, card: 'from-amber-400 to-amber-500' },
   cold          : { label: 'عميل بارد',    tone: 'info',    icon: Snowflake,      card: 'from-sky-400 to-sky-500' },
-  not_interested: { label: 'غير مهتم',     tone: 'neutral', icon: PhoneOff,       card: 'from-ink-400 to-ink-500' },
-  no_answer     : { label: 'لم يرد',       tone: 'neutral', icon: PhoneMissed,    card: 'from-ink-300 to-ink-400' },
-  invalid_number: { label: 'رقم غير صالح', tone: 'danger',  icon: PhoneOff,       card: 'from-rose-400 to-rose-500' },
-  unqualified   : { label: 'غير مصنّف',    tone: 'outline', icon: Users,          card: 'from-ink-300 to-ink-400' },
-  pending       : { label: 'لم يُتصل بعد', tone: 'neutral', icon: Clock,          card: 'from-ink-200 to-ink-300' },
+  not_interested   : { label: 'غير مهتم',     tone: 'neutral', icon: PhoneOff,       card: 'from-ink-400 to-ink-500' },
+  no_answer        : { label: 'لم يرد',       tone: 'neutral', icon: PhoneMissed,    card: 'from-ink-300 to-ink-400' },
+  invalid_number   : { label: 'رقم غير صالح', tone: 'danger',  icon: PhoneOff,       card: 'from-rose-400 to-rose-500' },
+  connection_failed: { label: 'تعذّر الاتصال', tone: 'danger',  icon: PhoneOff,      card: 'from-rose-400 to-rose-500' },
+  unqualified      : { label: 'غير مصنّف',    tone: 'outline', icon: Users,          card: 'from-ink-300 to-ink-400' },
+  pending          : { label: 'لم يُتصل بعد', tone: 'neutral', icon: Clock,          card: 'from-ink-200 to-ink-300' },
 };
 // Per-call operational outcome (separate axis from lead qualification).
 // Mirrors lib/lead-scoring.js OUTCOME.
@@ -35,6 +36,11 @@ const OUTCOME_META = {
   failed      : { label: 'تعذّر الاتصال', tone: 'danger' },
   pending     : { label: 'لم يُتصل بعد', tone: 'neutral' },
 };
+
+// The exact provider signal for a row: Vapi's endedReason, falling back to any
+// technical placement error. Shown verbatim so an operator sees the real cause
+// (e.g. "customer-busy", "twilio-failed-to-connect") behind the mapped bucket.
+const rawReason = (r) => r.endedReason || r.lastError || null;
 
 const fmtDur = (s) => {
   const n = Number(s || 0);
@@ -241,7 +247,14 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
                               <div className="font-mono text-ink-900" dir="ltr">{r.phone}</div>
                               {r.name && <div className="text-[11px] text-ink-500">{r.name}</div>}
                             </Td>
-                            <Td><Badge tone={om.tone}>{om.label}</Badge></Td>
+                            <Td>
+                              <Badge tone={om.tone}>{om.label}</Badge>
+                              {rawReason(r) && (
+                                <div className="text-[10px] text-ink-400 font-mono mt-1 max-w-[150px] truncate" dir="ltr" title={rawReason(r)}>
+                                  {rawReason(r)}
+                                </div>
+                              )}
+                            </Td>
                             <Td className="tabular-nums">{fmtDur(r.durationSec)}</Td>
                             <Td>
                               <div className="flex flex-col gap-1 items-start">
@@ -444,8 +457,21 @@ function ContactDetailModal({ row, onClose }) {
           <a href={row.recordingUrl} target="_blank" rel="noreferrer"
             className="inline-block text-[12px] text-brand-600 hover:underline">استمع لتسجيل المكالمة ↗</a>
         )}
-        {row.lastError && !row.summary && (
-          <Block title="سبب الفشل"><span className="text-rose-600" dir="ltr">{row.lastError}</span></Block>
+        {/* Raw provider signal — always shown when present, so the real reason a
+            call ended/failed is never hidden behind the mapped bucket. */}
+        {(row.endedReason || row.lastError) && (
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-[12.5px] pt-1 border-t border-ink-100">
+            {row.endedReason && (
+              <Field label="سبب الإنهاء (من المزوّد)">
+                <span className="font-mono text-[11.5px]" dir="ltr">{row.endedReason}</span>
+              </Field>
+            )}
+            {row.lastError && (
+              <Field label="الخطأ الفني">
+                <span className="font-mono text-[11.5px] text-rose-600" dir="ltr">{row.lastError}</span>
+              </Field>
+            )}
+          </dl>
         )}
       </div>
     </Modal>

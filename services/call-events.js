@@ -7,6 +7,7 @@ const { summarize } = require('../summarize');
 const { logger } = require('../lib/logger');
 const { sendCallCompleted } = require('./outbound-webhook');
 const { encryptField } = require('../lib/pii');
+const { runWithContext } = require('../lib/tenant-context');
 
 // Resolve which company a Vapi call belongs to. Primary key is the assistant
 // ID (matches assistant_id OR assistant_id_inbound). But assistant IDs change
@@ -147,9 +148,19 @@ async function drainWebhookInbox(limit = 5) {
 // Background drain every 60s. Without this, a failed event only got retried
 // when the NEXT webhook arrived — an evening failure could sit unprocessed
 // until the next morning's first call. unref() so it never blocks shutdown.
+//
+// Runs OUTSIDE any HTTP request, so — like the campaign worker — it has no RLS
+// tenant context. Its work (upsertCall into `calls`, handleCallEnded into
+// `campaign_contacts`) touches FORCE-RLS tables that fail closed, so without an
+// explicit context a retried end-of-call event would silently update ZERO rows
+// and the campaign contact would stay stuck in `calling` until the 30-min stale
+// sweep force-failed it (mislabelling a connected call as "invalid"). The event
+// is cross-tenant (processVapiEvent resolves the company per event), so drain
+// under the system bypass — the same context the webhook HTTP route already has.
 function startDrainTimer() {
   const t = setInterval(() => {
-    drainWebhookInbox(10).catch((e) => logger.error('scheduled drain failed', { err: e.message }));
+    runWithContext({ bypass: true, companyId: null },
+      () => drainWebhookInbox(10)).catch((e) => logger.error('scheduled drain failed', { err: e.message }));
   }, 60_000);
   t.unref();
   return t;

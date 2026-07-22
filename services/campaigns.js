@@ -16,6 +16,7 @@ const { logger } = require('../lib/logger');
 const { loadCompany } = require('../companies');
 const { dailyCap, checkAndBumpUsage } = require('./usage');
 const { encryptField, decryptField } = require('../lib/pii');
+const { runWithContext } = require('../lib/tenant-context');
 
 const VAPI_TIMEOUT_MS = 20_000;
 const STALE_CALLING_MIN = 30;
@@ -269,11 +270,23 @@ async function tick() {
   const t0 = Date.now();
   let placedTotal = 0;
   try {
-    const running = await sql.listRunningCampaigns.all();
+    // The worker runs OUTSIDE any HTTP request, so it has no RLS tenant context.
+    // Under RLS_ENABLED=1 every tenant table (campaigns, campaign_contacts) is
+    // FORCE ROW LEVEL SECURITY and fail-closed, so a context-less query returns
+    // ZERO rows — the worker would tick forever and never see a campaign to
+    // dial (the "stops after one call, must press Run" bug). Listing all
+    // running campaigns is inherently cross-tenant, so it runs under the system
+    // bypass; each campaign's own tick then runs pinned to that tenant — exactly
+    // the context the HTTP run-now path already uses, so behaviour is identical.
+    const running = await runWithContext(
+      { bypass: true, companyId: null }, () => sql.listRunningCampaigns.all(),
+    );
     health.lastRunningCount = running.length;
     for (const campaign of running) {
       try {
-        const res = await tickCampaign(campaign);
+        const res = await runWithContext(
+          { bypass: false, companyId: campaign.company_id }, () => tickCampaign(campaign),
+        );
         placedTotal += res.placed || 0;
         // Log the reason only when it CHANGES for this campaign, so the log
         // shows exactly why a campaign is idle without spamming every 30s.

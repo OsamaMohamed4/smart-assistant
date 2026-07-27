@@ -451,8 +451,10 @@ function ContactDetailModal({ row, onClose }) {
             <p className="text-[12.5px] text-ink-800">{row.nextAction}</p>
           </div>
         )}
-        {row.recordingUrl && (
-          <a href={row.recordingUrl} target="_blank" rel="noreferrer"
+        {row.callId && row.recordingUrl && (
+          // Proxied through our backend (which re-resolves a fresh URL from the
+          // provider) — the raw storage link expires and errors when opened.
+          <a href={`/api/calls/${row.callId}/recording`} target="_blank" rel="noreferrer"
             className="inline-block text-[12px] text-brand-600 hover:underline">استمع لتسجيل المكالمة ↗</a>
         )}
         {/* Raw provider signal — always shown when present, so the real reason a

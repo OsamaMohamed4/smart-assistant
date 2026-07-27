@@ -69,7 +69,9 @@ export function SessionDetail({ open, onClose, kind, data, companyName, onResumm
                 </div>
                 <span className="text-[12px] font-semibold text-ink-700 uppercase tracking-wider">تسجيل المكالمة</span>
               </div>
-              <audio controls preload="none" src={data.recording_url} className="w-full h-10" />
+              {/* Proxied via our backend, which re-resolves a fresh URL from the
+                  provider — the raw storage link expires and then errors. */}
+              <audio controls preload="none" src={`/api/calls/${data.id}/recording`} className="w-full h-10" />
             </div>
           )}
 

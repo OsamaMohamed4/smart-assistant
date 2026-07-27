@@ -1302,6 +1302,62 @@ app.post('/api/calls/:id/summarize', ensureCallOwned, async (req, res) => {
   res.json({ summary });
 });
 
+// Stream a call's audio recording through our own backend.
+//
+// Why proxy instead of linking the stored URL directly: the provider's
+// recordingUrl is a presigned/expiring storage link. Once it expires, opening
+// it in the browser returns the raw storage error the operator saw
+// (`<Error><Code>InvalidArgument</Code><Message>Authorization</Message>`). It
+// also leaks the storage URL to the client. So at play-time we re-resolve the
+// FRESH url from Vapi (a presigned link is regenerated on each GET /call) and
+// pipe the bytes behind our own session auth. Range is forwarded so the
+// <audio> element can seek. Tenant-scoped via ensureCallOwned.
+app.get('/api/calls/:id/recording', ensureCallOwned, async (req, res) => {
+  const call = req._call;
+  let url = call.recording_url || null;
+
+  // Prefer a freshly-resolved URL so an expired presign is replaced.
+  if (process.env.VAPI_API_KEY) {
+    try {
+      const r = await axios.get(`https://api.vapi.ai/call/${encodeURIComponent(call.id)}`, {
+        headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}` },
+        timeout: 10_000,
+      });
+      const v = r.data || {};
+      const fresh = v.artifact?.recordingUrl || v.recordingUrl
+        || v.artifact?.stereoRecordingUrl || v.artifact?.monoRecordingUrl || null;
+      if (fresh) url = fresh;
+    } catch (e) {
+      req.log.warn('recording refresh failed', { err: e.message, callId: call.id });
+    }
+  }
+  if (!url) return res.status(404).json({ error: 'لا يوجد تسجيل لهذه المكالمة' });
+
+  try {
+    // Only forward Range — never our cookie/auth or an Authorization header,
+    // which on a presigned URL would itself trigger InvalidArgument.
+    const range = req.headers.range;
+    const upstream = await axios.get(url, {
+      responseType : 'stream',
+      timeout      : 20_000,
+      headers      : range ? { Range: range } : {},
+      validateStatus: (s) => s >= 200 && s < 400,
+      maxRedirects : 5,
+    });
+    res.status(upstream.status);
+    for (const h of ['content-type', 'content-length', 'accept-ranges', 'content-range', 'cache-control']) {
+      if (upstream.headers[h]) res.setHeader(h, upstream.headers[h]);
+    }
+    if (!upstream.headers['content-type']) res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Disposition', `inline; filename="call-${call.id}.mp3"`);
+    upstream.data.on('error', () => { try { res.destroy(); } catch {} });
+    upstream.data.pipe(res);
+  } catch (e) {
+    req.log.error('recording proxy failed', { err: e.message, callId: call.id });
+    if (!res.headersSent) res.status(502).json({ error: 'تعذّر جلب تسجيل المكالمة' });
+  }
+});
+
 // Vapi sync: rebuild the Vapi assistant from the company's ACTIVE SCENARIO.
 // Everything that matters — system prompt, first message, success criteria,
 // variable list — comes from the scenario row. Pressing this button is the

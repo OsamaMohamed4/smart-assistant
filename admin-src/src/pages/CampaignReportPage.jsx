@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   ArrowRight, Download, RefreshCw, Search, Flame, ThermometerSun, Snowflake,
-  PhoneMissed, PhoneOff, PhoneForwarded, Clock, Users, FileText, Printer,
+  PhoneMissed, PhoneOff, PhoneForwarded, Clock, Users, FileText, Printer, AlertTriangle,
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -38,20 +38,20 @@ const OUTCOME_META = {
 };
 
 // The five headline campaign results (النتائج الرئيسية). Each is derived from
-// data the report already computes — no new field, no AI. `filter` wires the
-// card to the same server-side filters the table uses, so clicking a card
-// narrows the results below it.
-//   مهتم بالشراء     = hot + warm (both expressed buying intent)
-//   يحتاج متابعة      = cold / متردد (interested but undecided)
-//   غير مهتم          = not_interested
-//   تم التحويل للمبيعات = transferred to a human agent (outcome axis)
-//   طلب معاودة الاتصال = callback flag
+// data the report already computes — no new field, no AI. `sub` is the
+// description shown under each card. `filter` wires the card to the same
+// server-side filters the table uses, so clicking a card narrows the results.
+//   مهتم بالشراء       = hot + warm (both expressed buying intent)
+//   غير مهتم            = not_interested
+//   تم التحويل للمبيعات  = transferred to a human agent (outcome axis)
+//   طلب معاودة الاتصال  = callback flag
+//   لم يكتمل التواصل     = ended_early (the call ended before it completed)
 const RESULT_CARDS = [
-  { key: 'interested',     label: 'مهتم بالشراء',       sub: 'ساخن + دافئ',    icon: Flame,          card: 'from-emerald-500 to-teal-600',   get: (s) => (s?.leads?.hot || 0) + (s?.leads?.warm || 0), filter: { kind: 'lead', val: 'interested' } },
-  { key: 'cold',           label: 'يحتاج متابعة',       sub: 'مهتم لكنه متردد', icon: ThermometerSun, card: 'from-sky-400 to-sky-500',        get: (s) => s?.leads?.cold,                              filter: { kind: 'lead', val: 'cold' } },
-  { key: 'not_interested', label: 'غير مهتم',           sub: 'لا يحتاج متابعة', icon: PhoneOff,       card: 'from-ink-400 to-ink-500',        get: (s) => s?.leads?.not_interested,                    filter: { kind: 'lead', val: 'not_interested' } },
-  { key: 'transferred',    label: 'تم التحويل للمبيعات', sub: 'حُوّلت لموظف',    icon: PhoneForwarded, card: 'from-violet-500 to-indigo-600',  get: (s) => s?.outcomes?.transferred,                    filter: { kind: 'outcome', val: 'transferred' } },
-  { key: 'callback',       label: 'طلب معاودة الاتصال', sub: 'طلب اتصالاً لاحقاً', icon: Users,       card: 'from-brand-500 to-brand-600',    get: (s) => s?.callbacks,                                filter: { kind: 'lead', val: 'callback' } },
+  { key: 'interested',     label: 'مهتم بالشراء',        sub: 'عميل مهتم وجاهز للمتابعة',   icon: Flame,          card: 'from-emerald-500 to-teal-600',  get: (s) => (s?.leads?.hot || 0) + (s?.leads?.warm || 0), filter: { kind: 'lead', val: 'interested' } },
+  { key: 'not_interested', label: 'غير مهتم',            sub: 'لا يرغب بالمتابعة حاليًا',    icon: PhoneOff,       card: 'from-rose-500 to-rose-600',     get: (s) => s?.leads?.not_interested,                    filter: { kind: 'lead', val: 'not_interested' } },
+  { key: 'transferred',    label: 'تم التحويل للمبيعات',  sub: 'تم تحويل العميل إلى موظف',    icon: PhoneForwarded, card: 'from-violet-500 to-indigo-600',  get: (s) => s?.outcomes?.transferred,                    filter: { kind: 'outcome', val: 'transferred' } },
+  { key: 'callback',       label: 'طلب معاودة الاتصال',   sub: 'طلب إعادة التواصل لاحقًا',    icon: Clock,          card: 'from-brand-500 to-brand-600',   get: (s) => s?.callbacks,                                filter: { kind: 'lead', val: 'callback' } },
+  { key: 'ended_early',    label: 'لم يكتمل التواصل',     sub: 'انتهت المكالمة قبل إكمالها',  icon: AlertTriangle,  card: 'from-amber-500 to-orange-500',  get: (s) => s?.outcomes?.ended_early,                    filter: { kind: 'outcome', val: 'ended_early' } },
 ];
 
 // The exact provider signal for a row: Vapi's endedReason, falling back to any
@@ -414,7 +414,10 @@ function ResultCard({ c, s, filters, setF }) {
         ${active ? 'ring-2 ring-offset-2 ring-ink-900 scale-[0.98]' : 'hover:brightness-110'}`}>
       <div className="flex items-center gap-1.5 text-[11px] opacity-90"><Icon className="w-3.5 h-3.5" /> {c.label}</div>
       <div className="text-[22px] font-bold tabular-nums mt-1">{n ?? '—'}</div>
-      <div className="text-[10px] opacity-80">{active ? 'اضغط لإلغاء الفلتر' : (c.sub || 'اضغط للتصفية')}</div>
+      {/* The description sits under every card (always visible); the filter
+          state is shown by the ring, so the description is never hidden. */}
+      <div className="text-[10px] opacity-80 leading-snug">{c.sub}</div>
+      {active && <div className="text-[9px] opacity-70 mt-0.5">اضغط للإلغاء</div>}
     </button>
   );
 }

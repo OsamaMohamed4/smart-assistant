@@ -243,39 +243,33 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
                   <table className="w-full text-[12.5px]">
                     <thead>
                       <tr className="bg-ink-50/70 text-ink-600 text-[10.5px] uppercase tracking-wide">
-                        <Th>العميل</Th><Th>نتيجة المكالمة</Th><Th>المدة</Th><Th>التصنيف</Th>
-                        <Th>طلب العميل</Th><Th>الملخص</Th><Th>الإجراء التالي</Th>
+                        <Th>اسم العميل</Th><Th>رقم الجوال</Th><Th>التصنيف</Th>
+                        <Th>مدة المكالمة</Th><Th>ملخص المكالمة</Th><Th>الإجراء التالي</Th>
                       </tr>
                     </thead>
                     <tbody>
                       {data.rows.map((r) => {
                         const lm = LEAD_META[r.lead] || LEAD_META.pending;
-                        const om = OUTCOME_META[r.outcome] || OUTCOME_META.pending;
                         return (
                           <tr key={r.id} onClick={() => setDetailRow(r)}
                             className="border-t border-ink-100 hover:bg-ink-50/50 cursor-pointer align-top">
-                            <Td>
-                              <div className="font-mono text-ink-900" dir="ltr">{r.phone}</div>
-                              {r.name && <div className="text-[11px] text-ink-500">{r.name}</div>}
-                            </Td>
-                            <Td>
-                              <Badge tone={om.tone}>{om.label}</Badge>
-                              {rawReason(r) && (
-                                <div className="text-[10px] text-ink-400 font-mono mt-1 max-w-[150px] truncate" dir="ltr" title={rawReason(r)}>
-                                  {rawReason(r)}
-                                </div>
-                              )}
-                            </Td>
-                            <Td className="tabular-nums">{fmtDur(r.durationSec)}</Td>
+                            <Td className="text-ink-900">{r.name || '—'}</Td>
+                            <Td><span className="font-mono text-ink-800" dir="ltr">{r.phone}</span></Td>
                             <Td>
                               <div className="flex flex-col gap-1 items-start">
                                 <Badge tone={lm.tone} dot>{lm.label}</Badge>
                                 {r.callbackRequested && <Badge tone="brand">معاودة اتصال</Badge>}
+                                {/* raw provider reason for calls that never connected */}
+                                {rawReason(r) && !r.durationSec && (
+                                  <div className="text-[10px] text-ink-400 font-mono max-w-[150px] truncate" dir="ltr" title={rawReason(r)}>
+                                    {rawReason(r)}
+                                  </div>
+                                )}
                               </div>
                             </Td>
-                            <Td className="max-w-[160px]"><span className="line-clamp-2 text-ink-700">{r.intent || '—'}</span></Td>
-                            <Td className="max-w-[260px]"><span className="line-clamp-2 text-ink-600">{r.summary || '—'}</span></Td>
-                            <Td className="max-w-[180px]"><span className="line-clamp-2 text-ink-700">{r.nextAction || '—'}</span></Td>
+                            <Td className="tabular-nums">{fmtDur(r.durationSec)}</Td>
+                            <Td className="max-w-[320px]"><span className="line-clamp-2 text-ink-600">{r.summary || '—'}</span></Td>
+                            <Td className="max-w-[190px]"><span className="line-clamp-2 text-ink-700">{r.nextAction || '—'}</span></Td>
                           </tr>
                         );
                       })}
@@ -288,23 +282,24 @@ export function CampaignReportPage({ companyId, campaign, onBack }) {
               <div className="lg:hidden space-y-2">
                 {data.rows.map((r) => {
                   const lm = LEAD_META[r.lead] || LEAD_META.pending;
-                  const om = OUTCOME_META[r.outcome] || OUTCOME_META.pending;
                   return (
                     <button key={r.id} onClick={() => setDetailRow(r)}
                       className="w-full text-right bg-white border border-ink-100 rounded-2xl shadow-card p-3.5 focus-ring">
                       <div className="flex items-start gap-2">
                         <div className="flex-1 min-w-0">
-                          <div className="font-mono text-[13px] text-ink-900" dir="ltr">{r.phone}</div>
-                          {r.name && <div className="text-[11.5px] text-ink-500 truncate">{r.name}</div>}
+                          <div className="text-[13px] font-medium text-ink-900 truncate">{r.name || '—'}</div>
+                          <div className="font-mono text-[11.5px] text-ink-500" dir="ltr">{r.phone}</div>
                         </div>
                         <Badge tone={lm.tone} dot>{lm.label}</Badge>
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                        <Badge tone={om.tone}>{om.label}</Badge>
-                        <span className="text-[11px] text-ink-500 tabular-nums">{fmtDur(r.durationSec)}</span>
+                        <span className="text-[11px] text-ink-500 tabular-nums">مدة المكالمة: {fmtDur(r.durationSec)}</span>
                         {r.callbackRequested && <Badge tone="brand">معاودة اتصال</Badge>}
                       </div>
                       {r.summary && <p className="mt-2 text-[11.5px] text-ink-600 line-clamp-2">{r.summary}</p>}
+                      {r.nextAction && r.nextAction !== '—' && (
+                        <p className="mt-1 text-[11px] text-brand-700">الإجراء التالي: {r.nextAction}</p>
+                      )}
                     </button>
                   );
                 })}

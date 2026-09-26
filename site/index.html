@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>مسار — ذكاء يصنع الفرق</title>
+<meta name="description" content="الذكاء الاصطناعي الذي يعمل داخل أعمالك. مكالمات واردة وصادرة، ومحادثات رقمية، تفهم العميل وتنفّذ الإجراء وتسجّل النتيجة.">
+<meta name="theme-color" content="#765C36">
+
+<!-- The mark, drawn from the official vector. One path set filled with
+     currentColor, so a single CSS colour recolours it and no separate
+     reversed artwork is needed. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='175.88 369.57 239.65 76.01'%3E%3Cpath fill='%23765C36' d='M364.303 384.503 L364.916 395.576 C310.764 415.699 257.952 445.575 232.801 426.894 C216.258 412.369 220.142 372.551 220.142 372.551 L227.964 369.618 C227.964 369.618 223.968 408.642 241.205 418.079 C269.287 431.954 346.088 387.983 364.303 384.503 M392.269 391.834 C380.494 392.336 363.741 403.24 347.796 408.563 L350.45 419.361 C365.45 413.166 382.206 403.031 393.628 404.497 C403.512 405.797 407.177 415.707 407.249 417.165 C407.321 418.623 387.901 418.444 383.941 408.38 L378.792 409.97 C379.156 430.025 402.918 437.627 409.749 428.438 C415.535 419.004 410.331 391.956 392.269 391.834 M180.877 412.698 L175.883 421.755 C201.899 432.695 223.933 417.144 253.438 399.806 L251.552 389.609 C227.91 404.177 202.923 418.734 180.877 412.698 M269.103 400.756 L269.103 396.985 L341.943 369.569 L341.943 373.34 Z'/%3E%3C/svg%3E">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- IBM Plex Sans Arabic is PROVISIONAL. It stands in until the client's
+     official Arabic typeface arrives. Swapping it is this line plus
+     --font-ar in styles.css. LilyUPC is deliberately not here: it contains
+     zero Arabic glyphs, so it lives inside the logo artwork only. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<link rel="stylesheet" href="/site/styles.css">
+</head>
+<body>
+
+<a class="skip" href="#main">تخطَّ إلى المحتوى</a>
+
+<!-- ── The official mark, defined once and reused ────────────────── -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+  <symbol id="m-mark" viewBox="175.88 369.57 239.65 76.01"><path fill="currentColor" d="M364.303 384.503 L364.916 395.576 C310.764 415.699 257.952 445.575 232.801 426.894 C216.258 412.369 220.142 372.551 220.142 372.551 L227.964 369.618 C227.964 369.618 223.968 408.642 241.205 418.079 C269.287 431.954 346.088 387.983 364.303 384.503 M392.269 391.834 C380.494 392.336 363.741 403.24 347.796 408.563 L350.45 419.361 C365.45 413.166 382.206 403.031 393.628 404.497 C403.512 405.797 407.177 415.707 407.249 417.165 C407.321 418.623 387.901 418.444 383.941 408.38 L378.792 409.97 C379.156 430.025 402.918 437.627 409.749 428.438 C415.535 419.004 410.331 391.956 392.269 391.834 M180.877 412.698 L175.883 421.755 C201.899 432.695 223.933 417.144 253.438 399.806 L251.552 389.609 C227.91 404.177 202.923 418.734 180.877 412.698 M269.103 400.756 L269.103 396.985 L341.943 369.569 L341.943 373.34 Z"/></symbol>
+</defs></svg>
+
+<!-- ══ Header ═══════════════════════════════════════════════════ -->
+<header class="site-header">
+  <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="القائمة">
+  <div class="container nav">
+    <a class="brand" href="#top" aria-label="مسار — الصفحة الرئيسية">
+      <svg viewBox="0 0 239.65 76.01" role="img" aria-label="مسار"><use href="#m-mark"/></svg>
+    </a>
+    <ul class="nav-links">
+      <li><a href="#solution">المنصة</a></li>
+      <li><a href="#capabilities">القدرات</a></li>
+      <li><a href="#teams">الفرق</a></li>
+      <li><a href="#sectors">القطاعات</a></li>
+      <li><a href="#security">الأمان</a></li>
+    </ul>
+    <span class="nav-spacer"></span>
+    <!-- TODO(client): destination for the demo request is not yet decided.
+         Left inert rather than pointing at an invented address. -->
+    <a class="btn btn-primary nav-cta" href="#contact">احجز عرضًا توضيحيًا</a>
+    <label for="nav-toggle" class="nav-burger" aria-label="فتح القائمة">
+      <span></span><span></span><span></span>
+    </label>
+  </div>
+  <nav class="nav-drawer" aria-label="القائمة الرئيسية">
+    <ul>
+      <li><a href="#solution">المنصة</a></li>
+      <li><a href="#capabilities">القدرات</a></li>
+      <li><a href="#teams">الفرق</a></li>
+      <li><a href="#sectors">القطاعات</a></li>
+      <li><a href="#security">الأمان</a></li>
+    </ul>
+    <div class="drawer-cta"><a class="btn btn-primary" href="#contact">احجز عرضًا توضيحيًا</a></div>
+  </nav>
+</header>
+
+<main id="main">
+
+<!-- ══ 01 Hero ══════════════════════════════════════════════════ -->
+<section class="hero" id="top">
+  <div class="container">
+    <p class="eyebrow">AI FOR SAUDI BUSINESS</p>
+    <h1>ذكاء يصنع الفرق</h1>
+    <hr class="stroke">
+    <p class="lede">الذكاء الاصطناعي الذي يعمل داخل أعمالك. يفهم العميل، ويتخذ الإجراء، ويسجّل النتيجة.</p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="#contact">احجز عرضًا توضيحيًا</a>
+      <a class="btn btn-ghost" href="#solution">اكتشف المنصة</a>
+    </div>
+    <div class="channels">
+      <span>مكالمات واردة وصادرة</span>
+      <span>محادثات رقمية</span>
+      <span>قاعدة معرفة</span>
+      <span>تحويل إلى موظف</span>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 02 The solution ══════════════════════════════════════════ -->
+<section class="section" id="solution">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">THE PLATFORM</p>
+      <h2>من الذكاء الاصطناعي إلى إنجاز الأعمال</h2>
+      <hr class="stroke sm">
+      <p class="lede">لا يكتفي بفهم العميل والإجابة على سؤاله. يفهم، ويقرر، وينفذ، ويتابع.</p>
+    </div>
+    <div class="grid grid-4">
+      <div class="pillar">
+        <span class="tagline">AI Agents</span>
+        <h3>وكلاء ذكاء اصطناعي</h3>
+        <p>وكلاء مصمَّمون حسب طبيعة عملك وأهدافك، لا قوالب جاهزة.</p>
+      </div>
+      <div class="pillar">
+        <span class="tagline">Voice AI</span>
+        <h3>مكالمات صوتية</h3>
+        <p>مكالمات واردة وصادرة للتواصل والتأهيل والمتابعة وتنفيذ الإجراءات.</p>
+      </div>
+      <div class="pillar">
+        <span class="tagline">Conversational AI</span>
+        <h3>محادثات رقمية</h3>
+        <p>محادثات ذكية عبر القنوات الرقمية، بنفس الفهم ونفس المصادر.</p>
+      </div>
+      <div class="pillar">
+        <span class="tagline">AI Automation</span>
+        <h3>أتمتة العمليات</h3>
+        <p>اربط أنظمتك واجعل المهام تنتقل تلقائيًا من خطوة إلى أخرى.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 03 Capabilities ══════════════════════════════════════════
+     Honest by construction: two capabilities are live today and eight
+     are declared but not yet built. The state shown here mirrors the
+     backend capability registry, which refuses to enable anything
+     marked قريبًا. No capability is presented as working when it is not.
+     ═════════════════════════════════════════════════════════════ -->
+<section class="section" id="capabilities">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">CAPABILITIES</p>
+      <h2>ما الذي ينفّذه المساعد</h2>
+      <hr class="stroke sm">
+      <p class="lede">كل قدرة تُفعَّل لكل شركة على حدة. ما لم يُفعَّل لا يصل إلى العميل.</p>
+    </div>
+    <div class="caps">
+      <div class="cap">
+        <span class="cap-name">قاعدة المعرفة</span>
+        <span class="cap-desc">البحث في مستندات الشركة أثناء المكالمة والإجابة بمعلومات رسمية.</span>
+        <span class="cap-state state-live">متاح</span>
+      </div>
+      <div class="cap">
+        <span class="cap-name">تحويل المكالمات</span>
+        <span class="cap-desc">تحويل المكالمة إلى موظف بشري عند الحاجة.</span>
+        <span class="cap-state state-live">متاح</span>
+      </div>
+      <div class="cap">
+        <span class="cap-name">حجز المواعيد</span>
+        <span class="cap-desc">حجز المواعيد للعملاء أثناء المكالمة.</span>
+        <span class="cap-state state-soon">قريبًا</span>
+      </div>
+      <div class="cap">
+        <span class="cap-name">استقبال الطلبات</span>
+        <span class="cap-desc">تسجيل طلبات العملاء وإحالتها للفريق المختص.</span>
+        <span class="cap-state state-soon">قريبًا</span>
+      </div>
+      <div class="cap">
+        <span class="cap-name">فتح البلاغات</span>
+        <span class="cap-desc">فتح بلاغ أو شكوى وتتبّعها.</span>
+        <span class="cap-state state-soon">قريبًا</span>
+      </div>
+      <div class="cap">
+        <span class="cap-name">تحديث بيانات العملاء</span>
+        <span class="cap-desc">تحديث بيانات العميل في سجلات الشركة.</span>
+        <span class="cap-state state-soon">قريبًا</span>
+      </div>
+      <div class="cap">
+        <span class="cap-name">إرسال الرسائل</span>
+        <span class="cap-desc">إرسال رسالة للعميل من قوالب معتمدة.</span>
+        <span class="cap-state state-soon">قريبًا</span>
+      </div>
+      <div class="cap">
+        <span class="cap-name">تنفيذ الإجراءات</span>
+        <span class="cap-desc">تنفيذ إجراء تشغيلي معرَّف مسبقًا.</span>
+        <span class="cap-state state-soon">قريبًا</span>
+      </div>
+      <div class="cap">
+        <span class="cap-name">الربط مع الأنظمة</span>
+        <span class="cap-desc">الاتصال بأنظمة الشركة الداخلية.</span>
+        <span class="cap-state state-soon">قريبًا</span>
+      </div>
+      <div class="cap">
+        <span class="cap-name">تبادل البيانات</span>
+        <span class="cap-desc">قراءة بيانات من أنظمة الشركة أثناء المكالمة.</span>
+        <span class="cap-state state-soon">قريبًا</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 04 How a call works ══════════════════════════════════════ -->
+<section class="section" id="how">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">HOW IT WORKS</p>
+      <h2>ماذا يحدث خلال المكالمة</h2>
+      <hr class="stroke sm">
+    </div>
+    <ol class="flow">
+      <li>
+        <div>
+          <h3>يتصل العميل</h3>
+          <p>ترد المنصة على الرقم المخصص للشركة، ويصلها رقم المتصل واسم الشركة قبل أن يبدأ الحديث.</p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h3>يفهم المساعد الطلب</h3>
+          <p>يتحدث بالعربية ويفهم اللهجة، ويعرف بيانات الشركة وساعات عملها وخدماتها.</p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h3>يبحث أو ينفّذ</h3>
+          <p>يبحث في قاعدة معرفة الشركة عن المعلومة، أو يحوّل المكالمة إلى موظف مختص عند الحاجة.</p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h3>يسجّل النتيجة</h3>
+          <p>يُحفظ نص المكالمة وملخّصها ومدتها، وتظهر في لوحة التحكم مباشرة بعد انتهاء المكالمة.</p>
+        </div>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<!-- ══ 05 Teams ═════════════════════════════════════════════════ -->
+<section class="section" id="teams">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">FOR YOUR TEAMS</p>
+      <h2>اجعل الذكاء جزءًا من فريقك</h2>
+      <hr class="stroke sm">
+    </div>
+    <div class="grid grid-2">
+      <div>
+        <div class="dept"><h3>المبيعات</h3><p>تأهيل العملاء المحتملين، المتابعة، وتحويل الفرص.</p></div>
+        <div class="dept"><h3>خدمة العملاء</h3><p>استقبال الاستفسارات والطلبات على مدار الساعة.</p></div>
+        <div class="dept"><h3>العمليات</h3><p>أتمتة المهام المتكررة وربط الأنظمة وتقليل العمل اليدوي.</p></div>
+      </div>
+      <div>
+        <div class="dept"><h3>التحصيل</h3><p>التواصل مع العملاء، التذكير والمتابعة وتسجيل النتائج.</p></div>
+        <div class="dept"><h3>الموارد البشرية</h3><p>الإجابة عن الاستفسارات الداخلية المتكررة.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 06 Sectors ═══════════════════════════════════════════════
+     Named as sectors served. No case study or result is attached to
+     any of them, because none has been verified. -->
+<section class="section" id="sectors">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">SECTORS</p>
+      <h2>ذكاء يفهم طبيعة أعمالك</h2>
+      <hr class="stroke sm">
+    </div>
+    <ul class="tags">
+      <li>القطاع المالي</li><li>التأمين</li><li>الرعاية الصحية</li>
+      <li>التجزئة</li><li>التجارة الإلكترونية</li><li>العقار</li>
+      <li>اللوجستيات</li><li>الضيافة</li><li>القطاع الحكومي</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ══ 07 Integrations ══════════════════════════════════════════
+     Deliberately worded as "designed to connect", not "integrates
+     with". No integration has been built and no partner logo appears,
+     because that would claim a relationship that does not exist. -->
+<section class="section" id="integrations">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">INTEGRATIONS</p>
+      <h2>لا تستبدل أنظمتك. أضف إليها الذكاء</h2>
+      <hr class="stroke sm">
+      <p class="lede">المنصة مصمَّمة للاتصال بالأنظمة التي تستخدمها اليوم، عبر واجهات برمجية موثّقة.</p>
+    </div>
+    <ul class="tags">
+      <li>أنظمة إدارة العملاء</li><li>أنظمة تخطيط الموارد</li><li>مراكز الاتصال</li>
+      <li>واتساب</li><li>أنظمة التذاكر</li><li>أنظمة الحجز</li>
+      <li>واجهات برمجية</li><li>الأنظمة الداخلية</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ══ 08 Security ══════════════════════════════════════════════
+     Every line here describes something the backend actually enforces.
+     No hosting-location claim and no certification badge appears,
+     because neither could be substantiated today. -->
+<section class="section section-dark" id="security">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">SECURITY</p>
+      <h2>ذكاء اصطناعي مصمم للمؤسسات</h2>
+      <hr class="stroke sm">
+      <p class="lede">بيانات أعمالك تحتاج إلى أكثر من الذكاء. تحتاج إلى التحكم والموثوقية.</p>
+    </div>
+    <div class="grid grid-3">
+      <div class="sec-item">
+        <h3>عزل كامل بين الشركات</h3>
+        <p>بيانات كل شركة معزولة عن غيرها، ولا تُقرأ إلا ضمن نطاقها.</p>
+      </div>
+      <div class="sec-item">
+        <h3>العزل على مستوى قاعدة البيانات</h3>
+        <p>قاعدة البيانات نفسها ترفض أي صف يخص شركة أخرى، لا التطبيق وحده.</p>
+      </div>
+      <div class="sec-item">
+        <h3>تحقق موقَّع من الطلبات</h3>
+        <p>كل طلب وارد يُتحقق من توقيعه قبل قبوله، ويُرفض إن لم يطابق.</p>
+      </div>
+      <div class="sec-item">
+        <h3>صلاحيات حسب الدور</h3>
+        <p>لكل مستخدم صلاحيات محددة، ولا يرى إلا ما يخص شركته.</p>
+      </div>
+      <div class="sec-item">
+        <h3>سجل عمليات</h3>
+        <p>كل إجراء حساس يُسجَّل مع منفّذه ووقته، ويمكن مراجعته لاحقًا.</p>
+      </div>
+      <div class="sec-item">
+        <h3>تحكم في القدرات</h3>
+        <p>كل قدرة تُفعَّل أو تُوقَف لكل شركة، ويُطبَّق القرار على كل طلب فورًا.</p>
+      </div>
+    </div>
+    <p class="disclaimer">لا نعرض هنا أي شهادة أو اعتماد ما لم يكن لدينا إثبات رسمي له.</p>
+  </div>
+</section>
+
+<!-- ══ 09 Contact ═══════════════════════════════════════════════ -->
+<section class="section contact" id="contact">
+  <div class="container">
+    <p class="eyebrow" style="text-align:center">GET STARTED</p>
+    <h2>جاهز تجعل الذكاء جزءًا من عملك؟</h2>
+    <hr class="stroke">
+    <p class="lede">اكتشف كيف يمكن للمنصة تحويل عملياتك اليومية إلى عمليات أكثر ذكاءً وكفاءة.</p>
+    <!-- TODO(client): the demo destination is still undecided. This stays
+         inert on purpose rather than pointing at an invented address, a
+         guessed phone number or a form that goes nowhere. One href. -->
+    <a class="btn btn-primary" href="#contact" aria-disabled="true">احجز عرضًا توضيحيًا</a>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-row">
+    <span class="brand" aria-hidden="true">
+      <svg viewBox="0 0 239.65 76.01"><use href="#m-mark"/></svg>
+    </span>
+    <span class="footer-spacer"></span>
+    <!-- TODO(client): legal company name for the copyright line. -->
+    <small>© 2026 — جميع الحقوق محفوظة</small>
+  </div>
+</footer>
+
+</body>
+</html>

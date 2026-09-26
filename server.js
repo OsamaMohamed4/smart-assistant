@@ -607,7 +607,13 @@ function getOrMakeSessionId(req) {
 }
 
 // ─── Public routes ───────────────────────────────────────────────
-app.get('/', (_req, res) => res.redirect('/admin/'));
+// The marketing site. Plain static files under site/ — no build step, no
+// JavaScript, and no shared styling with the admin SPA, so nothing here can
+// affect /admin or /c/<id>. Mounted before the root route so its stylesheet
+// resolves; `/` then serves the page itself rather than redirecting to the
+// dashboard, which is no longer the front door.
+app.use('/site', express.static(path.join(__dirname, 'site'), { index: false }));
+app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'site', 'index.html')));
 
 // Health check that actually checks. 503 only on hard DB failure (so a
 // platform health-gate restarts us); soft issues (webhook backlog) are

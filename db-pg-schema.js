@@ -63,9 +63,14 @@ CREATE TABLE IF NOT EXISTS companies (
   updated_at      TEXT DEFAULT ${NOW_TEXT}
 );
 CREATE INDEX IF NOT EXISTS idx_companies_user     ON companies(user_id);
-CREATE INDEX IF NOT EXISTS idx_companies_el_agent ON companies(elevenlabs_agent_id);
-CREATE INDEX IF NOT EXISTS idx_companies_el_phone ON companies(elevenlabs_phone_number_id);
 CREATE INDEX IF NOT EXISTS idx_companies_phone    ON companies(phone_number);
+-- NOTE: no index here on a column that ADD_COLUMNS adds later. On an existing
+-- database CREATE TABLE IF NOT EXISTS is a no-op, so the column is still
+-- missing when this DDL runs, and CREATE INDEX on it aborts the whole boot
+-- before the migrations that would have added it ever get to run. A fresh
+-- database never shows this, because there CREATE TABLE really does create the
+-- column. idx_companies_el_agent and idx_companies_el_phone therefore live in
+-- ADD_INDEXES in lib/migrations-pg.js, which runs after ADD_COLUMNS.
 -- NOTE: the UNIQUE indexes that enforce "one company per phone number" are
 -- deliberately NOT declared here. This DDL runs first on every boot, and
 -- CREATE UNIQUE INDEX fails hard on a database that already contains a
@@ -144,7 +149,9 @@ CREATE TABLE IF NOT EXISTS calls (
 );
 CREATE INDEX IF NOT EXISTS idx_calls_company ON calls(company_id);
 CREATE INDEX IF NOT EXISTS idx_calls_direction ON calls(direction);
-CREATE INDEX IF NOT EXISTS idx_calls_provider ON calls(provider);
+-- idx_calls_provider is in ADD_INDEXES, not here: calls.provider is added by
+-- ADD_COLUMNS and does not exist yet on an existing database. See the note on
+-- the companies indexes above.
 CREATE INDEX IF NOT EXISTS idx_calls_created ON calls(created_at);
 CREATE INDEX IF NOT EXISTS idx_calls_company_created ON calls(company_id, created_at);
 

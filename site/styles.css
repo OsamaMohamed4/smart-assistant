@@ -265,6 +265,47 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
   font-size: 15px; color: var(--ink-3);
 }
 
+/* ── About ─────────────────────────────────────────────── */
+.about-grid { display: grid; gap: var(--s-5); }
+.about-head h2 { margin-bottom: var(--s-3); }
+.about-body .lede { margin-bottom: var(--s-4); max-width: 60ch; }
+.about-aim {
+  font-size: 17px; line-height: 1.75; color: var(--ink-2);
+  padding-inline-start: var(--s-4);
+  border-inline-start: 2px solid var(--b-200);
+  max-width: 58ch;
+}
+@media (min-width: 900px) {
+  .about-grid { grid-template-columns: 260px 1fr; gap: var(--s-7); align-items: start; }
+}
+
+/* The stages named in the paragraph above, laid out as the path the brand is
+   named for. A rule runs behind the marks; at phone width it turns vertical. */
+.journey {
+  list-style: none; margin: var(--s-8) 0 0; padding: 0;
+  display: grid; gap: var(--s-4);
+  position: relative;
+}
+.journey li {
+  display: flex; align-items: center; gap: var(--s-3);
+  font-size: 15.5px; color: var(--ink-2);
+}
+.j-mark {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--brand); flex: none;
+  box-shadow: 0 0 0 4px var(--b-100);
+}
+.j-label { white-space: nowrap; }
+@media (min-width: 780px) {
+  .journey { grid-auto-flow: column; grid-auto-columns: 1fr; gap: 0; padding-top: var(--s-5); }
+  .journey::before {
+    content: ''; position: absolute; top: calc(var(--s-5) + 4px); height: 1px;
+    inset-inline: 4px; background: var(--line-2);
+  }
+  .journey li { flex-direction: column; align-items: flex-start; gap: var(--s-3); position: relative; }
+  .j-mark { margin-top: -4px; }
+}
+
 /* ── Generic grids ─────────────────────────────────────── */
 .grid { display: grid; gap: var(--s-5); }
 .grid-2 { grid-template-columns: 1fr; }

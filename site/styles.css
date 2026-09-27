@@ -333,23 +333,19 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
 
 /* ── Capability list ───────────────────────────────────── */
 .caps { border-top: 1px solid var(--line); }
+/* Name and description, nothing else. No per-item status badge: only two of
+   these are implemented, and labelling the other eight either way is a claim
+   this page should not make. */
 .cap {
-  display: flex; align-items: baseline; gap: var(--s-4);
+  display: grid; gap: var(--s-1);
   padding: var(--s-4) 0;
   border-bottom: 1px solid var(--line);
 }
-.cap-name { font-size: 17px; font-weight: 500; flex: none; }
-.cap-desc { font-size: 14.5px; color: var(--ink-3); flex: 1; min-width: 0; line-height: 1.6; }
-.cap-state {
-  font-size: 12.5px; font-weight: 500; flex: none;
-  padding: 3px 11px; border-radius: var(--radius); border: 1px solid;
-  white-space: nowrap;
-}
-.state-live { color: var(--b-700); background: var(--b-100); border-color: var(--b-200); }
-.state-soon { color: var(--ink-3); background: transparent; border-color: var(--line-2); }
-@media (max-width: 767px) {
-  .cap { flex-wrap: wrap; gap: var(--s-2) var(--s-3); }
-  .cap-desc { flex-basis: 100%; order: 3; }
+.cap-name { font-size: 17px; font-weight: 500; }
+.cap-desc { font-size: 15px; color: var(--ink-3); line-height: 1.65; max-width: 62ch; }
+@media (min-width: 768px) {
+  /* A fixed first track so every description starts on the same line. */
+  .cap { grid-template-columns: 210px 1fr; gap: var(--s-5); align-items: baseline; }
 }
 
 /* ── Call flow ─────────────────────────────────────────── */

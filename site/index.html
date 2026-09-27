@@ -46,6 +46,10 @@
       <li><a href="#security">الأمان</a></li>
     </ul>
     <span class="nav-spacer"></span>
+    <!-- The client's own way in. Secondary to the demo request, because a
+         first-time visitor is not looking for a login form — which is exactly
+         what the root URL used to give them. -->
+    <a class="btn btn-ghost nav-login" href="/admin/">لوحة التحكم</a>
     <!-- TODO(client): destination for the demo request is not yet decided.
          Left inert rather than pointing at an invented address. -->
     <a class="btn btn-primary nav-cta" href="#contact">احجز عرضًا توضيحيًا</a>
@@ -61,7 +65,10 @@
       <li><a href="#sectors">القطاعات</a></li>
       <li><a href="#security">الأمان</a></li>
     </ul>
-    <div class="drawer-cta"><a class="btn btn-primary" href="#contact">احجز عرضًا توضيحيًا</a></div>
+    <div class="drawer-cta">
+      <a class="btn btn-primary" href="#contact">احجز عرضًا توضيحيًا</a>
+      <a class="btn btn-ghost" href="/admin/">لوحة التحكم</a>
+    </div>
   </nav>
 </header>
 
@@ -350,6 +357,7 @@
     <span class="brand" aria-hidden="true">
       <svg viewBox="0 0 239.65 76.01"><use href="#m-mark"/></svg>
     </span>
+    <a class="footer-link" href="/admin/">لوحة التحكم</a>
     <span class="footer-spacer"></span>
     <!-- TODO(client): legal company name for the copyright line. -->
     <small>© 2026 — جميع الحقوق محفوظة</small>

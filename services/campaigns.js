@@ -9,16 +9,15 @@
 //   no_answer/failed re-queue to pending while attempts < max_attempts
 //   (after retry_delay_min). Stuck 'calling' rows (webhook never arrived)
 //   are failed after 30 minutes and become retryable.
-const axios = require('axios');
 const queue = require('../lib/queue');
 const { sql } = require('../db');
 const { logger } = require('../lib/logger');
 const { loadCompany } = require('../companies');
 const { dailyCap, checkAndBumpUsage } = require('./usage');
-const { encryptField, decryptField } = require('../lib/pii');
+const { decryptField } = require('../lib/pii');
 const { runWithContext } = require('../lib/tenant-context');
+const voice = require('./voice');
 
-const VAPI_TIMEOUT_MS = 20_000;
 const STALE_CALLING_MIN = 30;
 const PER_TICK_CAP = 5;            // max calls placed per campaign per tick
 
@@ -28,11 +27,18 @@ function utcStamp(msAgo = 0) {
 }
 
 // Extract a bindable STRING from any thrown error. Providers return error
-// bodies in wildly different shapes — Vapi's `message` is frequently an array
-// of validation strings — so a naive `.slice()` yields a non-string that then
-// fails to bind to SQL. Always returns a short string, never throws.
+// bodies in wildly different shapes — validation errors frequently arrive as an
+// ARRAY of strings — so a naive `.slice()` yields a non-string that then fails
+// to bind to SQL, throwing out of the whole tick. Always returns a short
+// string, never throws. Delegates to the voice layer's flattener, which knows
+// the current provider's error envelope, with a local fallback for errors that
+// never came from a provider at all.
 function errToString(e) {
-  let m = e?.response?.data?.message ?? e?.response?.data?.error ?? e?.message ?? 'call failed';
+  try {
+    const s = voice.errText(e);
+    if (s) return String(s).slice(0, 300);
+  } catch { /* fall through */ }
+  let m = e?.message ?? 'call failed';
   if (Array.isArray(m)) m = m.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join('; ');
   else if (m && typeof m === 'object') m = JSON.stringify(m);
   return String(m).slice(0, 300);
@@ -78,37 +84,29 @@ function windowState(campaign, now = new Date()) {
   };
 }
 
-// Place one Vapi call for a contact. Mirrors the Playground outbound-call
-// path exactly (same overrides) so campaign calls behave like manual ones.
+// Place one call for a contact. Goes through the SAME provider-layer call the
+// Playground uses, with the same variables and the same opening line, so a
+// campaign call behaves identically to a manual test call.
 async function placeCall(company, campaign, contact) {
   let vars = {};
   try { vars = contact.variables ? JSON.parse(contact.variables) : {}; } catch {}
   if (contact.name && !vars.customer_name) vars.customer_name = contact.name;
 
-  // The stored phone may be ciphertext (DATA_ENCRYPTION_KEY set). Vapi needs
-  // the real E.164 number, so decrypt at the last possible moment. Guard the
-  // result: dialling a ciphertext string would fail the call and, worse, log
-  // it — so refuse loudly instead.
+  // The stored phone may be ciphertext (DATA_ENCRYPTION_KEY set). The provider
+  // needs the real E.164 number, so decrypt at the last possible moment. Guard
+  // the result: dialling a ciphertext string would fail the call and, worse,
+  // log it — so refuse loudly instead.
   const dialNumber = decryptField(contact.phone);
   if (!/^\+[1-9]\d{7,14}$/.test(String(dialNumber || ''))) {
     throw new Error('contact phone is unreadable (decryption failed or malformed)');
   }
 
-  const overrides = { variableValues: vars, firstMessageMode: 'assistant-speaks-first' };
   const activeScenario = await sql.getActiveScenarioForCompany.get(company.id);
-  if (activeScenario?.first_message) overrides.firstMessage = activeScenario.first_message;
+  const firstMessage = activeScenario?.first_message || null;
 
-  const r = await axios.post(
-    'https://api.vapi.ai/call',
-    {
-      assistantId       : company.assistantId,
-      phoneNumberId     : company.settings?.outboundPhoneNumberId || process.env.VAPI_PHONE_NUMBER_ID,
-      customer          : { number: dialNumber },
-      assistantOverrides: overrides,
-    },
-    { headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' }, timeout: VAPI_TIMEOUT_MS },
-  );
-  return r.data.id;
+  return voice.startOutboundCall({
+    company, toNumber: dialNumber, variables: vars, firstMessage,
+  });
 }
 
 // One tick for one campaign. Returns a STRUCTURED result — { placed, done,
@@ -151,12 +149,15 @@ async function tickCampaign(campaign) {
   if (slots <= 0) return done('no_slots', { calling, maxConcurrent: campaign.max_concurrent });
 
   const company = await loadCompany(campaign.company_id);
-  if (!company?.assistantId) {
+  if (!company?.agentId) {
     logger.warn('campaign company not published — pausing', { campaignId: campaign.id, companyId: campaign.company_id });
     await sql.setCampaignStatus.run({ id: campaign.id, status: 'paused' });
     return done('not_published');
   }
-  if (!(company.settings?.outboundPhoneNumberId || process.env.VAPI_PHONE_NUMBER_ID)) {
+  // Each company dials from its OWN imported number. No platform-wide
+  // fallback: with several tenants, falling back would place this campaign's
+  // calls on a different company's phone line.
+  if (!company.phoneNumberId) {
     logger.warn('campaign has no outbound number — pausing', { campaignId: campaign.id, companyId: campaign.company_id });
     await sql.setCampaignStatus.run({ id: campaign.id, status: 'paused' });
     return done('no_number');
@@ -183,21 +184,23 @@ async function tickCampaign(campaign) {
       break;
     }
     try {
-      const callId = await placeCall(company, campaign, contact);
+      const { callId, callRef } = await placeCall(company, campaign, contact);
       await sql.setContactCallId.run({ id: contact.id, call_id: callId });
       await sql.insertOutboundCallStub.run({
-        id: callId, company_id: company.id, assistant_id: company.assistantId,
+        id: callId, company_id: company.id, assistant_id: company.agentId,
         // contact.phone is ALREADY in storage form (ciphertext when the key is
         // set, plaintext otherwise) — passing it through keeps calls.caller_number
         // consistent without re-encrypting an already-encrypted value.
         caller_number: contact.phone,
+        provider: company.voiceProvider,
+        provider_call_ref: callRef || null,
       });
       placed++;
     } catch (e) {
-      // Vapi returns validation errors with `message` as an ARRAY, so the old
-      // `.slice()` produced an array that then failed to bind to SQL — which
-      // threw out of the whole tick, was swallowed by the per-campaign catch,
-      // and left the contact stuck. Always coerce to a plain string.
+      // Provider validation errors can arrive with `message` as an ARRAY, so a
+      // naive `.slice()` produced an array that then failed to bind to SQL —
+      // which threw out of the whole tick, was swallowed by the per-campaign
+      // catch, and left the contact stuck. Always coerce to a plain string.
       const err = errToString(e);
       await sql.markContactError.run({ id: contact.id, err });
       logger.warn('campaign call failed to place', { campaignId: campaign.id, contactId: contact.id, err });
@@ -231,8 +234,8 @@ async function diagnoseCampaign(campaign) {
   else if (calling >= campaign.max_concurrent) reason = 'no_slots';
   else {
     const company = await loadCompany(campaign.company_id);
-    if (!company?.assistantId) reason = 'not_published';
-    else if (!(company.settings?.outboundPhoneNumberId || process.env.VAPI_PHONE_NUMBER_ID)) reason = 'no_number';
+    if (!company?.agentId) reason = 'not_published';
+    else if (!company.phoneNumberId) reason = 'no_number';
     else reason = 'dialing';                                        // healthy: should place calls next tick
   }
   return { reason, window: w, saudiTime: hhmmNow(), pending, calling };

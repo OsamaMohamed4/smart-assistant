@@ -1,10 +1,11 @@
 const { sql } = require('./db');
 const { MASTER_PROMPT } = require('./lib/master-prompt');
+const { parseBusinessProfile } = require('./lib/business-profile');
 
 const cache = new Map();
 
 // Core prompt builder: master rules + company-specific prompt + inline KB text.
-// Synchronous so it can be used by Vapi assistant creation.
+// Synchronous so it can be used by voice-agent creation.
 function buildBaseSystemPrompt(systemPrompt, kb) {
   const business = systemPrompt || '';
   const kbBlock  = kb
@@ -38,7 +39,7 @@ async function buildSystemPromptWithRAG(company, userQuery, vars) {
   // Runtime vars first (per-call values like agent_name from selected voice),
   // then globals as fallback (date/time, and agent_name ← company.name if
   // the caller didn't supply one). Scenario is the SOLE source of truth — no
-  // MASTER prefix — so the text channel matches the Vapi voice channel.
+  // MASTER prefix — so the text channel matches the voice channel.
   let filled = fillRuntimeVars(scenario.instruction_prompt, vars);
   filled = fillGlobals(filled, company);
   const base = filled;
@@ -87,7 +88,7 @@ function fillGlobals(text, company) {
 }
 
 // Apply per-call variables (customer_name, account_number, ...) supplied by
-// the caller (Playground form, Vapi context). Unknown placeholders stay
+// the caller (Playground form, provider dynamic variables). Unknown placeholders stay
 // untouched so a bad payload can't silently delete part of the prompt.
 function fillRuntimeVars(text, vars) {
   if (!text || !vars || typeof vars !== 'object') return text;
@@ -107,10 +108,28 @@ function toCompany(row) {
     name          : row.name,
     language      : row.language,
     voiceId       : row.voice_id,
+    // The company's own 3CX DID. It is the tenant's real-world identity and
+    // outlives every provider-side id, which is why it is the last-resort
+    // fallback when resolving a call back to its company.
     phoneNumber   : row.phone_number,
-    assistantId   : row.assistant_id,
-    assistantIdInbound : row.assistant_id_inbound || null,
+    voiceProvider : row.voice_provider || 'elevenlabs',
+    // `agentId` is the provider-neutral name the rest of the app uses; the
+    // storage column is provider-specific so a future provider adds a column
+    // rather than overloading this one.
+    agentId       : row.elevenlabs_agent_id || null,
+    agentIdInbound: row.elevenlabs_agent_id_inbound || null,
+    phoneNumberId : row.elevenlabs_phone_number_id || null,
+    kbToolId      : row.elevenlabs_kb_tool_id || null,
     lastSyncedAt  : row.last_synced_at || null,
+    // Outcome of the LAST publish attempt. `lastSyncedAt` only ever recorded
+    // that a sync was attempted, so a company whose publish died halfway still
+    // looked synced; these say whether it actually completed.
+    publishStatus : row.publish_status || null,
+    publishedAt   : row.published_at || null,
+    // The company's FACTS (description, hours, services, rules). Parsed rather
+    // than raw so every consumer sees the same validated shape; an invalid or
+    // absent value yields {} and renders nothing. See lib/business-profile.js.
+    businessProfile: parseBusinessProfile(row.business_profile),
     hasKB         : !!row.kb_text,
     settings,
     systemPrompt  : buildBaseSystemPrompt(row.system_prompt, row.kb_text),

@@ -2,10 +2,11 @@
 //
 // Reads campaign_contacts LEFT JOINed to calls (one query), decrypts the
 // phone, and runs each row through lib/lead-scoring. Nothing here calls an
-// LLM: Vapi's analysisPlan already extracted interest level, callback intent
-// and notes at end-of-call, and re-deriving them would cost money to produce
-// worse answers than the model that had the audio.
+// LLM: the provider's post-call analysis already extracted interest level,
+// callback intent and notes at end-of-call, and re-deriving them would cost
+// money to produce worse answers than the model that had the audio.
 const { sql } = require('../db');
+const { recordingLinkFor } = require('./call-events');
 const { decryptField } = require('../lib/pii');
 const { qualifyContact, summarizeReport, LEAD, LEAD_LABELS } = require('../lib/lead-scoring');
 
@@ -30,7 +31,11 @@ async function buildReport(campaign) {
       callStartedAt: r.call_started_at || null,
       endedReason  : r.ended_reason || null,
       summary      : r.summary || null,
-      recordingUrl : r.recording_url || null,
+      // `recordingUrl` is an EXPORT column, so it must stay a real openable
+      // link (or null) — never a flag. `hasRecording` is the separate signal
+      // the UI uses to decide whether to render its player link.
+      recordingUrl : recordingLinkFor(r),
+      hasRecording : !!r.has_recording || !!r.recording_url,
       lastError    : r.last_error || null,
       // ── derived, never invented ──
       lead             : q.lead,
@@ -107,7 +112,7 @@ const CSV_COLUMNS = [
   ['nextAction',    'الإجراء التالي'],
   ['attempts',      'عدد المحاولات'],
   ['lastAttemptAt', 'آخر محاولة'],
-  // Raw provider signal — the exact reason the call ended (Vapi's endedReason)
+  // Raw provider signal — the exact reason the call ended (calls.ended_reason)
   // and any technical placement error, so an operator can see WHY a call failed
   // instead of trusting only the mapped bucket.
   ['endedReason',   'سبب الإنهاء (من المزوّد)'],

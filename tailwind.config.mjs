@@ -9,7 +9,7 @@ export default {
         mono   : ['JetBrains Mono', 'ui-monospace', 'monospace'],
       },
       colors: {
-        // Premium palette — Linear/Vapi-inspired
+        // Premium palette — Linear-inspired
         ink: {
           50  : '#f8f8f9',
           100 : '#eeeef0',

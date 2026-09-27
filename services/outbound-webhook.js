@@ -28,7 +28,13 @@ function buildPayload(companyId, callRow) {
       ended_reason : callRow.ended_reason,
       summary      : callRow.summary,
       transcript   : callRow.transcript,
-      recording_url: callRow.recording_url,
+      // A PUBLICLY fetchable URL or null — never an internal identifier.
+      // The current voice provider serves audio from an authenticated API, so
+      // there is no link a receiver's server could fetch; `has_recording` tells
+      // them one exists so they can request it through an authenticated
+      // channel, and null tells them honestly that they cannot self-serve it.
+      recording_url: callRow.recording_url || null,
+      has_recording: !!callRow.has_recording || !!callRow.recording_url,
     },
   });
 }
@@ -71,4 +77,7 @@ function sendCallCompleted(company, callRow) {
     });
 }
 
-module.exports = { sendCallCompleted };
+// buildPayload is exported for tests: the exact bytes a customer's system
+// receives are a contract, and the recording field in particular must never
+// carry an internal identifier.
+module.exports = { sendCallCompleted, buildPayload };

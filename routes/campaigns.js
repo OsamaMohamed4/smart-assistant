@@ -160,7 +160,7 @@ router.get('/:campaignId', async (req, res) => {
 
 // ─── Campaign report ──────────────────────────────────────────────
 // Every field is read from data that already exists (campaign_contacts joined
-// to calls, plus Vapi's structured_data) and derived deterministically. No
+// to calls, plus calls.structured_data) and derived deterministically. No
 // LLM runs here — see lib/lead-scoring.js for why.
 router.get('/:campaignId/report', async (req, res) => {
   const campaign = await loadOwnedCampaign(req, res);

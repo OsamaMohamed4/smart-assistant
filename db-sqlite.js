@@ -96,7 +96,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_chats_session  ON chats(session_id);
 
   CREATE TABLE IF NOT EXISTS calls (
-    id              TEXT PRIMARY KEY,           -- vapi call id
+    id              TEXT PRIMARY KEY,           -- the provider's call id
     company_id      TEXT REFERENCES companies(id) ON DELETE SET NULL,
     assistant_id    TEXT,
     caller_number   TEXT,
@@ -140,7 +140,7 @@ db.exec(`
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
     actor_email  TEXT,
-    action       TEXT NOT NULL,           -- e.g. company.create, client.delete, vapi.bind
+    action       TEXT NOT NULL,           -- e.g. company.create, client.delete, voice.phone_bind
     resource     TEXT,                    -- e.g. companies/acme
     metadata     TEXT,                    -- JSON blob with before/after if applicable
     ip           TEXT,
@@ -235,7 +235,7 @@ runMigration(6, 'webhook_events_full_unique', `
   CREATE INDEX idx_webhook_events_status ON webhook_events(status);
 `);
 
-// Migration 8: track the last successful Vapi sync so the UI can show an
+// Migration 8: track the last successful publish so the UI can show an
 // "unpublished changes" badge when the active scenario was edited after sync.
 if (!hasColumn('companies', 'last_synced_at')) {
   runMigration(8, 'companies_add_last_synced_at',
@@ -268,7 +268,7 @@ runMigration(7, 'create_scenarios', `
 
 // Migration 9: a scenario now has two opening lines — one for inbound calls
 // (no customer name available) and one for outbound (we know who we're
-// calling). The Vapi assistant's default firstMessage is the inbound one;
+// calling). The agent's default first message is the inbound one;
 // outbound calls override per-call with the personalized version.
 // MUST run after migration 7 (which creates the scenarios table).
 if (!hasColumn('scenarios', 'first_message_inbound')) {
@@ -284,10 +284,12 @@ runMigration(11, 'drop_qa_runs', `
   DROP TABLE IF EXISTS qa_runs;
 `);
 
-// Migration 12: WhatsApp conversation continuity. Vapi assigns each text
-// chat a chatId; passing it back as previousChatId keeps the conversation
-// stateful. We store the (company, customer phone) → vapi_chat_id mapping
-// so a customer messaging us over days resumes from where they left off.
+// Migration 12: WhatsApp conversation continuity. The previous voice provider
+// issued a chat id per text thread, which we stored here so a returning
+// customer resumed where they left off. That provider is gone and its
+// successor has no synchronous text endpoint, so the text channel now rebuilds
+// history from the `chats` table instead. This table is RETAINED and no longer
+// written — dropping it would destroy historical rows for no benefit.
 runMigration(12, 'create_whatsapp_sessions', `
   CREATE TABLE IF NOT EXISTS whatsapp_sessions (
     company_id     TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -301,7 +303,7 @@ runMigration(12, 'create_whatsapp_sessions', `
 // Migration 13: track call direction (inbound vs outbound). Old rows default
 // to 'inbound' since that was the only path supported when they were created.
 // Outbound rows are inserted as stubs when the Playground initiates a call,
-// then upserted with full data when the Vapi end-of-call-report arrives.
+// then upserted with full data when the provider's post-call event arrives.
 if (!hasColumn('calls', 'direction')) {
   runMigration(13, 'calls_add_direction',
     `ALTER TABLE calls ADD COLUMN direction TEXT NOT NULL DEFAULT 'inbound'`
@@ -340,10 +342,11 @@ if (!hasColumn('companies', 'settings')) {
 }
 
 // Migration 17: optional per-direction inbound assistant. When a scenario has
-// a non-empty instruction_prompt_inbound, syncVapi builds a SECOND assistant
-// (companies.assistant_id_inbound) so inbound calls behave differently from
-// outbound. Fully opt-in — empty means inbound uses the primary assistant, so
-// existing companies are unchanged.
+// a non-empty instruction_prompt_inbound, publishing builds a SECOND agent so
+// inbound calls behave differently from outbound. Fully opt-in — empty means
+// inbound uses the primary agent, so existing companies are unchanged.
+// (The live column is now elevenlabs_agent_id_inbound — migration 29. This one
+// is retained so historical calls stay attributable.)
 if (!hasColumn('companies', 'assistant_id_inbound')) {
   runMigration(17, 'companies_add_assistant_id_inbound',
     `ALTER TABLE companies ADD COLUMN assistant_id_inbound TEXT`);
@@ -363,8 +366,8 @@ runMigration(19, 'add_created_at_indexes', `
   CREATE INDEX IF NOT EXISTS idx_chats_company_created  ON chats(company_id, created_at);
 `);
 
-// Migration 20: call recording URL. Vapi's end-of-call report has carried
-// artifact.recordingUrl all along — we were discarding it.
+// Migration 20: call recording URL. The post-call event has always carried a
+// recording reference — we were discarding it.
 if (!hasColumn('calls', 'recording_url')) {
   runMigration(20, 'calls_add_recording_url',
     `ALTER TABLE calls ADD COLUMN recording_url TEXT`);
@@ -388,7 +391,7 @@ runMigration(21, 'create_api_keys', `
   CREATE INDEX IF NOT EXISTS idx_api_keys_company ON api_keys(company_id);
 `);
 
-// Migration 22: structured lead-qualification data extracted by Vapi's
+// Migration 22: structured lead-qualification data extracted by the provider's
 // post-call analysis (interest level, budget, area, callbacks...). JSON text.
 if (!hasColumn('calls', 'structured_data')) {
   runMigration(22, 'calls_add_structured_data',
@@ -505,6 +508,205 @@ if (!hasColumn('campaigns', 'start_minute')) {
   `);
 }
 
+// Migration 29: ElevenLabs Agents identifiers, one set per company. The
+// platform is multi-tenant, so NOTHING here may be a platform-wide constant:
+// company A's 3CX number maps to company A's imported ElevenLabs phone number,
+// which maps to company A's agent. voice_provider records which provider a row
+// is wired to (it exists so a future provider swap is a column, not a rewrite);
+// the legacy assistant_id / assistant_id_inbound columns are deliberately LEFT
+// IN PLACE so historical calls keep resolving to their company.
+if (!hasColumn('companies', 'elevenlabs_agent_id')) {
+  runMigration(29, 'companies_add_elevenlabs', `
+    ALTER TABLE companies ADD COLUMN voice_provider              TEXT;
+    ALTER TABLE companies ADD COLUMN elevenlabs_agent_id         TEXT;
+    ALTER TABLE companies ADD COLUMN elevenlabs_agent_id_inbound TEXT;
+    ALTER TABLE companies ADD COLUMN elevenlabs_phone_number_id  TEXT;
+    ALTER TABLE companies ADD COLUMN elevenlabs_kb_tool_id       TEXT;
+    ALTER TABLE companies ADD COLUMN elevenlabs_synced_at        TEXT;
+    CREATE INDEX IF NOT EXISTS idx_companies_el_agent ON companies(elevenlabs_agent_id);
+    CREATE INDEX IF NOT EXISTS idx_companies_el_phone ON companies(elevenlabs_phone_number_id);
+    CREATE INDEX IF NOT EXISTS idx_companies_phone    ON companies(phone_number);
+  `);
+}
+
+// Migration 30: which provider produced a call row. Every row that exists when
+// this runs came from Vapi, so backfill it explicitly rather than leaving NULL
+// — the dashboard and the campaign report read historical rows and must keep
+// interpreting their ended_reason/structured_data with the right vocabulary.
+// provider_call_ref holds the provider's SECONDARY id (ElevenLabs sip_call_id),
+// which is what 3CX logs, so an operator can correlate a call across systems.
+if (!hasColumn('calls', 'provider')) {
+  runMigration(30, 'calls_add_provider', `
+    ALTER TABLE calls ADD COLUMN provider          TEXT;
+    ALTER TABLE calls ADD COLUMN provider_call_ref TEXT;
+    UPDATE calls SET provider = 'vapi' WHERE provider IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_calls_provider ON calls(provider);
+  `);
+}
+
+// Migration 31: whether a recording EXISTS, as a flag separate from the public
+// recording_url. The provider serves call audio from an authenticated API
+// rather than a shareable link, so there is no URL we can hand to a customer's
+// system — and inventing one (a provider-scoped identifier dressed up as a URL)
+// would leak an internal token into outgoing webhooks and CSV exports. So
+// recording_url stays NULL when no fetchable URL exists, and this flag carries
+// the "there is audio" signal the UI needs. Historical rows that hold a real
+// URL are backfilled to 1 so nothing loses its player.
+if (!hasColumn('calls', 'has_recording')) {
+  runMigration(31, 'calls_add_has_recording', `
+    ALTER TABLE calls ADD COLUMN has_recording INTEGER NOT NULL DEFAULT 0;
+    UPDATE calls SET has_recording = 1 WHERE recording_url IS NOT NULL AND recording_url <> '';
+  `);
+}
+
+// Migration 32: the provider reports spend in billing CREDITS, not currency.
+// Verified against the live API: a conversation's metadata carries `cost`
+// (credits) and a `charging` object, and there is no fiat amount anywhere — the
+// `cost_fiat` this code used to read never existed, so cost_usd was silently
+// null on every ElevenLabs call. Credits are kept in their own column rather
+// than written into cost_usd, because what a credit is worth depends on the
+// workspace's plan and mixing the two units in one column would quietly corrupt
+// any future spend report. cost_usd is still populated when (and only when) the
+// operator states a rate via ELEVENLABS_USD_PER_CREDIT.
+// Nullable with no backfill: historical rows genuinely have no credit figure,
+// and 0 would be a claim we cannot make.
+if (!hasColumn('calls', 'cost_credits')) {
+  runMigration(32, 'calls_add_cost_credits',
+    `ALTER TABLE calls ADD COLUMN cost_credits REAL`);
+}
+
+// Migration 33: publishing a company is a multi-step deployment against a
+// remote provider, and any step can fail on its own. Storing the per-step
+// outcome is what turns "publish failed" into "publish failed at tools.sync,
+// [422] api_schema.url: invalid" — the difference between an operator fixing
+// it and an operator guessing. Rows are append-only history: a retry writes a
+// NEW run so the sequence of attempts stays readable.
+runMigration(33, 'create_company_publish_runs', `
+  CREATE TABLE IF NOT EXISTS company_publish_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id  TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'running',   -- running | published | failed
+    steps       TEXT,                              -- JSON [{key,status,detail,ms}]
+    error       TEXT,
+    failed_step TEXT,
+    agent_id    TEXT,
+    scenario_id INTEGER,
+    actor_email TEXT,
+    started_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_publish_runs_company
+    ON company_publish_runs(company_id, id DESC);
+`);
+
+// Migration 34: an explicit publish state. `last_synced_at` only ever recorded
+// that a sync was ATTEMPTED — a company whose publish died halfway still looked
+// synced. These two columns say whether the last attempt actually completed,
+// so the UI can show "published" versus "failed" instead of inferring it.
+if (!hasColumn('companies', 'publish_status')) {
+  runMigration(34, 'companies_add_publish_state', `
+    ALTER TABLE companies ADD COLUMN publish_status TEXT;
+    ALTER TABLE companies ADD COLUMN published_at TEXT;
+  `);
+}
+
+// Migration 35: the company's FACTS — description, working hours, services,
+// business rules — as JSON. A column of its own rather than a key inside
+// `settings` because the two have different audiences and different
+// authorization: `settings` is the voice/cost tuning surface whose endpoint
+// gates the daily caps and the phone binding as superadmin-only, while these
+// are client-editable business content. Nullable, no backfill: a company that
+// has not filled anything in renders no facts block at all, which is
+// byte-identical to the behaviour before this column existed.
+if (!hasColumn('companies', 'business_profile')) {
+  runMigration(35, 'companies_add_business_profile',
+    `ALTER TABLE companies ADD COLUMN business_profile TEXT`);
+}
+
+// Migration 36: the capability layer. Which capabilities a company has, and
+// which provider resources currently back them.
+//
+// Tables rather than more columns on `companies`: capabilities are a growing
+// list, each carries its own config, and each needs its own provider tool id.
+// The composite primary keys are the anti-duplicate constraint — publishing
+// twice cannot produce two tools for one capability, because the second write
+// collides with the first.
+runMigration(36, 'create_capability_tables', `
+  CREATE TABLE IF NOT EXISTS company_features (
+    company_id  TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    feature_key TEXT NOT NULL,
+    enabled     INTEGER NOT NULL DEFAULT 0,
+    config      TEXT,
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (company_id, feature_key)
+  );
+  CREATE TABLE IF NOT EXISTS company_tools (
+    company_id         TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    feature_key        TEXT NOT NULL,
+    elevenlabs_tool_id TEXT NOT NULL,
+    config_hash        TEXT,
+    synced_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (company_id, feature_key)
+  );
+`);
+
+// Migration 37: adopt the knowledge-base tool that already exists.
+//
+// Without this, the first publish after the capability layer ships would find
+// no row for knowledge_base, create a SECOND tool at the provider, and orphan
+// the one the agent is already using. The tool id moves into company_tools,
+// which is from here on the source of truth; companies.elevenlabs_kb_tool_id
+// stays populated but is no longer read.
+runMigration(37, 'adopt_existing_kb_tools', `
+  INSERT OR IGNORE INTO company_tools (company_id, feature_key, elevenlabs_tool_id)
+  SELECT id, 'knowledge_base', elevenlabs_kb_tool_id
+    FROM companies
+   WHERE elevenlabs_kb_tool_id IS NOT NULL AND elevenlabs_kb_tool_id <> '';
+`);
+
+// ─── Tenant-safety: one company per phone number ──────────────────
+// A DID and an imported provider number each identify exactly ONE tenant.
+// Inbound calls are attributed by those values (services/voice resolves a call
+// back to its company through them), so a duplicate does not merely look
+// untidy — it sends one company's calls into another company's records.
+//
+// Deliberately NOT a one-shot runMigration: if the table already contains
+// duplicates the index cannot be created, and we must not fail the boot or
+// silently delete a tenant's number. Instead this runs on EVERY boot, reports
+// the exact conflict, and creates the index as soon as the data is clean —
+// so an operator fixes the rows and the constraint appears by itself.
+function ensureUniquePhoneOwnership() {
+  const guards = [
+    ['uq_companies_phone_number', 'phone_number'],
+    ['uq_companies_el_phone_id',  'elevenlabs_phone_number_id'],
+  ];
+  for (const [indexName, column] of guards) {
+    try {
+      const dupes = db.prepare(
+        `SELECT ${column} AS value, COUNT(*) AS n, GROUP_CONCAT(id) AS ids
+           FROM companies
+          WHERE ${column} IS NOT NULL AND ${column} <> ''
+          GROUP BY ${column} HAVING COUNT(*) > 1`,
+      ).all();
+      if (dupes.length) {
+        for (const d of dupes) {
+          console.error(
+            `[tenant-safety] ${dupes.length} duplicate ${column} value(s): companies ${d.ids} share one number. ` +
+            'Calls on it CANNOT be attributed until exactly one company owns it. ' +
+            `Clear it from the wrong company, then restart to install ${indexName}.`,
+          );
+        }
+        continue;                      // leave the index off until it's fixable
+      }
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName}
+                 ON companies(${column}) WHERE ${column} IS NOT NULL`);
+    } catch (e) {
+      console.error(`[tenant-safety] could not install ${indexName}: ${e.message}`);
+    }
+  }
+}
+ensureUniquePhoneOwnership();
+
 // ─── Prepared statements ──────────────────────────────────
 const sql = {
   // users
@@ -587,18 +789,113 @@ const sql = {
   companyExists      : db.prepare('SELECT 1 AS one FROM companies WHERE id = ?'),
   // Single positional param matched against two columns (better-sqlite3's
   // numbered ?1 params need object binding, so use `? IN (...)` instead).
-  companyByAssistantId: db.prepare(
-    'SELECT id FROM companies WHERE ? IN (assistant_id, assistant_id_inbound)'
+  // A company may run two agents (outbound + optional inbound), so an event's
+  // agent id has to be matched against both.
+  companyByAgentId   : db.prepare(
+    'SELECT id FROM companies WHERE ? IN (elevenlabs_agent_id, elevenlabs_agent_id_inbound)'
   ),
-  companyByPhoneNumberId: db.prepare(`
-    SELECT id FROM companies
-     WHERE ? IN (json_extract(settings,'$.inboundPhoneNumberId'),
-                 json_extract(settings,'$.outboundPhoneNumberId'))
-  `),
+  // Agent ids change whenever an agent is recreated, which would orphan calls
+  // placed by the previous one. The imported phone number id is stable, so it
+  // is the fallback.
+  companyByProviderPhoneNumberId: db.prepare(
+    'SELECT id FROM companies WHERE elevenlabs_phone_number_id = ?'
+  ),
+  // Last resort: the E.164 number the call was placed to/from. This is the
+  // 3CX DID, which outlives every provider-side identifier.
+  companyByPhoneNumber: db.prepare('SELECT id FROM companies WHERE phone_number = ?'),
   setCompanySynced   : db.prepare(`
     UPDATE companies
-       SET assistant_id = ?, last_synced_at = datetime('now'), updated_at = datetime('now')
+       SET elevenlabs_agent_id  = ?,
+           voice_provider       = 'elevenlabs',
+           elevenlabs_synced_at = datetime('now'),
+           last_synced_at       = datetime('now'),
+           updated_at           = datetime('now')
      WHERE id = ?
+  `),
+  setCompanyElevenLabsPhone: db.prepare(`
+    UPDATE companies
+       SET elevenlabs_phone_number_id = @phone_number_id,
+           phone_number               = COALESCE(@phone_number, phone_number),
+           updated_at                 = datetime('now')
+     WHERE id = @id
+  `),
+  // Moving a number to a new company must first release it from the old one,
+  // or both rows claim it and no inbound call on that number can be attributed.
+  // Scoped to THIS number and excluding the new owner — the whole point is not
+  // to touch any other company's row. (The previous provider's bind-phone flow
+  // did the same thing; it is preserved here because the reason still holds.)
+  clearPhoneNumberOwner: db.prepare(`
+    UPDATE companies SET phone_number = NULL, updated_at = datetime('now')
+     WHERE phone_number = @value AND id <> @keep
+  `),
+  clearElevenLabsPhoneOwner: db.prepare(`
+    UPDATE companies SET elevenlabs_phone_number_id = NULL, updated_at = datetime('now')
+     WHERE elevenlabs_phone_number_id = @value AND id <> @keep
+  `),
+  setCompanyKbTool   : db.prepare(`
+    UPDATE companies SET elevenlabs_kb_tool_id = @tool_id, updated_at = datetime('now') WHERE id = @id
+  `),
+  setCompanyBusinessProfile: db.prepare(`
+    UPDATE companies SET business_profile = @business_profile, updated_at = datetime('now') WHERE id = @id
+  `),
+
+  // ─── Capabilities ───────────────────────────────────────────────
+  listCompanyFeatures: db.prepare(
+    'SELECT feature_key, enabled, config FROM company_features WHERE company_id = ?'
+  ),
+  getCompanyFeature  : db.prepare(
+    'SELECT feature_key, enabled, config FROM company_features WHERE company_id = ? AND feature_key = ?'
+  ),
+  upsertCompanyFeature: db.prepare(`
+    INSERT INTO company_features (company_id, feature_key, enabled, config)
+    VALUES (@company_id, @feature_key, @enabled, @config)
+    ON CONFLICT(company_id, feature_key) DO UPDATE SET
+      enabled    = excluded.enabled,
+      config     = excluded.config,
+      updated_at = datetime('now')
+  `),
+  // Provider tool ids, one row per capability. The composite key is what makes
+  // re-publishing update rather than duplicate.
+  listCompanyTools   : db.prepare(
+    'SELECT feature_key, elevenlabs_tool_id, config_hash FROM company_tools WHERE company_id = ?'
+  ),
+  upsertCompanyTool  : db.prepare(`
+    INSERT INTO company_tools (company_id, feature_key, elevenlabs_tool_id, config_hash)
+    VALUES (@company_id, @feature_key, @elevenlabs_tool_id, @config_hash)
+    ON CONFLICT(company_id, feature_key) DO UPDATE SET
+      elevenlabs_tool_id = excluded.elevenlabs_tool_id,
+      config_hash        = excluded.config_hash,
+      synced_at          = datetime('now')
+  `),
+  deleteCompanyTool  : db.prepare(
+    'DELETE FROM company_tools WHERE company_id = @company_id AND feature_key = @feature_key'
+  ),
+
+  // ─── Publish pipeline ───────────────────────────────────────────
+  // A run is opened BEFORE any provider call so a process that dies mid-publish
+  // still leaves evidence of what was attempted.
+  insertPublishRun   : db.prepare(`
+    INSERT INTO company_publish_runs (company_id, status, scenario_id, actor_email)
+    VALUES (@company_id, 'running', @scenario_id, @actor_email)
+  `),
+  finishPublishRun   : db.prepare(`
+    UPDATE company_publish_runs
+       SET status = @status, steps = @steps, error = @error,
+           failed_step = @failed_step, agent_id = @agent_id,
+           finished_at = datetime('now')
+     WHERE id = @id
+  `),
+  getLastPublishRun  : db.prepare(`
+    SELECT * FROM company_publish_runs WHERE company_id = ? ORDER BY id DESC LIMIT 1
+  `),
+  // Mirrors the run's outcome onto the company so the UI can badge it without
+  // joining the history table on every list render.
+  setCompanyPublishStatus: db.prepare(`
+    UPDATE companies
+       SET publish_status = @status,
+           published_at   = CASE WHEN @status = 'published' THEN datetime('now') ELSE published_at END,
+           updated_at     = datetime('now')
+     WHERE id = @id
   `),
   countWebhooksByStatus: db.prepare('SELECT COUNT(*) AS n FROM webhook_events WHERE status = ?'),
   listCompanyIdNames : db.prepare('SELECT id, name FROM companies'),
@@ -636,15 +933,28 @@ const sql = {
      WHERE status = 'pending' AND attempts < 5
      ORDER BY received_at ASC LIMIT ?
   `),
+  // Park an event we can no longer process (e.g. a Vapi event still pending in
+  // the inbox when the Vapi driver was removed). The raw body is preserved —
+  // only the status changes, so nothing is lost and the drain stops retrying
+  // forever. 'skipped' is deliberately neither 'pending' nor 'failed', so it
+  // drops out of the /health backlog counters instead of alerting.
+  markWebhookSkipped : db.prepare(`
+    UPDATE webhook_events
+       SET status = 'skipped', last_error = ?, processed_at = datetime('now')
+     WHERE id = ?
+  `),
 
 
   // companies
   listCompanies      : db.prepare('SELECT * FROM companies ORDER BY created_at DESC'),
   getCompany         : db.prepare('SELECT * FROM companies WHERE id = ?'),
   claimOrphanCompanies: db.prepare('UPDATE companies SET user_id = ? WHERE user_id IS NULL'),
+  // The provider's agent id is NOT settable through company CRUD — it is owned
+  // by the voice sync (setCompanySynced), so a stray PUT can never point a
+  // company at another tenant's agent.
   insertCompany      : db.prepare(`
-    INSERT INTO companies (id, user_id, name, language, voice_id, phone_number, assistant_id, system_prompt, kb_text)
-    VALUES (@id, @user_id, @name, @language, @voice_id, @phone_number, @assistant_id, @system_prompt, @kb_text)
+    INSERT INTO companies (id, user_id, name, language, voice_id, phone_number, system_prompt, kb_text)
+    VALUES (@id, @user_id, @name, @language, @voice_id, @phone_number, @system_prompt, @kb_text)
   `),
   updateCompanySettings: db.prepare(
     `UPDATE companies SET settings = @settings, updated_at = datetime('now') WHERE id = @id`
@@ -655,7 +965,6 @@ const sql = {
       language       = @language,
       voice_id       = @voice_id,
       phone_number   = @phone_number,
-      assistant_id   = @assistant_id,
       system_prompt  = @system_prompt,
       kb_text        = @kb_text,
       updated_at     = datetime('now')
@@ -685,34 +994,63 @@ const sql = {
   // Company-scoped: session_id alone is guessable, so the tenant is always
   // part of the predicate (belt to the route guard's braces).
   getSession         : db.prepare('SELECT * FROM chats WHERE session_id = ? AND company_id = ? ORDER BY created_at ASC'),
+  // Bounded variant for the LLM prompt path. getSession above stays unbounded
+  // because the admin transcript viewer legitimately shows a whole session; this
+  // one exists so a months-old WhatsApp thread does not read every row on every
+  // single turn just to throw all but the last few away. `id` breaks ties
+  // because created_at has second resolution and two messages can share one.
+  // Caller reverses the rows back into chronological order.
+  getSessionRecent   : db.prepare('SELECT * FROM chats WHERE session_id = ? AND company_id = ? ORDER BY created_at DESC, id DESC LIMIT ?'),
   setSessionSummary  : db.prepare('UPDATE chats SET summary = ? WHERE session_id = ? AND company_id = ?'),
 
   // calls
+  // `assistant_id` holds the provider's agent identifier (ElevenLabs agent_id
+  // today, a Vapi assistant id on historical rows). The column name predates
+  // the provider migration and is kept so no historical row has to be rewritten.
+  // WRITE RULE: a later event may FILL a field or CORRECT it, but must never
+  // blank one. Provider events are partial and unordered — a
+  // call_initiation_failure carries no caller number, start time or duration,
+  // and may carry no agent id to resolve a company from. Assigning those
+  // straight from `excluded` let one sparse event erase what an earlier
+  // complete event (or the outbound stub) had already established: the
+  // customer's number, the call's start time, even its company_id — which
+  // under row-level security makes the row vanish from the tenant that owns
+  // it. So EVERY column coalesces onto its current value.
   upsertCall         : db.prepare(`
-    INSERT INTO calls (id, company_id, assistant_id, caller_number, duration_sec, started_at, ended_at, ended_reason, transcript, summary, cost_usd, direction, recording_url, structured_data)
-    VALUES (@id, @company_id, @assistant_id, @caller_number, @duration_sec, @started_at, @ended_at, @ended_reason, @transcript, @summary, @cost_usd, @direction, @recording_url, @structured_data)
+    INSERT INTO calls (id, company_id, assistant_id, caller_number, duration_sec, started_at, ended_at, ended_reason, transcript, summary, cost_usd, direction, recording_url, structured_data, provider, provider_call_ref, has_recording, cost_credits)
+    VALUES (@id, @company_id, @assistant_id, @caller_number, @duration_sec, @started_at, @ended_at, @ended_reason, @transcript, @summary, @cost_usd, COALESCE(@direction, 'inbound'), @recording_url, @structured_data, @provider, @provider_call_ref, COALESCE(@has_recording, 0), @cost_credits)
     ON CONFLICT(id) DO UPDATE SET
-      company_id    = excluded.company_id,
-      assistant_id  = excluded.assistant_id,
-      caller_number = excluded.caller_number,
-      duration_sec  = excluded.duration_sec,
-      started_at    = excluded.started_at,
-      ended_at      = excluded.ended_at,
-      ended_reason  = excluded.ended_reason,
+      company_id    = COALESCE(excluded.company_id, calls.company_id),
+      assistant_id  = COALESCE(excluded.assistant_id, calls.assistant_id),
+      caller_number = COALESCE(excluded.caller_number, calls.caller_number),
+      duration_sec  = COALESCE(excluded.duration_sec, calls.duration_sec),
+      started_at    = COALESCE(excluded.started_at, calls.started_at),
+      ended_at      = COALESCE(excluded.ended_at, calls.ended_at),
+      ended_reason  = COALESCE(excluded.ended_reason, calls.ended_reason),
       transcript    = COALESCE(excluded.transcript, calls.transcript),
       summary       = COALESCE(excluded.summary, calls.summary),
-      cost_usd      = excluded.cost_usd,
-      direction     = COALESCE(excluded.direction, calls.direction),
+      cost_usd      = COALESCE(excluded.cost_usd, calls.cost_usd),
+      cost_credits  = COALESCE(excluded.cost_credits, calls.cost_credits),
+      -- direction is NOT NULL, so a "provider did not say" event cannot be
+      -- expressed through excluded.direction (the INSERT would have had to
+      -- bind NULL into a NOT NULL column). Read the PARAMETER instead: NULL
+      -- means keep what the row already has, which is what stops an outbound
+      -- stub being relabelled inbound by a late event that omits direction.
+      direction     = CASE WHEN @direction IS NULL THEN calls.direction ELSE @direction END,
       recording_url = COALESCE(excluded.recording_url, calls.recording_url),
-      structured_data = COALESCE(excluded.structured_data, calls.structured_data)
+      structured_data = COALESCE(excluded.structured_data, calls.structured_data),
+      provider      = COALESCE(excluded.provider, calls.provider),
+      provider_call_ref = COALESCE(excluded.provider_call_ref, calls.provider_call_ref),
+      -- Latches on: audio appearing is news, its absence in a partial event is not.
+      has_recording = CASE WHEN @has_recording = 1 THEN 1 ELSE calls.has_recording END
   `),
   // Stub row written when we initiate an outbound call so the attempt is
-  // visible in the Conversations table even before Vapi's end-of-call webhook
-  // arrives (or if it never does). Idempotent on call id — the later upsert
-  // from the webhook fills in transcript/duration/etc.
+  // visible in the Conversations table even before the provider's post-call
+  // webhook arrives (or if it never does). Idempotent on call id — the later
+  // upsert from the webhook fills in transcript/duration/etc.
   insertOutboundCallStub: db.prepare(`
-    INSERT INTO calls (id, company_id, assistant_id, caller_number, started_at, direction)
-    VALUES (@id, @company_id, @assistant_id, @caller_number, datetime('now'), 'outbound')
+    INSERT INTO calls (id, company_id, assistant_id, caller_number, started_at, direction, provider, provider_call_ref)
+    VALUES (@id, @company_id, @assistant_id, @caller_number, datetime('now'), 'outbound', @provider, @provider_call_ref)
     ON CONFLICT(id) DO NOTHING
   `),
   setCallSummary     : db.prepare('UPDATE calls SET summary = ? WHERE id = ?'),
@@ -758,8 +1096,9 @@ const sql = {
     UPDATE kb_chunks SET embedding = @embedding WHERE id = @id
   `),
   // All chunks for a company, ordered for stable concatenation. Used at
-  // Vapi sync time to bake the KB into the assistant's system prompt
-  // (Vapi can't reach our DB at call time, so we inline it once).
+  // publish time to bake the KB into the agent's system prompt (the agent
+  // cannot reach our DB while composing a reply, so we inline it once; the
+  // in-call KB tool covers what the size cap had to truncate).
   listAllChunksForCompany: db.prepare(`
     SELECT c.id, c.document_id, c.chunk_index, c.text, d.filename
       FROM kb_chunks c
@@ -805,7 +1144,7 @@ const sql = {
      WHERE id = @id AND deleted_at IS NULL
   `),
   setCompanyInboundAssistant: db.prepare(
-    `UPDATE companies SET assistant_id_inbound = @aid, updated_at = datetime('now') WHERE id = @id`
+    `UPDATE companies SET elevenlabs_agent_id_inbound = @aid, updated_at = datetime('now') WHERE id = @id`
   ),
   listScenarios      : db.prepare(`
     SELECT id, company_id, name, description, language, is_active,
@@ -1020,16 +1359,14 @@ const sql = {
   `),
 
   // ─── WhatsApp sessions ──────────────────────────────────────
+  // Read-only, and nothing reads it today. The public Agent API used to resume
+  // a text thread through a provider-issued chat id stored here; it now rebuilds
+  // history from `chats` (sql.getSession), which cannot expire. The table and
+  // this accessor are kept so historical rows remain inspectable — there is no
+  // writer any more, deliberately.
   getWhatsappSession   : db.prepare(`
     SELECT vapi_chat_id FROM whatsapp_sessions
      WHERE company_id = ? AND customer_phone = ?
-  `),
-  upsertWhatsappSession: db.prepare(`
-    INSERT INTO whatsapp_sessions (company_id, customer_phone, vapi_chat_id, updated_at)
-    VALUES (@company_id, @customer_phone, @vapi_chat_id, datetime('now'))
-    ON CONFLICT(company_id, customer_phone) DO UPDATE
-       SET vapi_chat_id = excluded.vapi_chat_id,
-           updated_at   = datetime('now')
   `),
 
   // ─── Dashboard analytics ─────────────────────────────────
@@ -1067,7 +1404,7 @@ const sql = {
   `),
   countActiveCompanies: db.prepare(`
     SELECT COUNT(DISTINCT id) AS n FROM companies
-     WHERE assistant_id IS NOT NULL
+     WHERE elevenlabs_agent_id IS NOT NULL
        AND (@company_id IS NULL OR id = @company_id)
   `),
   // Hourly bucket — used for the inbound/outbound chart. SQLite uses substr
@@ -1107,15 +1444,14 @@ try {
         const kbPath = path.join(dir, `${cfg.id}.kb.md`);
         const kb = fs.existsSync(kbPath) ? fs.readFileSync(kbPath, 'utf8') : null;
         db.prepare(`
-          INSERT INTO companies (id, name, language, voice_id, phone_number, assistant_id, system_prompt, kb_text)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO companies (id, name, language, voice_id, phone_number, system_prompt, kb_text)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
         `).run(
           cfg.id,
           cfg.name,
           cfg.language || 'ar-SA',
           cfg.voice_id || process.env.ELEVENLABS_VOICE_ID || null,
           cfg.phone_number || null,
-          null,
           cfg.systemPrompt,
           kb
         );
@@ -1182,4 +1518,10 @@ async function initDb() { /* schema applied synchronously at require */ }
 async function healthCheck() { db.prepare('SELECT 1').get(); return true; }
 async function close() { try { db.close(); } catch {} }
 
-module.exports = { db, sql, get, all, run, withTransaction, initDb, healthCheck, close, isPg: false };
+// ensureUniquePhoneOwnership is exported so the regression suite can re-run it
+// against a database that already holds a duplicate — the branch that must
+// report the conflict instead of taking the process down.
+module.exports = {
+  db, sql, get, all, run, withTransaction, initDb, healthCheck, close, isPg: false,
+  ensureUniquePhoneOwnership,
+};

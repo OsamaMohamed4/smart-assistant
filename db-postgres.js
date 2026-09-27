@@ -142,6 +142,15 @@ const sql = {
     SELECT * FROM webhook_events
      WHERE status = 'pending' AND attempts < 5
      ORDER BY received_at ASC LIMIT $1`),
+  // Park an event we can no longer process (e.g. a Vapi event still pending in
+  // the inbox when the Vapi driver was removed). The raw body is preserved —
+  // only the status changes, so nothing is lost and the drain stops retrying
+  // forever. 'skipped' is deliberately neither 'pending' nor 'failed', so it
+  // drops out of the /health backlog counters instead of alerting.
+  markWebhookSkipped: stmt(`
+    UPDATE webhook_events
+       SET status = 'skipped', last_error = $1, processed_at = ${NOW}
+     WHERE id = $2`),
   countWebhooksByStatus: stmt(`SELECT COUNT(*)::int AS n FROM webhook_events WHERE status = $1`),
 
   // ─── companies ───────────────────────────────────────────
@@ -149,10 +158,13 @@ const sql = {
   getCompany   : stmt(`SELECT * FROM companies WHERE id = $1`),
   companyExists: stmt(`SELECT 1 AS one FROM companies WHERE id = $1`),
   claimOrphanCompanies: stmt(`UPDATE companies SET user_id = $1 WHERE user_id IS NULL`),
+  // The provider's agent id is NOT settable through company CRUD — it is owned
+  // by the voice sync (setCompanySynced), so a stray PUT can never point a
+  // company at another tenant's agent.
   insertCompany: stmt(
-    `INSERT INTO companies (id, user_id, name, language, voice_id, phone_number, assistant_id, system_prompt, kb_text)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-    ['id', 'user_id', 'name', 'language', 'voice_id', 'phone_number', 'assistant_id', 'system_prompt', 'kb_text'],
+    `INSERT INTO companies (id, user_id, name, language, voice_id, phone_number, system_prompt, kb_text)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    ['id', 'user_id', 'name', 'language', 'voice_id', 'phone_number', 'system_prompt', 'kb_text'],
   ),
   updateCompanySettings: stmt(
     `UPDATE companies SET settings = $1, updated_at = ${NOW} WHERE id = $2`,
@@ -161,22 +173,126 @@ const sql = {
   updateCompany: stmt(
     `UPDATE companies SET
        name = $1, language = $2, voice_id = $3, phone_number = $4,
-       assistant_id = $5, system_prompt = $6, kb_text = $7, updated_at = ${NOW}
-     WHERE id = $8`,
-    ['name', 'language', 'voice_id', 'phone_number', 'assistant_id', 'system_prompt', 'kb_text', 'id'],
+       system_prompt = $5, kb_text = $6, updated_at = ${NOW}
+     WHERE id = $7`,
+    ['name', 'language', 'voice_id', 'phone_number', 'system_prompt', 'kb_text', 'id'],
   ),
   deleteCompany: stmt(`DELETE FROM companies WHERE id = $1`),
-  companyByAssistantId: stmt(`SELECT id FROM companies WHERE assistant_id = $1 OR assistant_id_inbound = $1`),
-  companyByPhoneNumberId: stmt(`
-    SELECT id FROM companies
-     WHERE settings IS NOT NULL
-       AND (settings::jsonb->>'inboundPhoneNumberId'  = $1
-        OR  settings::jsonb->>'outboundPhoneNumberId' = $1)`),
+  // A company may run two agents (outbound + optional inbound), so an event's
+  // agent id has to be matched against both.
+  companyByAgentId: stmt(
+    `SELECT id FROM companies WHERE elevenlabs_agent_id = $1 OR elevenlabs_agent_id_inbound = $1`),
+  // Agent ids change whenever an agent is recreated, which would orphan calls
+  // placed by the previous one. The imported phone number id is stable.
+  companyByProviderPhoneNumberId: stmt(
+    `SELECT id FROM companies WHERE elevenlabs_phone_number_id = $1`),
+  // Last resort: the E.164 number, i.e. the 3CX DID, which outlives every
+  // provider-side identifier.
+  companyByPhoneNumber: stmt(`SELECT id FROM companies WHERE phone_number = $1`),
   setCompanySynced: stmt(
-    `UPDATE companies SET assistant_id = $1, last_synced_at = ${NOW}, updated_at = ${NOW} WHERE id = $2`,
+    `UPDATE companies
+        SET elevenlabs_agent_id = $1, voice_provider = 'elevenlabs',
+            elevenlabs_synced_at = ${NOW}, last_synced_at = ${NOW}, updated_at = ${NOW}
+      WHERE id = $2`,
+  ),
+  setCompanyElevenLabsPhone: stmt(
+    `UPDATE companies
+        SET elevenlabs_phone_number_id = $1,
+            phone_number = COALESCE($2, phone_number),
+            updated_at = ${NOW}
+      WHERE id = $3`,
+    ['phone_number_id', 'phone_number', 'id'],
+  ),
+  // Moving a number to a new company must first release it from the old one,
+  // or both rows claim it and no inbound call on that number can be attributed.
+  // Scoped to THIS number and excluding the new owner — the whole point is not
+  // to touch any other company's row. (The previous provider's bind-phone flow
+  // did the same thing; it is preserved here because the reason still holds.)
+  clearPhoneNumberOwner: stmt(
+    `UPDATE companies SET phone_number = NULL, updated_at = ${NOW}
+      WHERE phone_number = $1 AND id <> $2`,
+    ['value', 'keep'],
+  ),
+  clearElevenLabsPhoneOwner: stmt(
+    `UPDATE companies SET elevenlabs_phone_number_id = NULL, updated_at = ${NOW}
+      WHERE elevenlabs_phone_number_id = $1 AND id <> $2`,
+    ['value', 'keep'],
+  ),
+  setCompanyKbTool: stmt(
+    `UPDATE companies SET elevenlabs_kb_tool_id = $1, updated_at = ${NOW} WHERE id = $2`,
+    ['tool_id', 'id'],
+  ),
+  setCompanyBusinessProfile: stmt(
+    `UPDATE companies SET business_profile = $1, updated_at = ${NOW} WHERE id = $2`,
+    ['business_profile', 'id'],
+  ),
+
+  // ─── Capabilities ───────────────────────────────────────────────
+  listCompanyFeatures: stmt(
+    `SELECT feature_key, enabled, config FROM company_features WHERE company_id = $1`,
+  ),
+  getCompanyFeature: stmt(
+    `SELECT feature_key, enabled, config FROM company_features WHERE company_id = $1 AND feature_key = $2`,
+  ),
+  upsertCompanyFeature: stmt(
+    `INSERT INTO company_features (company_id, feature_key, enabled, config)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (company_id, feature_key) DO UPDATE SET
+       enabled    = excluded.enabled,
+       config     = excluded.config,
+       updated_at = ${NOW}`,
+    ['company_id', 'feature_key', 'enabled', 'config'],
+  ),
+  // Provider tool ids, one row per capability. The composite key is what makes
+  // re-publishing update rather than duplicate.
+  listCompanyTools: stmt(
+    `SELECT feature_key, elevenlabs_tool_id, config_hash FROM company_tools WHERE company_id = $1`,
+  ),
+  upsertCompanyTool: stmt(
+    `INSERT INTO company_tools (company_id, feature_key, elevenlabs_tool_id, config_hash)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (company_id, feature_key) DO UPDATE SET
+       elevenlabs_tool_id = excluded.elevenlabs_tool_id,
+       config_hash        = excluded.config_hash,
+       synced_at          = ${NOW}`,
+    ['company_id', 'feature_key', 'elevenlabs_tool_id', 'config_hash'],
+  ),
+  deleteCompanyTool: stmt(
+    `DELETE FROM company_tools WHERE company_id = $1 AND feature_key = $2`,
+    ['company_id', 'feature_key'],
+  ),
+
+  // ─── Publish pipeline ───────────────────────────────────────────
+  // A run is opened BEFORE any provider call so a process that dies mid-publish
+  // still leaves evidence of what was attempted. RETURNING id because pg has no
+  // lastInsertRowid.
+  insertPublishRun: stmt(
+    `INSERT INTO company_publish_runs (company_id, status, scenario_id, actor_email)
+     VALUES ($1, 'running', $2, $3) RETURNING id`,
+    ['company_id', 'scenario_id', 'actor_email'],
+  ),
+  finishPublishRun: stmt(
+    `UPDATE company_publish_runs
+        SET status = $1, steps = $2, error = $3, failed_step = $4,
+            agent_id = $5, finished_at = ${NOW}
+      WHERE id = $6`,
+    ['status', 'steps', 'error', 'failed_step', 'agent_id', 'id'],
+  ),
+  getLastPublishRun: stmt(
+    `SELECT * FROM company_publish_runs WHERE company_id = $1 ORDER BY id DESC LIMIT 1`,
+  ),
+  // Mirrors the run's outcome onto the company so the UI can badge it without
+  // joining the history table on every list render.
+  setCompanyPublishStatus: stmt(
+    `UPDATE companies
+        SET publish_status = $1,
+            published_at   = CASE WHEN $1 = 'published' THEN ${NOW} ELSE published_at END,
+            updated_at     = ${NOW}
+      WHERE id = $2`,
+    ['status', 'id'],
   ),
   setCompanyInboundAssistant: stmt(
-    `UPDATE companies SET assistant_id_inbound = $1, updated_at = ${NOW} WHERE id = $2`,
+    `UPDATE companies SET elevenlabs_agent_id_inbound = $1, updated_at = ${NOW} WHERE id = $2`,
     ['aid', 'id'],
   ),
   listCompanyIdNames: stmt(`SELECT id, name FROM companies`),
@@ -211,34 +327,59 @@ const sql = {
   // Both are company-scoped: session_id alone is a guessable key, so the
   // tenant is always part of the predicate (belt to the route guard's braces).
   getSession: stmt(`SELECT * FROM chats WHERE session_id = $1 AND company_id = $2 ORDER BY created_at ASC`),
+  // Bounded variant for the LLM prompt path — see the note in db-sqlite.js.
+  getSessionRecent: stmt(`SELECT * FROM chats WHERE session_id = $1 AND company_id = $2 ORDER BY created_at DESC, id DESC LIMIT $3`),
   setSessionSummary: stmt(`UPDATE chats SET summary = $1 WHERE session_id = $2 AND company_id = $3`),
 
   // ─── calls ───────────────────────────────────────────────
+  // `assistant_id` holds the provider's agent identifier (ElevenLabs agent_id
+  // today, a Vapi assistant id on historical rows). The column name predates
+  // the provider migration and is kept so no historical row has to be rewritten.
+  // WRITE RULE: a later event may FILL a field or CORRECT it, but must never
+  // blank one. Provider events are partial and unordered — a
+  // call_initiation_failure carries no caller number, start time or duration,
+  // and may carry no agent id to resolve a company from. Assigning those
+  // straight from `excluded` let one sparse event erase what an earlier
+  // complete event (or the outbound stub) had already established: the
+  // customer's number, the call's start time, even its company_id — which
+  // under row-level security makes the row vanish from the tenant that owns
+  // it. So EVERY column coalesces onto its current value.
   upsertCall: stmt(
-    `INSERT INTO calls (id, company_id, assistant_id, caller_number, duration_sec, started_at, ended_at, ended_reason, transcript, summary, cost_usd, direction, recording_url, structured_data)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    `INSERT INTO calls (id, company_id, assistant_id, caller_number, duration_sec, started_at, ended_at, ended_reason, transcript, summary, cost_usd, direction, recording_url, structured_data, provider, provider_call_ref, has_recording, cost_credits)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, 'inbound'), $13, $14, $15, $16, COALESCE($17, 0), $18)
      ON CONFLICT (id) DO UPDATE SET
-       company_id    = excluded.company_id,
-       assistant_id  = excluded.assistant_id,
-       caller_number = excluded.caller_number,
-       duration_sec  = excluded.duration_sec,
-       started_at    = excluded.started_at,
-       ended_at      = excluded.ended_at,
-       ended_reason  = excluded.ended_reason,
+       company_id    = COALESCE(excluded.company_id, calls.company_id),
+       assistant_id  = COALESCE(excluded.assistant_id, calls.assistant_id),
+       caller_number = COALESCE(excluded.caller_number, calls.caller_number),
+       duration_sec  = COALESCE(excluded.duration_sec, calls.duration_sec),
+       started_at    = COALESCE(excluded.started_at, calls.started_at),
+       ended_at      = COALESCE(excluded.ended_at, calls.ended_at),
+       ended_reason  = COALESCE(excluded.ended_reason, calls.ended_reason),
        transcript    = COALESCE(excluded.transcript, calls.transcript),
        summary       = COALESCE(excluded.summary, calls.summary),
-       cost_usd      = excluded.cost_usd,
-       direction     = COALESCE(excluded.direction, calls.direction),
+       cost_usd      = COALESCE(excluded.cost_usd, calls.cost_usd),
+       cost_credits  = COALESCE(excluded.cost_credits, calls.cost_credits),
+       -- direction is NOT NULL, so "the provider didn't say" cannot travel via
+       -- excluded.direction (the INSERT would have had to bind NULL into a NOT
+       -- NULL column). Read the PARAMETER instead: NULL means keep what the row
+       -- already has — which is what stops an outbound stub being relabelled
+       -- inbound by a late event that omits direction.
+       direction     = CASE WHEN $12::text IS NULL THEN calls.direction ELSE $12 END,
        recording_url = COALESCE(excluded.recording_url, calls.recording_url),
-       structured_data = COALESCE(excluded.structured_data, calls.structured_data)`,
+       structured_data = COALESCE(excluded.structured_data, calls.structured_data),
+       provider      = COALESCE(excluded.provider, calls.provider),
+       provider_call_ref = COALESCE(excluded.provider_call_ref, calls.provider_call_ref),
+       -- Latches on: audio appearing is news, its absence in a partial event is not.
+       has_recording = CASE WHEN $17::int = 1 THEN 1 ELSE calls.has_recording END`,
     ['id', 'company_id', 'assistant_id', 'caller_number', 'duration_sec', 'started_at', 'ended_at',
-     'ended_reason', 'transcript', 'summary', 'cost_usd', 'direction', 'recording_url', 'structured_data'],
+     'ended_reason', 'transcript', 'summary', 'cost_usd', 'direction', 'recording_url', 'structured_data',
+     'provider', 'provider_call_ref', 'has_recording', 'cost_credits'],
   ),
   insertOutboundCallStub: stmt(
-    `INSERT INTO calls (id, company_id, assistant_id, caller_number, started_at, direction)
-     VALUES ($1, $2, $3, $4, ${NOW}, 'outbound')
+    `INSERT INTO calls (id, company_id, assistant_id, caller_number, started_at, direction, provider, provider_call_ref)
+     VALUES ($1, $2, $3, $4, ${NOW}, 'outbound', $5, $6)
      ON CONFLICT (id) DO NOTHING`,
-    ['id', 'company_id', 'assistant_id', 'caller_number'],
+    ['id', 'company_id', 'assistant_id', 'caller_number', 'provider', 'provider_call_ref'],
   ),
   setCallSummary: stmt(`UPDATE calls SET summary = $1 WHERE id = $2`),
   listCallsForCompany: stmt(`SELECT * FROM calls WHERE company_id = $1 ORDER BY created_at DESC LIMIT $2`),
@@ -382,17 +523,15 @@ const sql = {
           LIMIT 30
        )`),
 
-  // ─── whatsapp sessions (agent API continuity) ────────────
+  // ─── whatsapp sessions (legacy) ──────────────────────────
+  // Read-only, and nothing reads it today. The public Agent API used to resume
+  // a text thread through a provider-issued chat id stored here; it now rebuilds
+  // history from `chats` (sql.getSession), which cannot expire. The table and
+  // this accessor are kept so historical rows remain inspectable — there is no
+  // writer any more, deliberately.
   getWhatsappSession: stmt(`
     SELECT vapi_chat_id FROM whatsapp_sessions
      WHERE company_id = $1 AND customer_phone = $2`),
-  upsertWhatsappSession: stmt(
-    `INSERT INTO whatsapp_sessions (company_id, customer_phone, vapi_chat_id, updated_at)
-     VALUES ($1, $2, $3, ${NOW})
-     ON CONFLICT (company_id, customer_phone) DO UPDATE
-        SET vapi_chat_id = excluded.vapi_chat_id, updated_at = ${NOW}`,
-    ['company_id', 'customer_phone', 'vapi_chat_id'],
-  ),
 
   // ─── api keys ────────────────────────────────────────────
   insertApiKey: stmt(
@@ -547,7 +686,7 @@ const sql = {
   ),
   countActiveCompanies: stmt(
     `SELECT COUNT(DISTINCT id)::int AS n FROM companies
-      WHERE assistant_id IS NOT NULL
+      WHERE elevenlabs_agent_id IS NOT NULL
         AND ($1::text IS NULL OR id = $1)`,
     ['company_id'],
   ),

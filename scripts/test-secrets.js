@@ -8,8 +8,8 @@ const { checkSecrets, mask } = require('../lib/secrets');
 
 const ROOT = path.join(__dirname, '..');
 const FULL = {
-  NODE_ENV: 'production', OPENAI_API_KEY: 'sk-abc123', VAPI_API_KEY: 'v',
-  ELEVENLABS_API_KEY: 'e', VAPI_WEBHOOK_SECRET: '12345678',
+  NODE_ENV: 'production', OPENAI_API_KEY: 'sk-abc123',
+  ELEVENLABS_API_KEY: 'e', ELEVENLABS_WEBHOOK_SECRET: '12345678',
 };
 // enforce in a child process so we can observe the real exit code / fail-safe
 const enforce = (env, tail = '') =>
@@ -32,9 +32,31 @@ test('invalid format: OPENAI without sk- prefix → invalid', () => {
   assert.equal(r.ok, false);
   assert.ok(r.invalid.some((s) => s.startsWith('OPENAI_API_KEY')));
 });
-test('invalid format: short VAPI_WEBHOOK_SECRET → invalid', () => {
-  const r = checkSecrets({ ...FULL, VAPI_WEBHOOK_SECRET: 'abc' });
-  assert.ok(r.invalid.some((s) => s.startsWith('VAPI_WEBHOOK_SECRET')));
+test('invalid format: short ELEVENLABS_WEBHOOK_SECRET → invalid', () => {
+  const r = checkSecrets({ ...FULL, ELEVENLABS_WEBHOOK_SECRET: 'abc' });
+  assert.ok(r.invalid.some((s) => s.startsWith('ELEVENLABS_WEBHOOK_SECRET')));
+});
+// Without a webhook secret the post-call endpoint cannot authenticate anything,
+// so an unsigned request could write call rows for any tenant. It must be a
+// boot-blocking requirement, not a warning.
+test('missing required: ELEVENLABS_WEBHOOK_SECRET absent → not ok, named', () => {
+  const { ELEVENLABS_WEBHOOK_SECRET, ...rest } = FULL;
+  const r = checkSecrets(rest);
+  assert.equal(r.ok, false);
+  assert.ok(r.missing.includes('ELEVENLABS_WEBHOOK_SECRET'));
+});
+// The KB tool secret is optional (it falls back to the webhook secret), but a
+// too-short value must still be rejected rather than silently weakening the
+// token that carries a call's tenant identity.
+test('optional-but-invalid: a short ELEVENLABS_TOOL_SECRET is reported', () => {
+  const r = checkSecrets({ ...FULL, ELEVENLABS_TOOL_SECRET: 'tiny' });
+  assert.equal(r.ok, false);
+  assert.ok(r.invalid.some((s) => s.startsWith('ELEVENLABS_TOOL_SECRET')));
+});
+test('no Vapi secret is required any more', () => {
+  const r = checkSecrets(FULL);
+  assert.ok(!r.missing.some((k) => k.startsWith('VAPI_')), 'VAPI_* must not block boot');
+  assert.ok(!r.report.some((x) => x.key.startsWith('VAPI_')), 'VAPI_* is no longer declared at all');
 });
 test('conditional: DB_DRIVER=postgres without DATABASE_URL → required + missing', () => {
   const r = checkSecrets({ ...FULL, DB_DRIVER: 'postgres' });

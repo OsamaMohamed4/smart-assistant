@@ -2,3 +2,6 @@ node_modules
 .env
 data.db*
 *.mp3
+
+# Local tunnel client — a downloaded binary, never part of the repo.
+*.exe

@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const path    = require('path');
 const crypto  = require('crypto');
-const axios   = require('axios');
 const OpenAI  = require('openai');
 const helmet  = require('helmet');
 const cookieParser = require('cookie-parser');
@@ -10,12 +9,11 @@ const rateLimit = require('express-rate-limit');
 
 const multer = require('multer');
 const { db, sql, get: dataGet, all: dataAll, run: dataRun, withTransaction, initDb, healthCheck, close: dbClose, isPg } = require('./db');
-// TEXT timestamp literal for dynamic SQL that must run on both engines.
-const NOW_SQL = isPg ? `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')` : `datetime('now')`;
 const { loadCompany, listCompaniesFull, invalidateCache, buildSystemPromptWithRAG, fillGlobals } = require('./companies');
 const { summarize, chatToTranscript } = require('./summarize');
 const { ingestDocument, retrieve, repairMojibake, invalidateChunkCache } = require('./lib/rag');
 const { END_CALL_TOOL_RULE } = require('./lib/master-prompt');
+const { renderFactsBlock, businessProfileSchema, parseBusinessProfile } = require('./lib/business-profile');
 const { lintScenario } = require('./lib/scenario-lint');
 const { TEMPLATES: SCENARIO_TEMPLATES } = require('./lib/scenario-templates');
 const { validate } = require('./lib/validate');
@@ -32,7 +30,10 @@ const clientsRoutes = require('./routes/clients');
 const { router: webhookRoutes, getRecentWebhookAttempts } = require('./routes/webhook');
 const campaignsRoutes = require('./routes/campaigns');
 const evalsRoutes = require('./routes/evals');
-const { upsertVapiCall, startDrainTimer } = require('./services/call-events');
+const { startDrainTimer, backfillRecentCalls, refreshCall, recordingLinkFor } = require('./services/call-events');
+const voice = require('./services/voice');
+const { publishCompany } = require('./services/publish/pipeline');
+const { describeFeatures, setFeature } = require('./services/features/store');
 const { startCampaignWorker, getWorkerHealth: getCampaignWorkerHealth } = require('./services/campaigns');
 const { startRetentionWorker } = require('./services/retention');
 const { dailyCap, checkAndBumpUsage } = require('./services/usage');
@@ -78,33 +79,8 @@ const uploadAudio = multer({
 });
 
 // External-API timeouts (ms). Default policy: never let a hanging upstream
-// pin a request indefinitely. OpenAI is the most variable; ElevenLabs starts
-// streaming fast but the connection establishment may stall; Vapi sync is
-// occasional and slow.
+// pin a request indefinitely. OpenAI is the most variable.
 const OPENAI_TIMEOUT_MS = 25_000;
-const VAPI_TIMEOUT_MS   = 20_000;
-
-// Numeric env override with a safe fallback — used by the latency-tuning knobs
-// below so they can be A/B'd from Railway without a code change.
-const num = (v, dflt) => (Number.isFinite(Number(v)) ? Number(v) : dflt);
-
-// Speech-to-text provider. Default is the Arabic-pinned Gemini the operator
-// selected for accuracy. Profiling 145 real turns showed it is also the single
-// largest latency source (see the comment at the transcriber assignment), so
-// it is env-overridable to allow a like-for-like A/B against Vapi's own
-// performanceMetrics. Set TRANSCRIBER_JSON to a full Vapi transcriber object.
-const TRANSCRIBER = (() => {
-  const raw = (process.env.TRANSCRIBER_JSON || '').trim();
-  if (!raw) return { provider: 'google', model: 'gemini-2.5-flash', language: 'Arabic' };
-  try {
-    const t = JSON.parse(raw);
-    if (t && typeof t === 'object' && t.provider) return t;
-    console.warn('TRANSCRIBER_JSON missing "provider" — using the default transcriber');
-  } catch (e) {
-    console.warn(`TRANSCRIBER_JSON is not valid JSON (${e.message}) — using the default transcriber`);
-  }
-  return { provider: 'google', model: 'gemini-2.5-flash', language: 'Arabic' };
-})();
 
 const openai = new OpenAI({
   apiKey : process.env.OPENAI_API_KEY,
@@ -124,9 +100,9 @@ const app = express();
 // and default to 1 there; the TRUST_PROXY env var still overrides.
 const ON_RAILWAY = !!(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_STATIC_URL);
 
-// Public base URL of THIS server (no trailing slash). Needed when we hand
-// Vapi a callback URL (the in-call KB search tool). Railway exposes the
-// public domain as RAILWAY_PUBLIC_DOMAIN; PUBLIC_BASE_URL env overrides.
+// Public base URL of THIS server (no trailing slash). Needed when we hand the
+// voice provider a callback URL (the in-call KB search tool). Railway exposes
+// the public domain as RAILWAY_PUBLIC_DOMAIN; PUBLIC_BASE_URL env overrides.
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL
   || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')
 ).replace(/\/+$/, '');
@@ -137,31 +113,29 @@ app.set('trust proxy', TRUST_PROXY);
 
 // Strict CSP for the SPA. `unsafe-inline` on style is required by Tailwind's
 // runtime styles + lucide-react inline SVG styling. All script must be served
-// from same origin (no inline JS, no eval). `connect-src` covers fetch/XHR;
-// the Vapi Web SDK calls api.vapi.ai (REST), wss://*.vapi.ai (signaling),
-// and *.daily.co (WebRTC media servers Vapi uses under the hood).
+// from same origin: no inline JS, no eval, no third-party script host.
+//
+// The browser talks to NO voice provider. Calls are placed server-side over
+// SIP and answered on a real phone, so the browser voice SDK this app used to
+// load — which required third-party script/media/websocket origins and
+// 'unsafe-eval' to run a remotely-fetched WebRTC bundle — has no successor.
+// Those allowances are deleted rather than retargeted; dropping 'unsafe-eval'
+// is a real tightening, not a rename. The only remaining cross-origin connect
+// target is Sentry error reporting.
 app.use(helmet({
   contentSecurityPolicy: {
     useDefaults: true,
     directives: {
       defaultSrc:     ["'self'"],
-      // Daily.co's WebRTC bundle (Vapi loads it dynamically) is evaluated via
-      // `eval` of a remote script. We have to allow both 'unsafe-eval' and
-      // c.daily.co in script-src for the SDK to start a call.
-      scriptSrc:      ["'self'", "'unsafe-eval'", 'https://*.daily.co'],
+      scriptSrc:      ["'self'"],
       scriptSrcAttr:  ["'none'"],
       styleSrc:       ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
       imgSrc:         ["'self'", "data:", "blob:"],
       fontSrc:        ["'self'", "data:", 'https://fonts.gstatic.com'],
-      // Vapi SDK's own error telemetry routes through sentry.io.
-      connectSrc:     [
-        "'self'",
-        'https://api.vapi.ai', 'https://*.vapi.ai',
-        'wss://api.vapi.ai',   'wss://*.vapi.ai',
-        'https://*.daily.co',  'wss://*.daily.co',
-        'https://*.ingest.sentry.io',
-      ],
-      mediaSrc:       ["'self'", "blob:", 'https://*.vapi.ai', 'https://*.daily.co'],
+      connectSrc:     ["'self'", 'https://*.ingest.sentry.io'],
+      // Recordings stream from our own /api/calls/:id/recording proxy, so the
+      // <audio> element only ever loads same-origin bytes.
+      mediaSrc:       ["'self'", "blob:"],
       workerSrc:      ["'self'", 'blob:'],
       objectSrc:      ["'none'"],
       frameAncestors: ["'none'"],
@@ -175,7 +149,8 @@ app.use(helmet({
 }));
 app.use(cookieParser());
 
-// Raw body capture for Vapi webhook HMAC verification.
+// Raw body capture for provider webhook HMAC verification. The signature is
+// over the exact bytes sent, so a re-serialized req.body would never match.
 app.use(express.json({
   limit: '2mb',
   verify: (req, _res, buf) => { req.rawBody = buf; },
@@ -238,7 +213,8 @@ const agentLimiter = rateLimit({
 // CSRF defense for cookie-authenticated endpoints: the SPA always sends
 // `X-Requested-With: XMLHttpRequest`, which a cross-origin form-style attacker
 // cannot set without triggering a CORS preflight. Pairs with SameSite=Lax.
-// Skip for safe methods and for the Vapi webhook (server-to-server, HMAC-signed).
+// Skip for safe methods and for provider webhooks (server-to-server, each with
+// its own authentication — HMAC signature or a minted per-company token).
 function requireXhrHeader(req, res, next) {
   const m = req.method.toUpperCase();
   if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return next();
@@ -281,11 +257,20 @@ app.get('/api/public/companies/:id', async (req, res) => {
 });
 
 // ─── Public Agent HTTP API (/api/v1/agent/chat) ──────────────────
-// External integrations POST a customer message here and get the AI agent's
-// text reply. Calls Vapi /chat with previousChatId resumed from the
-// whatsapp_sessions table (keyed by customer phone) so a returning customer
-// continues the same conversation. Server-to-server; mounted before
-// requireAuth so callers don't need a logged-in session.
+// External integrations (WhatsApp BSPs, custom channels) POST a customer
+// message here and get the AI agent's text reply, synchronously.
+//
+// Provider note: the voice provider has no synchronous text endpoint — its
+// text channel is asynchronous (accept now, reply by webhook later), which
+// would break this contract for every existing caller. So text runs on the
+// SAME scenario prompt and the SAME RAG retrieval as voice, executed locally:
+// buildSystemPromptWithRAG() is the single source of truth that the voice sync
+// also composes from, and resolveAgentModel() picks the identical model. What
+// a caller tests here is still what the scenario says.
+//
+// Continuity: the conversation is rebuilt from the `chats` table, keyed by a
+// deterministic per-customer session id, so a customer messaging over days
+// resumes where they left off with no provider-side thread to expire.
 // Resolve the caller's API key to a company scope.
 //  1. Per-company key (api_keys table, sha256 lookup) — the correct path.
 //     The key itself IS the tenant scope; a body company_id that disagrees
@@ -358,9 +343,6 @@ app.post('/api/v1/agent/chat', agentLimiter, validate({ body: schemas.agentChatB
   if (!company) {
     return res.status(404).json({ success: false, error: 'company not found' });
   }
-  if (!company.assistantId) {
-    return res.status(409).json({ success: false, error: 'company not published to Vapi' });
-  }
   if (!(await checkAndBumpUsage(company.id, 'agent_msgs', dailyCap(company, 'dailyMessageCap', 'DAILY_MSG_CAP', 2000)))) {
     return res.status(429).json({ success: false, error: 'daily message limit reached for this company' });
   }
@@ -376,57 +358,31 @@ app.post('/api/v1/agent/chat', agentLimiter, validate({ body: schemas.agentChatB
     }
   }
 
-  // Resume previousChatId for this (company, customer_phone) pair so the
-  // conversation stays stateful across multiple HTTP calls.
-  const prev = await sql.getWhatsappSession.get(company.id, customerPhone);
-  const previousChatId = prev?.vapi_chat_id || undefined;
+  // Deterministic per-customer thread id. Derived from the phone number so a
+  // returning customer lands in the same conversation without any stored
+  // mapping that could expire or drift.
+  const sessionId = 'api-' + customerPhone.replace(/[^0-9]/g, '');
+  const history = await loadSessionHistory(company.id, sessionId);
 
   const t0 = Date.now();
-  const vapiHeaders = { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' };
-  const vapiBody = (withPrev) => ({
-    assistantId       : company.assistantId,
-    input             : message,
-    assistantOverrides: { variableValues: vars },
-    ...(withPrev && previousChatId ? { previousChatId } : {}),
-  });
-
   let reply = '';
-  let newChatId = previousChatId;
   try {
-    const r = await axios.post('https://api.vapi.ai/chat', vapiBody(true),
-      { headers: vapiHeaders, timeout: VAPI_TIMEOUT_MS });
-    reply = (r.data.output || []).map((x) => x.content).filter(Boolean).join('\n').trim();
-    newChatId = r.data.id || newChatId;
+    const r = await askGPT(company, message, history, vars);
+    reply = String(r.reply || '').trim();
   } catch (e) {
-    // Stale chat ids expire on Vapi — retry once without previousChatId.
-    if (previousChatId && /not found|invalid/i.test(e.response?.data?.message || '')) {
-      try {
-        const r = await axios.post('https://api.vapi.ai/chat', vapiBody(false),
-          { headers: vapiHeaders, timeout: VAPI_TIMEOUT_MS });
-        reply = (r.data.output || []).map((x) => x.content).filter(Boolean).join('\n').trim();
-        newChatId = r.data.id;
-      } catch (e2) {
-        req.log.error('agent api: vapi chat (retry) failed', { err: e2.message, companyId: company.id });
-        return res.status(502).json({ success: false, error: 'agent unavailable' });
-      }
-    } else {
-      req.log.error('agent api: vapi chat failed', { err: e.message, status: e.response?.status, companyId: company.id });
-      return res.status(502).json({ success: false, error: 'agent unavailable' });
+    if (e.code === 'NO_ACTIVE_SCENARIO') {
+      return res.status(409).json({ success: false, error: e.message, code: e.code });
     }
+    req.log.error('agent api: chat failed', { err: e.message, companyId: company.id });
+    return res.status(502).json({ success: false, error: 'agent unavailable' });
   }
 
-  // Persist the new chat id so the next inbound message resumes the thread.
-  await sql.upsertWhatsappSession.run({
-    company_id    : company.id,
-    customer_phone: customerPhone,
-    vapi_chat_id  : newChatId || null,
-  });
-
-  // Log to chats so the conversation shows up in the dashboard.
+  // Log to chats so the conversation shows up in the dashboard AND becomes the
+  // history the next turn resumes from.
   try {
     await sql.insertChat.run({
       company_id     : company.id,
-      session_id     : 'api-' + customerPhone.replace(/[^0-9]/g, ''),
+      session_id     : sessionId,
       user_message   : message,
       assistant_reply: reply || '',
       channel        : 'api',
@@ -438,7 +394,10 @@ app.post('/api/v1/agent/chat', agentLimiter, validate({ body: schemas.agentChatB
   res.json({
     success    : true,
     reply      : reply || '',
-    chat_id    : newChatId || null,
+    // Kept for response-shape compatibility with existing integrations. It is
+    // now our own stable thread id rather than a provider-issued one, so it no
+    // longer expires — callers that echo it back are unaffected.
+    chat_id    : sessionId,
     company_id : company.id,
     latency_ms : Date.now() - t0,
   });
@@ -459,6 +418,36 @@ const COMPANY_ID_RE  = /^[a-z0-9-]{1,40}$/;
 const MAX_HISTORY    = 20;        // max messages forwarded to the LLM per turn
 const MAX_MSG_CHARS  = 2000;      // per-message cap
 const MAX_USER_MSG_CHARS = 4000;  // per-user-turn cap
+
+// Rebuild a conversation from the turns we already store, for channels where
+// the client does not (and should not have to) send history back — the public
+// Agent API and the Playground chat tab. Company-scoped: session_id alone is
+// guessable, so the tenant is always part of the lookup.
+//
+// Capped at MAX_HISTORY messages, same as the client-supplied path, so a very
+// long-running thread cannot grow the prompt without bound.
+async function loadSessionHistory(companyId, sessionId) {
+  if (!sessionId) return [];
+  let rows = [];
+  try {
+    // Read only what can survive the MAX_HISTORY slice below. Each chat row
+    // yields at most two messages (the user turn and the reply), so MAX_HISTORY
+    // rows is always at least MAX_HISTORY messages — the same window as before,
+    // without dragging a year of WhatsApp history through the process on every
+    // turn. Rows come back newest-first and are reversed to chronological.
+    rows = await sql.getSessionRecent.all(sessionId, companyId, MAX_HISTORY);
+    rows = rows.slice().reverse();
+  } catch (e) {
+    logger.warn('history load failed — continuing without it', { err: e.message, companyId });
+    return [];
+  }
+  const messages = [];
+  for (const r of rows) {
+    if (r.user_message) messages.push({ role: 'user', content: String(r.user_message).slice(0, MAX_MSG_CHARS) });
+    if (r.assistant_reply) messages.push({ role: 'assistant', content: String(r.assistant_reply).slice(0, MAX_MSG_CHARS) });
+  }
+  return messages.slice(-MAX_HISTORY);
+}
 
 async function resolveCompany(req, res) {
   const companyId = String(req.body?.companyId || '');
@@ -502,6 +491,52 @@ async function resolveCompany(req, res) {
 
 // audit() lives in lib/audit.js.
 
+// Give a company exclusive ownership of a DID and/or an imported provider
+// number, releasing whichever company held it before.
+//
+// A number identifies exactly ONE tenant: inbound calls are attributed back to
+// a company through `phone_number` and `elevenlabs_phone_number_id`, so if two
+// rows claim the same value a call cannot be attributed at all (the resolver
+// refuses ambiguity rather than guessing). Transferring therefore has to clear
+// the old owner in the SAME transaction that sets the new one — otherwise a
+// crash in between leaves exactly the duplicated state we are preventing.
+//
+// The clear is scoped to THIS value and excludes the new owner, so no other
+// company's row is touched.
+//
+// @returns {Promise<string[]>} ids of companies the number was taken from.
+async function claimPhoneOwnership({ companyId, phoneNumber, phoneNumberId, log }) {
+  const released = new Set();
+  await withTransaction(async () => {
+    if (phoneNumber) {
+      const prior = await dataAll(
+        'SELECT id FROM companies WHERE phone_number = ? AND id <> ?', [phoneNumber, companyId],
+      );
+      for (const r of prior) released.add(r.id);
+      await sql.clearPhoneNumberOwner.run({ value: phoneNumber, keep: companyId });
+    }
+    if (phoneNumberId) {
+      const prior = await dataAll(
+        'SELECT id FROM companies WHERE elevenlabs_phone_number_id = ? AND id <> ?',
+        [phoneNumberId, companyId],
+      );
+      for (const r of prior) released.add(r.id);
+      await sql.clearElevenLabsPhoneOwner.run({ value: phoneNumberId, keep: companyId });
+    }
+    await sql.setCompanyElevenLabsPhone.run({
+      id: companyId,
+      phone_number_id: phoneNumberId ?? null,
+      phone_number   : phoneNumber ?? null,
+    });
+  });
+  if (released.size) {
+    log?.warn?.('voice: phone number transferred between companies', {
+      to: companyId, releasedFrom: [...released],
+    });
+  }
+  return [...released];
+}
+
 async function askGPT(company, message, history, vars) {
   const systemContent = await buildSystemPromptWithRAG(company, message, vars);
   const messages = [
@@ -520,8 +555,9 @@ async function askGPT(company, message, history, vars) {
 
 // Compose the EXACT system prompt an assistant runs on for a given company +
 // instruction prompt: scenario text (globals filled) + KB dump (capped) + the
-// technical endCall wiring. Single source of truth shared by syncVapi (voice),
-// the draft tester, and the prompt preview — so what you test == what ships.
+// technical end-call wiring. Single source of truth shared by the voice
+// publish, the draft tester, and the prompt preview — so what you test == what
+// ships.
 const KB_INJECT_CAP = 15000; // chars — headroom for a few docs of real content
 // Chunks likely to carry the facts a caller asks about (prices, warranties,
 // phone numbers). Kept first when the KB overflows the cap so key info isn't
@@ -553,6 +589,14 @@ function resolveAgentModel(company) {
 }
 async function composeSystemPrompt(company, instructionPrompt) {
   let systemContent = fillGlobals(instructionPrompt || '', company);
+
+  // The company's own FACTS, between the operator's instructions and the bulk
+  // knowledge base. Curated and short, so it goes first; the KB is documents,
+  // so it goes after. Renders to '' when the operator has filled nothing in,
+  // which keeps the output byte-identical to before for every such company.
+  // Behaviour stays operator-authored — this block states data only.
+  systemContent += renderFactsBlock(company, company.businessProfile);
+
   const chunks = await sql.listAllChunksForCompany.all(company.id);
   if (chunks.length) {
     const header = '\n\n---\n\n## قاعدة معرفة الشركة\n\nاستخدم المعلومات التالية كمصدر حقائق رسمي. لا تختلق أسعاراً أو معلومات غير موجودة هنا:\n\n';
@@ -578,28 +622,6 @@ async function composeSystemPrompt(company, instructionPrompt) {
   }
   systemContent += END_CALL_TOOL_RULE;
   return systemContent;
-}
-
-// Create-or-update a Vapi assistant from a config. Verifies a stored id still
-// exists (clears if 404), recovers by name, then PATCH/POST. Returns the id.
-// Shared by the primary and the optional inbound assistant.
-async function upsertVapiAssistant(cfg, existingId, vapiOpts, log) {
-  let id = existingId;
-  if (id) {
-    try {
-      await axios.get(`https://api.vapi.ai/assistant/${id}`, vapiOpts);
-    } catch (e) {
-      if (e.response?.status === 404) { log?.warn?.('vapi: stored assistant gone, recreating', { id }); id = null; }
-      else throw e;
-    }
-  }
-  if (!id) {
-    const list = (await axios.get('https://api.vapi.ai/assistant', vapiOpts)).data || [];
-    id = list.find((a) => a.name === cfg.name)?.id || null;
-  }
-  if (id) await axios.patch(`https://api.vapi.ai/assistant/${id}`, cfg, vapiOpts);
-  else { const r = await axios.post('https://api.vapi.ai/assistant', cfg, vapiOpts); id = r.data.id; }
-  return id;
 }
 
 function getOrMakeSessionId(req) {
@@ -721,11 +743,14 @@ app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
 // Per-company overrides still win via settings.voiceId (set in the admin UI).
 const DEFAULT_VOICE_ID = 'MI88rOZjXbH22N8KHXUo'; // Ali علي — الصوت الافتراضي (مختبَر وجيد)
 
-// Voice pacing defaults applied at every Vapi sync (env-tunable, no deploy):
-//   speed 1.2 (faster speech) + optimizeStreamingLatency 4 (fastest streaming),
-//   both per the operator's request. Clamped to ElevenLabs' valid ranges.
+// Voice pacing default applied at every publish (env-tunable, no deploy):
+// speed 1.2 (faster speech), per the operator's request. Clamped to the valid
+// ElevenLabs range.
+//
+// The companion `optimizeStreamingLatency` knob is gone: it was a property of
+// the previous provider's TTS bridge, and the Agents TTS config has no such
+// field. Sending it would be rejected, so it is removed rather than renamed.
 const VOICE_SPEED_DEFAULT   = clampRange(process.env.VOICE_SPEED_DEFAULT, 0.7, 1.2, 1.2);
-const VOICE_LATENCY_DEFAULT = clampRange(process.env.VOICE_LATENCY_DEFAULT, 0, 4, 4);
 function clampRange(v, lo, hi, dflt) {
   return Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt;
 }
@@ -753,21 +778,24 @@ app.get('/api/voices', requireAuth, async (_req, res) => {
   res.json(PLAYGROUND_VOICES);
 });
 
-// Outbound call: Vapi rings the user's phone using the company's synced
-// assistant. No WebRTC needed in the browser — Vapi handles the full PSTN
-// pipeline. Same assistant as a real customer call → same prompt, same voice,
-// same transcriber, real production behaviour.
+// Outbound call: the provider rings the customer's phone THROUGH this
+// company's own imported 3CX number, using this company's own agent. No audio
+// in the browser at all — the full leg is SIP, so what the Playground exercises
+// is the real production path: same prompt, same voice, same telephony.
 app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, res) => {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'company not found' });
-  if (!c.assistantId) {
-    return res.status(409).json({ error: 'انشر الشركة على Vapi أولاً.', code: 'NOT_PUBLISHED' });
+  if (!c.agentId) {
+    return res.status(409).json({ error: 'انشر الشركة على ElevenLabs أولاً.', code: 'NOT_PUBLISHED' });
   }
-  // Per-company outbound number lets each company call from its OWN number.
-  // Falls back to the platform-wide env var for single-tenant setups.
-  const outboundPhoneId = c.settings?.outboundPhoneNumberId || process.env.VAPI_PHONE_NUMBER_ID;
-  if (!outboundPhoneId) {
-    return res.status(503).json({ error: 'رقم صادر غير مضبوط لهذه الشركة (إعدادات الصوت) ولا VAPI_PHONE_NUMBER_ID.' });
+  // Each company dials from its OWN number. There is deliberately NO
+  // platform-wide fallback: with multiple tenants, falling back would place
+  // one company's calls on another company's line.
+  if (!c.phoneNumberId) {
+    return res.status(503).json({
+      error: 'رقم الشركة غير مستورد إلى ElevenLabs بعد — استورد رقم 3CX الخاص بها أولاً.',
+      code : 'NO_PHONE_NUMBER_ID',
+    });
   }
   if (!(await checkAndBumpUsage(c.id, 'outbound_calls', dailyCap(c, 'dailyOutboundCap', 'DAILY_OUTBOUND_CAP', 200)))) {
     return res.status(429).json({ error: 'تم بلوغ الحد اليومي للمكالمات الصادرة لهذه الشركة.' });
@@ -787,69 +815,57 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
     }
   }
 
-  // Outbound override: use the scenario's outbound first_message instead of
-  // the inbound default baked into the assistant. Vapi interpolates
-  // {{customer_name}}/etc from variableValues at call start.
-  const overrides = { variableValues: vars };
+  // Outbound opening line: the scenario's outbound first_message (which knows
+  // who we are calling) instead of the inbound greeting baked into the agent.
+  // {{customer_name}} and friends are interpolated by the provider from the
+  // dynamic variables above. This override only takes effect because the sync
+  // enables first_message in platform_settings.overrides.
   const activeScenario = await sql.getActiveScenarioForCompany.get(c.id);
-  if (activeScenario?.first_message) {
-    overrides.firstMessage = activeScenario.first_message;
-  }
-  // assistant-speaks-first: greet immediately when the callee picks up, then
-  // continue. Delivering the FULL opening from its start (with no clipping)
-  // depends on the carrier/3CX sending the SIP answer (200 OK) only when the
-  // callee actually picks up — otherwise the assistant speaks during ringing.
-  overrides.firstMessageMode = 'assistant-speaks-first';
+  const firstMessage = activeScenario?.first_message || null;
 
   try {
-    const r = await axios.post(
-      'https://api.vapi.ai/call',
-      {
-        assistantId       : c.assistantId,
-        phoneNumberId     : outboundPhoneId,
-        customer          : { number: phoneNumber },
-        assistantOverrides: overrides,
-      },
-      {
-        headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' },
-        timeout: VAPI_TIMEOUT_MS,
-      },
-    );
-    // Pre-register the call so it appears in Conversations immediately,
-    // even before Vapi's end-of-call-report webhook arrives. The webhook's
-    // upsert fills in transcript/duration/cost when the call ends.
+    const { callId, callRef, status } = await voice.startOutboundCall({
+      company: c, toNumber: phoneNumber, variables: vars, firstMessage,
+    });
+    // Pre-register the call so it appears in Conversations immediately, even
+    // before the post-call webhook arrives. That webhook's upsert fills in
+    // transcript/duration/cost when the call ends.
     try {
       await sql.insertOutboundCallStub.run({
-        id            : r.data.id,
+        id            : callId,
         company_id    : c.id,
-        assistant_id  : c.assistantId,
+        assistant_id  : c.agentId,
         caller_number : encryptField(phoneNumber),
+        provider      : c.voiceProvider,
+        provider_call_ref: callRef,
       });
     } catch (e) {
       req.log.error('outbound-call stub insert failed', { err: e.message });
     }
-    audit(req, 'playground.outbound', `calls/${r.data.id}`, { phoneNumber, companyId: c.id });
-    res.json({ callId: r.data.id, status: r.data.status });
+    audit(req, 'playground.outbound', `calls/${callId}`, { phoneNumber, companyId: c.id });
+    res.json({ callId, status });
   } catch (e) {
-    const detail = e.response?.data?.message || e.response?.data?.error || e.message;
+    const detail = voice.errText(e);
     req.log.error('outbound-call error', { err: detail, companyId: c.id });
     res.status(502).json({ error: String(detail).slice(0, 300) });
   }
 });
 
-// Text chat with the same Vapi assistant (no audio). Useful when the user
-// wants to test the scenario without a phone call. Vapi's /chat endpoint
-// runs the EXACT same prompt + variables but skips STT/TTS entirely.
+// Text chat against the company's scenario (no audio). Lets an operator test
+// wording without placing a phone call.
+//
+// Runs the SAME composed prompt, the SAME RAG retrieval and the SAME model
+// that the voice agent is published with — buildSystemPromptWithRAG() and
+// resolveAgentModel() are the single sources of truth for both channels. It is
+// executed locally rather than through the provider because the Agents platform
+// has no synchronous text endpoint; its text channel answers by webhook, which
+// a request/response UI cannot use.
 app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, res) => {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'company not found' });
-  if (!c.assistantId) {
-    return res.status(409).json({ error: 'انشر الشركة على Vapi أولاً.', code: 'NOT_PUBLISHED' });
-  }
   const message = String(req.body?.message || '').trim();
   if (!message) return res.status(400).json({ error: 'message required' });
   if (message.length > MAX_USER_MSG_CHARS) return res.status(413).json({ error: 'message too long' });
-  const previousChatId = String(req.body?.previousChatId || '').slice(0, 80) || undefined;
   // Stable client-supplied session id groups every turn of one Playground
   // conversation into a single row on the Conversations page. Falls back to
   // a fresh id if the client didn't send one (each turn would then be its
@@ -867,21 +883,9 @@ app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, 
 
   const t0 = Date.now();
   try {
-    const r = await axios.post(
-      'https://api.vapi.ai/chat',
-      {
-        assistantId       : c.assistantId,
-        input             : message,
-        previousChatId,
-        assistantOverrides: { variableValues: vars },
-      },
-      {
-        headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' },
-        timeout: VAPI_TIMEOUT_MS,
-      },
-    );
-    // Vapi returns output as an array of message objects.
-    const reply = (r.data.output || []).map((m) => m.content).filter(Boolean).join('\n').trim();
+    const history = await loadSessionHistory(c.id, sessionId);
+    const r = await askGPT(c, message, history, vars);
+    const reply = String(r.reply || '').trim();
     // Persist the turn so the Playground chat shows up in Conversations like
     // every other channel. channel='text' marks it as an internal test chat.
     try {
@@ -895,19 +899,21 @@ app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, 
         user_id        : req.user?.id || null,
       });
     } catch (e) { req.log.error('assistant-chat: chat insert failed', { err: e.message }); }
-    res.json({ chatId: r.data.id, reply, sessionId });
+    res.json({ chatId: sessionId, reply, sessionId });
   } catch (e) {
-    const detail = e.response?.data?.message || e.response?.data?.error || e.message;
-    req.log.error('assistant-chat error', { err: detail, companyId: c.id });
-    res.status(502).json({ error: String(detail).slice(0, 300) });
+    if (e.code === 'NO_ACTIVE_SCENARIO') {
+      return res.status(409).json({ error: e.message, code: e.code });
+    }
+    req.log.error('assistant-chat error', { err: e.message, companyId: c.id });
+    res.status(502).json({ error: String(e.message).slice(0, 300) });
   }
 });
 
-// /chat-voice, /stt, /tts were the old browser-only voice pipeline. Vapi
-// Web SDK now handles audio in the Playground, so these routes are gone.
-// The /chat (text) endpoint above stays for non-voice scenarios + tests.
+// /chat-voice, /stt, /tts were the old browser-only voice pipeline. Voice now
+// happens entirely over SIP/telephony, so these routes stay gone. The /chat
+// (text) endpoint above remains for non-voice scenarios + tests.
 
-// The Vapi webhook pipeline lives in routes/webhook.js (verification +
+// The provider webhook pipeline lives in routes/webhook.js (verification +
 // inbox) and services/call-events.js (event -> calls row + drain).
 app.use('/webhook', webhookRoutes);
 startDrainTimer();
@@ -915,33 +921,24 @@ startCampaignWorker();
 // PDPL retention. No-op unless RETENTION_DAYS_* is configured (audit F-04a).
 startRetentionWorker();
 
-// ─── Admin: backfill recent calls from Vapi ──────────────────────
-// Superadmin-only. Pulls the most recent calls straight from Vapi's REST
-// API and upserts them, catching anything the webhook missed (inbound or
-// outbound) — e.g. when a phone number's per-number Server URL didn't
-// carry the auth header, so end-of-call reports 401'd. Safe to run anytime;
-// upsertCall is idempotent on call id.
+// ─── Admin: backfill recent calls from the provider ──────────────
+// Superadmin-only. Pulls the most recent conversations straight from the
+// provider's REST API and upserts them, catching anything the webhook missed
+// (inbound or outbound) — e.g. a period where the webhook secret was wrong and
+// every delivery 401'd. Safe to run anytime; the upsert is idempotent on call
+// id, so re-running only fills gaps.
 app.get('/api/_admin/sync-calls', async (req, res) => {
   if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
-  if (!process.env.VAPI_API_KEY) return res.status(503).json({ error: 'VAPI_API_KEY not set' });
+  if (!process.env.ELEVENLABS_API_KEY) return res.status(503).json({ error: 'ELEVENLABS_API_KEY not set' });
   const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
   try {
-    const r = await axios.get('https://api.vapi.ai/call', {
-      headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}` },
-      params : { limit },
-      timeout: 20_000,
-    });
-    const calls = Array.isArray(r.data) ? r.data : [];
-    let matched = 0;
-    for (const v of calls) {
-      const cid = await upsertVapiCall(v);
-      if (cid) matched++;
-    }
-    audit(req, 'admin.sync_calls', null, { fetched: calls.length, matched });
-    res.json({ success: true, fetched: calls.length, matched, unmatched: calls.length - matched });
+    const { fetched, matched } = await backfillRecentCalls(limit);
+    audit(req, 'admin.sync_calls', null, { fetched, matched });
+    res.json({ success: true, fetched, matched, unmatched: fetched - matched });
   } catch (e) {
-    req.log.error('sync-calls failed', { err: e.response?.data || e.message });
-    res.status(502).json({ success: false, error: e.response?.data?.message || e.message });
+    const detail = voice.errText(e);
+    req.log.error('sync-calls failed', { err: detail });
+    res.status(502).json({ success: false, error: detail });
   }
 });
 
@@ -995,21 +992,43 @@ app.get('/api/_admin/audit', async (req, res) => {
 });
 
 // ─── Debug: recent webhook attempts ──────────────────────────────
-// Superadmin only. Returns the last 10 webhook attempts (headers
-// sanitized) plus the length of VAPI_WEBHOOK_SECRET as configured on
-// this server, so the operator can spot mismatches between what Vapi
-// is sending and what Railway has in its env vars.
+// Superadmin only. Returns the last 10 webhook attempts (headers sanitized)
+// plus a fingerprint of each signing secret as configured on this server, so
+// the operator can spot a mismatch between the secret the provider signs with
+// and the one this deployment holds — without either value being printed.
+//
+// BOTH secrets are reported because the post-call and conversation-initiation
+// webhooks are separate resources in the workspace, each issued its own secret.
+// Reporting only the post-call one sent an operator debugging an init 401 to
+// compare against a secret that request was never signed with.
 app.get('/api/_debug/recent-webhooks', async (req, res) => {
   if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
-  const raw     = process.env.VAPI_WEBHOOK_SECRET || '';
-  const trimmed = raw.trim();
-  res.json({
-    serverEnv: {
+  const fingerprint = (raw = '') => {
+    const trimmed = raw.trim();
+    return {
       raw_length    : raw.length,
       trimmed_length: trimmed.length,
       first8        : trimmed.slice(0, 8),
       last4         : trimmed.slice(-4),
       has_whitespace: raw.length !== trimmed.length,
+    };
+  };
+  const post = process.env.ELEVENLABS_WEBHOOK_SECRET || '';
+  const init = process.env.ELEVENLABS_INIT_WEBHOOK_SECRET || '';
+  res.json({
+    // Unchanged key: this is the post-call secret, as before.
+    serverEnv: fingerprint(post),
+    // Which secret /webhook/elevenlabs/init verifies against, and how. That
+    // endpoint is NOT HMAC-signed by the provider: authentication is the
+    // constant header named here, which must be registered in the webhook's
+    // `request_headers` with exactly this value. `falls_back` means
+    // ELEVENLABS_INIT_WEBHOOK_SECRET is unset and the post-call secret is
+    // standing in for it.
+    initWebhookEnv: {
+      configured: !!init.trim(),
+      falls_back: !init.trim(),
+      header    : voice.DRIVERS.elevenlabs.INIT_TOKEN_HEADER,
+      ...fingerprint(init.trim() ? init : post),
     },
     attempts: getRecentWebhookAttempts(),
   });
@@ -1051,8 +1070,8 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, validate({ params
   const b = req.body || {};
   const clean = {};
   // Voice must be one we actually have on the ElevenLabs account. An
-  // unvalidated id is accepted here but only fails much later, at Vapi sync,
-  // as "Couldn't Find 11labs Voice" — which is exactly the production
+  // unvalidated id is accepted here but only fails much later, at publish
+  // time, as "Couldn't Find Voice" — which is exactly the production
   // incident this guards against. EXTRA_VOICE_IDS lets an operator add a new
   // voice without a deploy.
   if (typeof b.voiceId === 'string') {
@@ -1063,7 +1082,7 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, validate({ params
     clean.voiceId = v;
   }
   if (ALLOWED_MODELS.includes(b.model)) clean.model = b.model;
-  for (const k of ['temperature', 'maxTokens', 'stability', 'similarityBoost', 'optimizeStreamingLatency', 'voiceSpeed']) {
+  for (const k of ['temperature', 'maxTokens', 'stability', 'similarityBoost', 'voiceSpeed']) {
     if (b[k] !== undefined && Number.isFinite(Number(b[k]))) clean[k] = Number(b[k]);
   }
   // Spending caps are the platform's cost circuit-breaker (services/usage.js
@@ -1080,10 +1099,18 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, validate({ params
       if (Number.isFinite(Number(b[k]))) clean[k] = Number(b[k]);
     }
   }
-  // Per-company Vapi phone-number IDs (outbound is used to place calls;
-  // inbound is stored for reference — inbound routing is bound in Vapi).
-  for (const k of ['outboundPhoneNumberId', 'inboundPhoneNumberId']) {
-    if (typeof b[k] === 'string') clean[k] = b[k].trim().slice(0, 80);
+  // The company's imported ElevenLabs phone number. ONE id per company: the
+  // same 3CX DID answers inbound and is the caller ID on outbound, so the old
+  // in/out split no longer exists. It lives in a column rather than settings
+  // JSON because the webhook path resolves tenants by it and needs an index.
+  // Superadmin-only: it is the binding between a tenant and a real phone line,
+  // and a client repointing it would hijack another company's number.
+  let elevenlabsPhoneNumberId;
+  if (typeof b.elevenlabsPhoneNumberId === 'string') {
+    if (req.user.role !== 'superadmin') {
+      return res.status(403).json({ error: 'ربط رقم الهاتف متاح للمسؤول فقط' });
+    }
+    elevenlabsPhoneNumberId = b.elevenlabsPhoneNumberId.trim().slice(0, 80);
   }
   // Human-transfer number (E.164, e.g. +9665xxxxxxxx). Empty string clears it.
   if (typeof b.transferPhoneNumber === 'string') {
@@ -1108,14 +1135,25 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, validate({ params
   }
   if (typeof b.webhookSecret === 'string') clean.webhookSecret = b.webhookSecret.trim().slice(0, 128);
   // Merge over the existing settings: a partial PATCH (one key) must not
-  // wipe the rest (phone-number IDs, caps...).
+  // wipe the rest (caps, voice tuning...).
   let existing = {};
   try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
   const merged = { ...existing, ...clean };
   await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify(merged) });
-  invalidateCache(row.id);
+  if (elevenlabsPhoneNumberId !== undefined) {
+    // Same exclusivity rule as the import path: setting an id another company
+    // already holds transfers it rather than creating a duplicate claim.
+    const released = await claimPhoneOwnership({
+      companyId: row.id, phoneNumberId: elevenlabsPhoneNumberId || null, log: req.log,
+    });
+    audit(req, 'voice.phone_number_set', `companies/${row.id}`, {
+      phoneNumberId: elevenlabsPhoneNumberId,
+      releasedFrom : released.length ? released : undefined,
+    });
+  }
+  invalidateCache();
   audit(req, 'company.settings', `companies/${row.id}`, Object.keys(clean));
-  res.json({ settings: merged });
+  res.json({ settings: merged, elevenlabsPhoneNumberId: elevenlabsPhoneNumberId ?? row.elevenlabs_phone_number_id ?? null });
 });
 
 // ─── Per-company API keys (public Agent API) ─────────────────────
@@ -1163,7 +1201,6 @@ app.post('/api/companies', validate({ body: schemas.companyCreateBody }), async 
     language      : b.language || 'ar-SA',
     voice_id      : b.voiceId || DEFAULT_VOICE_ID,
     phone_number  : b.phoneNumber || null,
-    assistant_id  : null,
     system_prompt : b.systemPrompt || '',
     kb_text       : b.kbText || null,
   });
@@ -1176,13 +1213,16 @@ app.patch('/api/companies/:id', requireCompanyAccess, validate({ body: schemas.c
   const existing = await sql.getCompany.get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
+  // The provider agent id is deliberately NOT accepted here. It is owned by
+  // the publish path, so no PATCH can repoint one company at another
+  // company's agent — which would send that tenant's calls to the wrong
+  // prompt and the wrong knowledge base.
   await sql.updateCompany.run({
     id            : existing.id,
     name          : b.name          ?? existing.name,
     language      : b.language      ?? existing.language,
     voice_id      : b.voiceId       ?? existing.voice_id,
     phone_number  : b.phoneNumber   ?? existing.phone_number,
-    assistant_id  : b.assistantId   ?? existing.assistant_id,
     system_prompt : b.systemPrompt  ?? existing.system_prompt,
     kb_text       : b.kbText        ?? existing.kb_text,
   });
@@ -1258,44 +1298,16 @@ async function ensureCallOwned(req, res, next) {
 app.get('/api/calls/:id', ensureCallOwned, async (req, res) => {
   let call = req._call;
   // If the row is a stub (no transcript or no ended_reason yet), pull the
-  // latest state from Vapi and upsert. Covers two cases:
-  //   1. Outbound call we just initiated — webhook hasn't arrived yet.
-  //   2. Webhook arrived but never reached us (misconfigured URL, signature
-  //      mismatch, etc). Without this, the row stays as a permanent stub.
-  const needsRefresh = (!call.transcript || !call.ended_reason) && process.env.VAPI_API_KEY;
+  // latest state from the provider and upsert. Covers two cases:
+  //   1. Outbound call we just initiated — the webhook hasn't arrived yet.
+  //   2. The webhook arrived but never reached us (misconfigured URL,
+  //      signature mismatch...). Without this the row stays a permanent stub.
+  const needsRefresh = (!call.transcript || !call.ended_reason) && process.env.ELEVENLABS_API_KEY;
   if (needsRefresh) {
     try {
-      const r = await axios.get(`https://api.vapi.ai/call/${encodeURIComponent(call.id)}`, {
-        headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}` },
-        timeout: 10_000,
-      });
-      const v = r.data || {};
-      const startedAt = v.startedAt || null;
-      const endedAt   = v.endedAt   || null;
-      const duration  = startedAt && endedAt
-        ? Math.round((new Date(endedAt) - new Date(startedAt)) / 1000)
-        : (call.duration_sec || null);
-      const direction = String(v.type || '').toLowerCase().includes('outbound')
-        ? 'outbound' : (call.direction || 'inbound');
-      await sql.upsertCall.run({
-        id            : call.id,
-        company_id    : call.company_id,
-        assistant_id  : v.assistantId || call.assistant_id || null,
-        caller_number : v.customer?.number || call.caller_number || null,
-        duration_sec  : duration,
-        started_at    : startedAt || call.started_at || null,
-        ended_at      : endedAt   || call.ended_at   || null,
-        ended_reason  : v.endedReason || call.ended_reason || null,
-        transcript    : v.artifact?.transcript || v.transcript || call.transcript || null,
-        summary       : v.summary || call.summary || null,
-        cost_usd      : v.cost ?? call.cost_usd ?? null,
-        direction,
-        recording_url : v.artifact?.recordingUrl || v.recordingUrl || call.recording_url || null,
-        structured_data: v.analysis?.structuredData ? JSON.stringify(v.analysis.structuredData) : (call.structured_data || null),
-      });
-      call = await sql.getCall.get(call.id);
+      call = await refreshCall(call);
     } catch (e) {
-      req.log.warn('vapi call refresh failed', { err: e.message, callId: call.id });
+      req.log.warn('call refresh failed', { err: voice.errText(e), callId: call.id });
     }
   }
   res.json(decryptRow(call, CALL_PII_FIELDS));
@@ -1310,373 +1322,369 @@ app.post('/api/calls/:id/summarize', ensureCallOwned, async (req, res) => {
 
 // Stream a call's audio recording through our own backend.
 //
-// Why proxy instead of linking the stored URL directly: the provider's
-// recordingUrl is a presigned/expiring storage link. Once it expires, opening
-// it in the browser returns the raw storage error the operator saw
-// (`<Error><Code>InvalidArgument</Code><Message>Authorization</Message>`). It
-// also leaks the storage URL to the client. So at play-time we re-resolve the
-// FRESH url from Vapi (a presigned link is regenerated on each GET /call) and
-// pipe the bytes behind our own session auth. Range is forwarded so the
-// <audio> element can seek. Tenant-scoped via ensureCallOwned.
+// Why proxy rather than hand the browser a storage URL: audio is fetched from
+// the provider with OUR api key, which must never reach a client. Proxying
+// also means there is no presigned link to expire — the previous provider
+// handed out URLs that returned a raw storage error once they aged out, which
+// is the bug this endpoint was originally written to fix. Range is forwarded
+// so the <audio> element can seek. Tenant-scoped via ensureCallOwned.
 app.get('/api/calls/:id/recording', ensureCallOwned, async (req, res) => {
   const call = req._call;
-  let url = call.recording_url || null;
-
-  // Prefer a freshly-resolved URL so an expired presign is replaced.
-  if (process.env.VAPI_API_KEY) {
-    try {
-      const r = await axios.get(`https://api.vapi.ai/call/${encodeURIComponent(call.id)}`, {
-        headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}` },
-        timeout: 10_000,
-      });
-      const v = r.data || {};
-      const fresh = v.artifact?.recordingUrl || v.recordingUrl
-        || v.artifact?.stereoRecordingUrl || v.artifact?.monoRecordingUrl || null;
-      if (fresh) url = fresh;
-    } catch (e) {
-      req.log.warn('recording refresh failed', { err: e.message, callId: call.id });
-    }
-  }
-  if (!url) return res.status(404).json({ error: 'لا يوجد تسجيل لهذه المكالمة' });
-
   try {
-    // Only forward Range — never our cookie/auth or an Authorization header,
-    // which on a presigned URL would itself trigger InvalidArgument.
-    const range = req.headers.range;
-    const upstream = await axios.get(url, {
-      responseType : 'stream',
-      timeout      : 20_000,
-      headers      : range ? { Range: range } : {},
-      validateStatus: (s) => s >= 200 && s < 400,
-      maxRedirects : 5,
-    });
+    const upstream = await voice.fetchRecording(call, { range: req.headers.range });
+    if (!upstream) return res.status(404).json({ error: 'لا يوجد تسجيل لهذه المكالمة' });
     res.status(upstream.status);
     for (const h of ['content-type', 'content-length', 'accept-ranges', 'content-range', 'cache-control']) {
       if (upstream.headers[h]) res.setHeader(h, upstream.headers[h]);
     }
     if (!upstream.headers['content-type']) res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Disposition', `inline; filename="call-${call.id}.mp3"`);
-    upstream.data.on('error', () => { try { res.destroy(); } catch {} });
-    upstream.data.pipe(res);
+    upstream.stream.on('error', () => { try { res.destroy(); } catch {} });
+    upstream.stream.pipe(res);
   } catch (e) {
-    req.log.error('recording proxy failed', { err: e.message, callId: call.id });
+    req.log.error('recording proxy failed', { err: voice.errText(e), callId: call.id });
     if (!res.headersSent) res.status(502).json({ error: 'تعذّر جلب تسجيل المكالمة' });
   }
 });
 
-// Vapi sync: rebuild the Vapi assistant from the company's ACTIVE SCENARIO.
+// Publish: rebuild this company's voice agent from its ACTIVE SCENARIO.
 // Everything that matters — system prompt, first message, success criteria,
 // variable list — comes from the scenario row. Pressing this button is the
 // only thing that should change what callers hear on the phone, so the
 // /admin Scenarios page is the only source of truth.
-app.post('/api/companies/:id/sync-vapi', requireCompanyAccess, async (req, res) => {
+//
+// Route name is provider-neutral on purpose: the provider is an implementation
+// detail of services/voice, not something the admin UI should have to know.
+async function handlePublishCompany(req, res) {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
 
-  // Optional override: ?force=1 wipes the stored assistantId before sync.
-  // Forces a clean rebuild on Vapi — useful when the user has deleted the
-  // assistant from the dashboard and our PATCH would otherwise be silent.
-  if (req.query.force === '1' && c.assistantId) {
-    await dataRun('UPDATE companies SET assistant_id = NULL WHERE id = ?', [c.id]);
+  // Optional override: ?force=1 wipes the stored agent id before publishing,
+  // forcing a clean rebuild. Useful when the agent was deleted from the
+  // provider's dashboard and our update would otherwise keep failing against
+  // an id that no longer exists.
+  if (req.query.force === '1' && c.agentId) {
+    await dataRun('UPDATE companies SET elevenlabs_agent_id = NULL WHERE id = ?', [c.id]);
     invalidateCache(c.id);
-    Object.assign(c, { assistantId: null });
+    Object.assign(c, { agentId: null });
   }
+
+  // The pipeline owns validation, ordering, per-step reporting and — critically
+  // — persisting each provider resource the moment it exists. See
+  // services/publish/pipeline.js for why there is no rollback.
+  const result = await publishCompany({
+    company : c,
+    actorEmail: req.user?.email || null,
+    log     : req.log,
+    deps    : {
+      composeSystemPrompt,
+      shapeScenario,
+      resolveAgentModel,
+      isAllowedVoiceId,
+      defaultVoiceId  : DEFAULT_VOICE_ID,
+      voiceSpeedDefault: VOICE_SPEED_DEFAULT,
+      publicBaseUrl   : PUBLIC_BASE_URL,
+    },
+  });
+
+  invalidateCache(c.id);
+  audit(req, result.published ? 'voice.publish' : 'voice.publish.failed', `companies/${c.id}`, {
+    agentId: result.agentId, agentIdInbound: result.agentIdInbound, toolId: result.toolId,
+    runId: result.runId, failedStep: result.failedStep,
+  });
+
+  const body = {
+    status      : result.status,
+    published   : result.published,
+    runId       : result.runId,
+    steps       : result.steps,
+    failedStep  : result.failedStep,
+    agentId     : result.agentId,
+    agentIdInbound: result.agentIdInbound,
+    toolId      : result.toolId,
+    scenarioId  : result.scenarioId,
+    scenarioName: result.scenarioName,
+    // Publishing changes what the agent SAYS, not which number reaches it.
+    // Surface that so the UI can prompt for a bind when the two disagree.
+    phoneBound  : result.phoneBound,
+  };
+
+  if (result.published) return res.json(body);
+
+  req.log.error('voice publish failed', {
+    companyId: c.id, step: result.failedStep, err: result.error,
+  });
+  // The message names the step, so the existing admin toast becomes actionable
+  // without any UI change.
+  return res.status(result.httpStatus).json({
+    ...body,
+    error: `فشل النشر عند «${result.failedStep}»: ${result.error}`,
+  });
+}
+
+// ─── Company facts (business profile) ────────────────────────────
+// The data a caller might ask for: description, working hours, services, rules.
+// Client-editable on purpose — unlike `settings`, which gates the daily caps
+// and the phone binding as superadmin-only, this is the company's own content.
+app.get('/api/companies/:id/business-profile', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  res.json({ businessProfile: c.businessProfile || {} });
+});
+
+app.patch('/api/companies/:id/business-profile', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+
+  const parsed = businessProfileSchema.safeParse(req.body?.businessProfile ?? req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({
+      error : 'بيانات الشركة غير صالحة.',
+      issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })).slice(0, 20),
+    });
+  }
+
+  await sql.setCompanyBusinessProfile.run({
+    id: c.id,
+    business_profile: JSON.stringify(parsed.data),
+  });
+  invalidateCache(c.id);
+  audit(req, 'company.business_profile.update', `companies/${c.id}`, {
+    fields: Object.keys(parsed.data),
+  });
+
+  // Editing facts does NOT change the live agent — publishing does. Say so, so
+  // nobody assumes callers already hear the new opening hours.
+  const fresh = await loadCompany(c.id);
+  res.json({
+    businessProfile: fresh.businessProfile,
+    factsBlock     : renderFactsBlock(fresh, fresh.businessProfile),
+    needsPublish   : true,
+  });
+});
+
+// ─── Capabilities ────────────────────────────────────────────────
+// What this company's agent is allowed to do. Every capability is listed —
+// including the ones not built yet — so the UI can distinguish "off" from
+// "not available", and `available`/`reason` explain why an enabled capability
+// might still not be attached at publish time.
+app.get('/api/companies/:id/features', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+
+  const s = c.settings || {};
+  const ctx = {
+    kbChunkCount : Number((await sql.countCompanyChunks.get(c.id))?.n || 0),
+    publicBaseUrl: PUBLIC_BASE_URL,
+    transferNumber: /^\+[0-9]{8,15}$/.test(String(s.transferPhoneNumber || '').trim())
+      ? String(s.transferPhoneNumber).trim() : null,
+  };
+  res.json({ features: await describeFeatures(c.id, ctx) });
+});
+
+app.patch('/api/companies/:id/features/:key', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+
+  const enabled = req.body?.enabled === true;
+  const r = await setFeature(c.id, req.params.key, enabled, req.body?.config ?? null);
+  if (!r.ok) return res.status(r.code === 'UNKNOWN_FEATURE' ? 404 : 400).json(r);
+
+  invalidateCache(c.id);
+  audit(req, 'company.feature.update', `companies/${c.id}`, { key: req.params.key, enabled });
+
+  // Turning a capability OFF takes effect immediately — the tool endpoint
+  // re-checks on every call. Turning one ON still needs a publish for the
+  // agent to gain the tool, so the UI is told which of the two happened.
+  res.json({
+    ok: true,
+    key: req.params.key,
+    enabled,
+    needsPublish: enabled,
+    effectiveImmediately: !enabled,
+  });
+});
+
+// Render a DRAFT profile without saving it, so the editor can show a live
+// preview while the operator types. Deliberately server-side: a preview
+// re-implemented in the browser would drift from what publishing actually
+// sends, which is the one thing a preview exists to rule out.
+app.post('/api/companies/:id/business-profile/preview', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+
+  const draft = req.body?.businessProfile ?? req.body ?? {};
+  const parsed = businessProfileSchema.safeParse(draft);
+  if (!parsed.success) {
+    // A draft is allowed to be invalid mid-edit — report the problems and show
+    // an empty block rather than failing the request.
+    return res.json({
+      factsBlock: '',
+      hasFacts  : false,
+      valid     : false,
+      issues    : parsed.error.issues
+        .map((i) => ({ path: i.path.join('.'), message: i.message })).slice(0, 20),
+    });
+  }
+  const factsBlock = renderFactsBlock(c, parsed.data);
+  res.json({ factsBlock, hasFacts: !!factsBlock, valid: true, issues: [] });
+});
+
+// Exactly what a publish would send to the provider, without sending it. This
+// is the answer to "show me before you touch the agent": the composed prompt,
+// the facts block on its own, and the real agent payload built by the driver.
+app.get('/api/companies/:id/publish-preview', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
 
   const scenarioRow = await sql.getActiveScenarioForCompany.get(c.id);
   if (!scenarioRow || !scenarioRow.instruction_prompt) {
     return res.status(409).json({
-      error: 'فعّل سيناريو أولاً قبل النشر — الـ Vapi assistant بيتبني من السيناريو النشط.',
+      error: 'فعّل سيناريو أولاً — المعاينة تُبنى من السيناريو النشط.',
       code : 'NO_ACTIVE_SCENARIO',
     });
   }
   const scenario = shapeScenario(scenarioRow);
+  const prompt = await composeSystemPrompt(c, scenario.instructionPrompt);
+  const factsBlock = renderFactsBlock(c, c.businessProfile);
 
-  // Compose the exact prompt the assistant runs on. Shared with the draft
-  // tester and the prompt preview so all three are identical.
-  let systemContent = await composeSystemPrompt(c, scenario.instructionPrompt);
-
-  // DEFAULT_VOICE_ID is the source of truth for the agent's voice. We ignore
-  // company.voice_id here because it gets stamped at seed time and becomes
-  // stale the moment you change voices globally. A company can still override
-  // the voice via settings.voiceId (admin UI), which takes precedence.
-  // Per-company overrides (c.settings) fall back to these tuned defaults.
-  // Everything is clamped so a bad value can't produce an invalid assistant.
   const s = c.settings || {};
   const clamp = (v, lo, hi, dflt) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt);
-  const voiceId       = s.voiceId || DEFAULT_VOICE_ID;
-  // Quality-first defaults (real-estate call center): full gpt-4.1 is far more
-  // faithful to the KB and hallucinates less in Arabic than the mini models.
-  // Legacy mini selections are honored if a company explicitly picked one.
-  // Resolved by the SAME helper the draft tester and text chat use, so all
-  // three channels are guaranteed to agree.
   const { model, temperature, maxTokens } = resolveAgentModel(c);
-  const stability     = clamp(s.stability, 0, 1, 0.8);
-  const similarity    = clamp(s.similarityBoost, 0, 1, 0.8);
-  // optimizeStreamingLatency default is 4 (max) — the operator asked sync to
-  // produce the fastest streaming. A company can still override it via the
-  // voice-settings slider; env VOICE_LATENCY_DEFAULT tunes the default without
-  // a deploy. NOTE: level 4 is the most aggressive and trims some ElevenLabs
-  // text normalization, so if numbers/prices start sounding off, drop to 3.
-  const streamLatency = clamp(s.optimizeStreamingLatency, 0, 4, VOICE_LATENCY_DEFAULT);
-  // Speaking pace. 1.0 = ElevenLabs default. Default is 1.2 (faster) per the
-  // operator's request; no per-company UI, so this is what every sync uses
-  // unless VOICE_SPEED_DEFAULT overrides it.
-  const voiceSpeed    = clamp(s.voiceSpeed, 0.7, 1.2, VOICE_SPEED_DEFAULT);
+  const kbChunkCount = Number((await sql.countCompanyChunks.get(c.id))?.n || 0);
 
-  const cfg = {
-    name: `smart-assistant:${c.id}`,
-    model: {
-      // gpt-4.1 default (quality-first, most faithful Saudi Arabic). Overridable
-      // per-company via settings. endCall tool wired so the model can hang up.
-      provider   : 'openai', model, temperature, maxTokens,
-      tools      : [{ type: 'endCall' }],
-      messages   : [{ role: 'system', content: systemContent }],
-    },
-    voice: {
-      provider: '11labs', voiceId,
-      // Quality-first: turbo v2.5 is a clear quality step up from flash while
-      // keeping latency low enough for live phone conversation.
-      model: 'eleven_turbo_v2_5',
-      stability, similarityBoost: similarity,
-      useSpeakerBoost: true,
-      speed: voiceSpeed,
-      optimizeStreamingLatency: streamLatency,
-    },
-    // Google Gemini STT, language pinned to Arabic (was Multilingual). On calls
-    // that are ~100% Saudi Arabic, pinning ar cuts language-confusion errors and
-    // stray non-Arabic tokens vs Multilingual — and still far better than Azure
-    // ar-SA. Accuracy > latency here. (User set this in Vapi and made it default.)
-    //
-    // MEASURED COST (145 real turns, Vapi performanceMetrics): this transcriber
-    // is the dominant latency source — 2259ms median STT (47% of turn) and it
-    // does NOT scale with utterance length (2076ms for 1-3 words vs 2103ms for
-    // 4-8), i.e. it is fixed overhead, not transcription work. Because it emits
-    // no punctuated streaming partials, endpointing also falls through to the
-    // no-punctuation timeout every turn (another 1501ms / 31%). Together: 78%
-    // of turn latency. Overridable via TRANSCRIBER_JSON so an alternative can
-    // be A/B'd against the same metric; re-measure with scripts/profile-calls.js.
-    transcriber: TRANSCRIBER,
-    // Post-call lead qualification: Vapi's analysis model fills this schema
-    // from the transcript and sends it in the end-of-call report
-    // (analysis.structuredData) — stored in calls.structured_data and shown
-    // as lead chips in the call details. Analysis config, not prompt text.
-    analysisPlan: {
-      structuredDataPlan: {
-        enabled: true,
-        schema: {
-          type: 'object',
-          properties: {
-            interest_level      : { type: 'string', enum: ['مهتم جدا', 'مهتم', 'متردد', 'غير مهتم'], description: 'مستوى اهتمام العميل بالعرض' },
-            property_type       : { type: 'string', description: 'نوع العقار المطلوب (شقة، فيلا، أرض، مكتب...) إن ذُكر' },
-            budget              : { type: 'string', description: 'الميزانية المذكورة بالريال إن ذُكرت' },
-            preferred_area      : { type: 'string', description: 'الحي أو المنطقة المفضلة إن ذُكرت' },
-            callback_requested  : { type: 'boolean', description: 'هل طلب العميل التواصل معه لاحقاً' },
-            appointment_requested: { type: 'boolean', description: 'هل طلب العميل موعد معاينة أو زيارة' },
-            notes               : { type: 'string', description: 'ملاحظة مهمة واحدة للمبيعات إن وجدت' },
-            // Added for the campaign report. Vapi's analysis model fills these
-            // from the transcript it already has, so they cost no extra call
-            // and no caller-facing latency. Calls made BEFORE this sync simply
-            // lack them — lib/lead-scoring composes equivalents from the
-            // fields above, which is why the report works on historical data.
-            customer_intent     : { type: 'string', description: 'ماذا يريد العميل بالضبط في جملة واحدة قصيرة' },
-            next_action         : { type: 'string', description: 'الإجراء التالي المقترح لفريق المبيعات في جملة واحدة' },
-          },
-        },
-      },
-      // Summaries were coming back in ENGLISH for Arabic calls (Vapi's default
-      // prompt), which makes the report unreadable for a Saudi sales team.
-      // This is analysis configuration, not agent instructions — it does not
-      // touch the operator's scenario text.
-      summaryPlan: {
-        enabled: true,
-        messages: [
-          { role: 'system', content: 'أنت محلل مكالمات. لخّص المكالمة بالعربية في جملتين إلى ثلاث جمل كحد أقصى. اذكر ما طلبه العميل ونتيجة المكالمة فقط. لا تخترع معلومات غير موجودة في النص.' },
-          { role: 'user', content: 'نص المكالمة:\n\n{{transcript}}' },
-        ],
-      },
-    },
-    // Inbound default: the assistant-level firstMessage is what an unknown
-    // caller hears, so it must NOT depend on customer_name. We use the
-    // scenario's inbound variant, falling back to the outbound version
-    // (still better than a 404), then to a generic Saudi greeting.
-    firstMessage     : scenario.firstMessageInbound
-                    || scenario.firstMessage
-                    || `حياك الله في ${c.name}، كيف يقدر أساعدك؟`,
-    firstMessageMode : 'assistant-speaks-first',
-    backgroundDenoisingEnabled: true,
-    maxDurationSeconds: 600,
-    // Vapi-side safety net: ends the call when the CUSTOMER utters one of these,
-    // independent of whether the model decides to invoke endCall. The old list
-    // required the exact phrase "شكراً مع السلامة" together, so a bare
-    // "مع السلامة" (what callers actually say) never matched and the call hung
-    // open. Cover the common Saudi farewells and both ة/ه spellings. Kept to
-    // genuine sign-offs only — no bare "شكراً", which callers say mid-call.
-    endCallPhrases   : [
-      'مع السلامة', 'مع السلامه', 'في أمان الله', 'بأمان الله',
-      'باي باي', 'باي', 'goodbye', 'bye',
-    ],
-    // Silence handling: after 8s of customer silence the agent prompts them
-    // with an idle line ("are you still with me?"), then again up to 2 more
-    // times. If the total session silence ever hits silenceTimeoutSeconds
-    // the call ends — set short (30s) so dead calls don't linger.
-    messagePlan: {
-      // Phrasing tuned to sound like a real Saudi rep checking in — not a
-      // canned "are you still there?". Rotates so the customer doesn't hear
-      // the same line twice if they pause more than once.
-      idleMessages: [
-        'ألو أستاذي، معاي؟',
-        'أسمعك، تفضّل.',
-        'ممكن أكون فقدت الصوت عندك، إذا تسمعني أنا معك.',
-      ],
-      idleMessageMaxSpokenCount: 2,
-      // 7 → 15s. On an OUTBOUND call the line is connecting/ringing for a few
-      // seconds before the callee answers; a short idle timer fired the
-      // "ألو معاي؟" check-in BEFORE the opening message. 15s lets the call
-      // connect + the first message play first, and still checks in if the
-      // customer genuinely goes silent mid-call.
-      idleTimeoutSeconds: 15,
-    },
-    silenceTimeoutSeconds: 30,
-    // 0.3 → 0.15s: the agent starts responding sooner after the user stops
-    // talking, cutting perceived latency without touching answer quality.
-    // smartEndpointingEnabled ('livekit' ML end-of-speech detection) still
-    // guards against cutting the customer off mid-sentence, so the lower
-    // waitSeconds only trims the dead pause at the tail of their turn.
-    startSpeakingPlan: {
-      waitSeconds: 0.15,
-      smartEndpointingEnabled: 'livekit',
-      // MEASURED: endpointing costs 1501ms on 44 of 53 profiled turns — an
-      // exact constant, which is Vapi's onNoPunctuationSeconds default (1.5s)
-      // firing. It fires every turn because the current transcriber emits no
-      // punctuated streaming partials, so the 0.1s punctuation path never runs.
-      // Turns that avoided it came in at 100-452ms endpointing and a 2001ms
-      // TOTAL turn, vs the 4823ms median — so this is the cheapest large win
-      // available. 1.0s trims ~500ms of dead air with no effect on
-      // transcription accuracy or voice quality; raise it if callers report
-      // being cut off. Values are env-tunable for A/B without a redeploy.
-      transcriptionEndpointingPlan: {
-        onPunctuationSeconds  : num(process.env.ENDPOINT_PUNCT_S, 0.1),
-        onNoPunctuationSeconds: num(process.env.ENDPOINT_NOPUNCT_S, 1.0),
-        onNumberSeconds       : num(process.env.ENDPOINT_NUMBER_S, 0.4),
-      },
-    },
-    // Aggressive interrupt: stop the agent the instant the user starts
-    // speaking. numWords 1 (vs 2) means a single syllable triggers a stop;
-    // voiceSeconds 0.1 (vs 0.2) shortens the voice-activity confirmation;
-    // backoffSeconds 0.5 (vs 1.0) means it doesn't sulk for a full second
-    // after being cut off.
-    stopSpeakingPlan : { numWords: 1, voiceSeconds: 0.1, backoffSeconds: 0.5 },
-  };
+  // The genuine payload, built by the SAME function publishing uses — a preview
+  // assembled by hand would drift from what is actually sent, which is exactly
+  // the kind of divergence a preview is supposed to rule out.
+  const agentPayload = voice.DRIVERS.elevenlabs.buildAgentConfig({
+    name        : `smart-assistant:${c.id}`,
+    prompt,
+    firstMessage: scenario.firstMessageInbound || scenario.firstMessage
+               || `حياك الله في ${c.name}، كيف يقدر أساعدك؟`,
+    language    : c.language,
+    model, temperature, maxTokens,
+    voiceId        : s.voiceId || DEFAULT_VOICE_ID,
+    stability      : clamp(s.stability, 0, 1, 0.8),
+    similarityBoost: clamp(s.similarityBoost, 0, 1, 0.8),
+    voiceSpeed     : clamp(s.voiceSpeed, 0.7, 1.2, VOICE_SPEED_DEFAULT),
+    // Tool ids are resolved at publish time; showing the stored one keeps the
+    // preview honest about what is currently attached.
+    toolIds        : c.kbToolId ? [c.kbToolId] : [],
+    transferNumber : /^\+[0-9]{8,15}$/.test(String(s.transferPhoneNumber || '').trim())
+      ? String(s.transferPhoneNumber).trim() : null,
+  });
 
-  // ── Optional tools (added by capability, never by wording — when/why to
-  // use them is the operator's scenario text, untouched by us) ─────────
-  // Human transfer: settings.transferPhoneNumber gives the model a
-  // transferCall tool with the company's escalation number.
-  const transferNumber = String(s.transferPhoneNumber || '').trim();
-  if (/^\+[0-9]{8,15}$/.test(transferNumber)) {
-    cfg.model.tools.push({
-      type: 'transferCall',
-      destinations: [{ type: 'number', number: transferNumber }],
-    });
-  }
-
-  // Live KB retrieval: when the company has KB chunks and our public URL is
-  // known, add a function tool that searches the KB mid-call. The static KB
-  // bake in the system prompt stays (fast path); the tool covers what the
-  // KB_INJECT_CAP truncation dropped — the main voice-hallucination source.
-  const kbChunkCount = await sql.countCompanyChunks.get(c.id)?.n || 0;
-  if (kbChunkCount > 0 && PUBLIC_BASE_URL) {
-    cfg.model.tools.push({
-      type: 'function',
-      async: false,
-      function: {
-        name: 'search_knowledge_base',
-        description: 'البحث في قاعدة معرفة الشركة عن معلومة محددة (أسعار، مشاريع، مواصفات، عروض) عندما لا تكون المعلومة متوفرة في تعليماتك. استخدمها قبل أن تقول إن المعلومة غير متوفرة.',
-        parameters: {
-          type: 'object',
-          properties: {
-            query: { type: 'string', description: 'نص السؤال أو الكلمات المفتاحية للبحث' },
-          },
-          required: ['query'],
-        },
-      },
-      server: {
-        url: `${PUBLIC_BASE_URL}/webhook/vapi`,
-        secret: (process.env.VAPI_WEBHOOK_SECRET || '').trim() || undefined,
-        timeoutSeconds: 10,
-      },
-    });
-  }
-
-  const headers = { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' };
-  const vapiOpts = { headers, timeout: VAPI_TIMEOUT_MS };
-  try {
-    // Primary (outbound/default) assistant.
-    const assistantId = await upsertVapiAssistant(cfg, c.assistantId, vapiOpts, req.log);
-
-    // Optional inbound assistant (Phase 3) — only when the scenario defines a
-    // separate inbound prompt. Otherwise inbound uses the primary assistant,
-    // so existing companies are completely unaffected.
-    let inboundAssistantId = null;
-    const inboundPrompt = (scenario.instructionPromptInbound || '').trim();
-    if (inboundPrompt) {
-      const inboundCfg = {
-        ...cfg,
-        name: `smart-assistant:${c.id}:inbound`,
-        model: { ...cfg.model, messages: [{ role: 'system', content: await composeSystemPrompt(c, inboundPrompt) }] },
-        firstMessage: scenario.firstMessageInbound || cfg.firstMessage,
-      };
-      inboundAssistantId = await upsertVapiAssistant(inboundCfg, c.assistantIdInbound, vapiOpts, req.log);
-    }
-
-    // Stamp last_synced_at so the UI can show "unpublished changes" when
-    // the active scenario gets edited after a sync.
-    await sql.setCompanySynced.run(assistantId, c.id);
-    await sql.setCompanyInboundAssistant.run({ id: c.id, aid: inboundAssistantId });
-    invalidateCache(c.id);
-    res.json({ assistantId, inboundAssistantId, scenarioId: scenario.id, scenarioName: scenario.name });
-  } catch (e) {
-    req.log.error('vapi sync error', { err: e.response?.data || e.message, companyId: c.id });
-    res.status(500).json({ error: e.response?.data?.message || e.message });
-  }
+  res.json({
+    companyId   : c.id,
+    scenarioId  : scenario.id,
+    scenarioName: scenario.name,
+    prompt,
+    promptLength: prompt.length,
+    factsBlock,
+    hasFacts    : !!factsBlock,
+    kbChunks    : kbChunkCount,
+    kbCapped    : prompt.length >= KB_INJECT_CAP,
+    // The agent payload carries no secrets: the KB tool's company token lives
+    // in the separate tool resource, not here.
+    agentPayload,
+  });
 });
 
-// Bind the configured phone number to this company's assistant. Vapi has
-// exactly one configured number per `VAPI_PHONE_NUMBER_ID`; binding it to a
-// new assistant transfers ownership. We commit the DB change ONLY after Vapi
-// confirms success, and we only clear the previous owner of THIS specific
-// phone number (not every company in the table).
+// Publish: rebuild this company's voice agent from its ACTIVE SCENARIO.
+// `/sync-voice` is kept as an alias so the existing admin UI keeps working; the
+// response is a strict superset of what it used to return.
+app.post('/api/companies/:id/publish', requireCompanyAccess, handlePublishCompany);
+app.post('/api/companies/:id/sync-voice', requireCompanyAccess, handlePublishCompany);
+
+// Bind this company's imported phone number to its agent — i.e. decide which
+// agent answers when someone dials the company's 3CX DID.
+//
+// The number id comes from the company's OWN row and there is deliberately no
+// platform-wide fallback: with multiple tenants, a fallback would bind one
+// company's line to another company's agent. The DB is only updated after the
+// provider confirms, so a failed call leaves no misleading state behind.
 app.post('/api/companies/:id/bind-phone', requireCompanyAdmin, async (req, res) => {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
-  if (!c.assistantId) return res.status(400).json({ error: 'انشر الشركة على Vapi أولاً.' });
-
-  const headers = { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' };
-  const vapiOpts = { headers, timeout: VAPI_TIMEOUT_MS };
-
-  // Inbound number for THIS company — MUST come from the company's own
-  // settings. We deliberately do NOT fall back to the platform env var: with
-  // multiple companies that fallback would bind another company's number
-  // (e.g. Maheer grabbing Wakan's outbound number). Require it explicitly.
-  const phoneId = c.settings?.inboundPhoneNumberId;
-  if (!phoneId) {
-    return res.status(400).json({ error: 'اضبط معرّف الرقم الوارد لهذه الشركة في إعدادات الصوت أولاً (حتى لا يُربط رقم شركة أخرى).' });
+  if (!c.agentId) return res.status(400).json({ error: 'انشر الشركة على ElevenLabs أولاً.', code: 'NOT_PUBLISHED' });
+  if (!c.phoneNumberId) {
+    return res.status(400).json({
+      error: 'اضبط معرّف رقم ElevenLabs لهذه الشركة أولاً (حتى لا يُربط رقم شركة أخرى).',
+      code : 'NO_PHONE_NUMBER_ID',
+    });
   }
-  const targetAssistant = c.assistantIdInbound || c.assistantId;
+
   try {
-    const r = await axios.patch(`https://api.vapi.ai/phone-number/${phoneId}`, { assistantId: targetAssistant }, vapiOpts);
-    const newNumber = r.data.number;
-    // Vapi succeeded — now reflect the move in DB atomically.
-    await withTransaction(async () => {
-      await dataRun('UPDATE companies SET phone_number = NULL WHERE phone_number = ?', [newNumber]);
-      await dataRun(`UPDATE companies SET phone_number = ?, updated_at = ${NOW_SQL} WHERE id = ?`, [newNumber, c.id]);
+    const { phoneNumberId, agentId } = await voice.bindPhoneNumber(c);
+    invalidateCache(c.id);
+    audit(req, 'voice.phone_bind', `companies/${c.id}`, { phoneNumberId, agentId });
+    res.json({ phoneNumber: c.phoneNumber, phoneNumberId, agentId });
+  } catch (e) {
+    const detail = voice.errText(e);
+    req.log.error('phone bind error', { err: detail, companyId: c.id });
+    res.status(e.code === 'NOT_PUBLISHED' || e.code === 'NO_PHONE_NUMBER_ID' ? 400 : 500)
+       .json({ error: detail, code: e.code });
+  }
+});
+
+// Import a company's EXISTING 3CX number into the provider as a SIP-trunk
+// number. No number is ever purchased: `phone_number` is the company's own DID
+// and the outbound address points back at the customer's own PBX, so the
+// number they already advertise keeps working and keeps being theirs.
+//
+// Superadmin-only — this writes the tenant↔phone-line binding, and the SIP
+// credentials it accepts are infrastructure secrets.
+app.post('/api/companies/:id/import-phone', requireCompanyAdmin, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+
+  const b = req.body || {};
+  const phoneNumber = String(b.phoneNumber || c.phoneNumber || '').trim();
+  if (!/^\+[1-9]\d{7,14}$/.test(phoneNumber)) {
+    return res.status(400).json({ error: 'رقم الشركة غير صالح. الصيغة: +966XXXXXXXXX' });
+  }
+  const address = String(b.address || process.env.SIP_TRUNK_ADDRESS || '').trim();
+  if (!address) {
+    return res.status(400).json({ error: 'عنوان 3CX (address) مطلوب — اسم النطاق أو الـ IP بدون sip:' });
+  }
+  // A hostname or IP, never a URI. The provider rejects a `sip:` prefix, and
+  // catching it here gives a usable message instead of a 422 from upstream.
+  if (/^sips?:/i.test(address) || /\s/.test(address)) {
+    return res.status(400).json({ error: 'العنوان يجب أن يكون اسم نطاق أو IP فقط (بدون sip:)' });
+  }
+
+  const transport = ['tls', 'tcp', 'udp'].includes(String(b.transport || '').toLowerCase())
+    ? String(b.transport).toLowerCase() : 'tls';
+  const mediaEncryption = ['disabled', 'allowed', 'required'].includes(String(b.mediaEncryption || '').toLowerCase())
+    ? String(b.mediaEncryption).toLowerCase() : 'allowed';
+
+  try {
+    const { phoneNumberId } = await voice.importPhoneNumber(c, {
+      phoneNumber,
+      address,
+      transport,
+      mediaEncryption,
+      username: b.username ? String(b.username).slice(0, 128) : null,
+      password: b.password ? String(b.password).slice(0, 256) : null,
+      allowedAddresses: Array.isArray(b.allowedAddresses)
+        ? b.allowedAddresses.map((x) => String(x).slice(0, 64)).slice(0, 20) : [],
+    });
+    const released = await claimPhoneOwnership({
+      companyId: c.id, phoneNumber, phoneNumberId, log: req.log,
     });
     invalidateCache();
-    audit(req, 'vapi.phone_bind', `companies/${c.id}`, { phoneNumber: newNumber, assistantId: targetAssistant });
-    res.json({ phoneNumber: newNumber, assistantId: targetAssistant });
+    // Credentials are NEVER echoed back or audited — only the resulting id.
+    audit(req, 'voice.phone_import', `companies/${c.id}`, {
+      phoneNumberId, phoneNumber, transport,
+      // Names any company this number was taken from, so a mistaken transfer is
+      // visible in the audit log rather than only in the companies table.
+      releasedFrom: released.length ? released : undefined,
+    });
+    res.status(201).json({ phoneNumberId, phoneNumber, releasedFrom: released });
   } catch (e) {
-    req.log.error('phone bind error', { err: e.response?.data || e.message, companyId: c.id });
-    res.status(500).json({ error: e.response?.data?.message || e.message });
+    const detail = voice.errText(e);
+    req.log.error('phone import error', { err: detail, companyId: c.id });
+    res.status(502).json({ error: detail });
   }
 });
 
@@ -1953,7 +1961,7 @@ app.get('/api/conversations', async (req, res) => {
   const OK_REASONS = new Set(['customer-ended-call', 'assistant-ended-call']);
   // 60-minute grace window: a row with no ended_reason that was created
   // within the last hour is shown as "in progress" instead of "failed".
-  // The user can click into it to trigger an on-demand Vapi pull which
+  // The user can click into it to trigger an on-demand provider pull which
   // hydrates the row immediately. Past 1h, the row is assumed stale.
   const IN_PROGRESS_CUTOFF = Date.now() - 60 * 60 * 1000;
 
@@ -2083,7 +2091,7 @@ app.get('/api/companies/:id/calls.csv', requireCompanyAccess, async (req, res) =
       q.leadLabel?.ar || q.lead, interested, q.outcomeLabel?.ar || q.outcome,
       r.ended_reason, lead.interest_level, lead.property_type, lead.budget,
       lead.preferred_area, lead.callback_requested, lead.appointment_requested,
-      r.summary, r.recording_url,
+      r.summary, recordingLinkFor(r, PUBLIC_BASE_URL) || '',
     ].map(esc).join(','));
   }
   const stamp = new Date().toISOString().slice(0, 10);
@@ -2124,7 +2132,7 @@ function shapeScenario(row) {
     companyId           : row.company_id,
     name                : row.name,
     description         : row.description || '',
-    // Outbound (Vapi calls the customer; we know who's on the line).
+    // Outbound (we call the customer, so we know who's on the line).
     firstMessage        : row.first_message || '',
     // Inbound (customer calls us; identity unknown until later).
     firstMessageInbound : row.first_message_inbound || '',
@@ -2421,7 +2429,7 @@ app.post('/api/companies/:id/scenarios/test-draft', chatLimiter, requireCompanyA
 });
 
 // Preview the EXACT system prompt the assistant will run on — scenario text +
-// KB dump (capped) + endCall wiring — so a company can see what Vapi actually
+// KB dump (capped) + end-call wiring — so a company can see what the provider
 // receives (eliminates the "hidden layers" confusion). Pass ?draft=... to
 // preview unsaved text, otherwise uses the active scenario.
 app.post('/api/companies/:id/scenarios/preview-prompt', requireCompanyAccess, async (req, res) => {

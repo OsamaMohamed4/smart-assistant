@@ -11,19 +11,34 @@ Production: Railway → `sermad.up.railway.app`
 ## Architecture
 
 ```
-Landline / DID
+Landline / DID  (the company's OWN number — never bought from a provider)
       │
       ▼
-   3CX PBX ──────► SIP Trunk ──────► Vapi ───────► this server
-                                      │              (webhooks, KB tool)
-                                      ├─ STT   Google Gemini 2.5 Flash (ar)
-                                      ├─ LLM   OpenAI gpt-4.1
-                                      └─ TTS   ElevenLabs turbo v2.5
+   3CX PBX ──────► SIP Trunk ──────► ElevenLabs Agents ──────► this server
+                   sip:+966…@                 │                (webhooks, KB tool)
+                   sip.rtc.elevenlabs.io      ├─ ASR   ElevenLabs
+                                              ├─ LLM   OpenAI gpt-4.1
+                                              └─ TTS   ElevenLabs turbo v2.5
 ```
 
-Vapi owns the realtime media pipeline. This server owns tenants, prompts,
-knowledge bases, campaigns, call records, and the admin UI. Twilio was removed
-in July 2026 — do not reintroduce it.
+ElevenLabs owns the realtime media pipeline. This server owns tenants, prompts,
+knowledge bases, campaigns, call records, and the admin UI.
+
+**Multi-tenancy is per row, never per constant:**
+
+```
+Company A → 3CX DID A → imported number A → agent A
+Company B → 3CX DID B → imported number B → agent B
+```
+
+stored on the company as `phone_number`, `elevenlabs_phone_number_id` and
+`elevenlabs_agent_id`. There is deliberately **no platform-wide fallback phone
+number** — with several tenants, a fallback would place one company's calls on
+another company's line.
+
+Twilio was removed in July 2026 and Vapi in September 2026 — do not reintroduce
+either. See [docs/elevenlabs-migration-plan.md](docs/elevenlabs-migration-plan.md)
+for the migration record, including the capabilities that have no successor.
 
 **Stack:** Node 20 + Express 5 · PostgreSQL (pgvector) · React 19 + Vite +
 Tailwind · BullMQ/Redis (optional) · Prometheus.
@@ -32,14 +47,15 @@ Tailwind · BullMQ/Redis (optional) · Prometheus.
 
 | Path | What lives there |
 |---|---|
-| `server.js` | HTTP routes, Vapi sync, admin API. The monolith, ~2.4k lines. |
+| `server.js` | HTTP routes, publish/bind, admin API. The monolith, ~2.4k lines. |
 | `db.js` | Driver selector — `DB_DRIVER=postgres` or sqlite. |
 | `db-postgres.js` / `db-sqlite.js` | Prepared statements per driver. **Keep in sync.** |
 | `db-pg-schema.js` | Postgres DDL. |
 | `lib/migrations-pg.js` | Idempotent Postgres migrations (FKs, added columns). |
 | `lib/` | auth, rls, rag, pii, ssrf, queue, metrics, secrets, logger… |
 | `routes/` | auth, clients, campaigns, evals, webhook. |
-| `services/` | call-events, campaigns, retention, usage, evals, outbound-webhook. |
+| `services/voice/` | The voice-provider layer. `provider.js` is the contract, `elevenlabs.js` the only file that knows the provider's API, `index.js` the facade everything else calls. |
+| `services/` | call-events (provider-neutral), campaigns, retention, usage, evals, outbound-webhook. |
 | `admin-src/` | React admin SPA → built into `public/admin/`. |
 | `scripts/` | Test suites, benchmarks, RLS migration tooling. |
 
@@ -127,10 +143,9 @@ node scripts/rls-rollback.js      # turn them off (~10s, no restart)
 ### Required in production
 | Var | Purpose |
 |---|---|
-| `OPENAI_API_KEY` | LLM + embeddings |
-| `VAPI_API_KEY` | Assistant sync, outbound calls |
-| `ELEVENLABS_API_KEY` | TTS |
-| `VAPI_WEBHOOK_SECRET` | Verifies inbound Vapi webhooks |
+| `OPENAI_API_KEY` | LLM + embeddings + post-call summaries |
+| `ELEVENLABS_API_KEY` | Agents, TTS, SIP calls, recordings. **Server only — never sent to the browser.** |
+| `ELEVENLABS_WEBHOOK_SECRET` | Verifies the post-call webhook's HMAC signature. Without it a forged request could write call rows for any tenant. |
 | `DATABASE_URL` + `DB_DRIVER=postgres` | Database |
 | `COOKIE_SECURE=true` | `__Host-` session cookie |
 | `NODE_ENV=production` | Enables fail-closed behaviour |
@@ -152,9 +167,11 @@ Boot **refuses to start** in production if a required secret is missing
 | Var | Default | Purpose |
 |---|---|---|
 | `EXTRA_VOICE_IDS` | — | Comma-separated ElevenLabs voice ids to allow beyond the built-in catalog |
-| `TRANSCRIBER_JSON` | Gemini 2.5 Flash / Arabic | Full Vapi transcriber object — for A/B testing STT |
-| `ENDPOINT_NOPUNCT_S` | `1.0` | Endpointing wait when no punctuation arrives. **Largest single latency knob.** |
-| `ENDPOINT_PUNCT_S` / `ENDPOINT_NUMBER_S` | `0.1` / `0.4` | Other endpointing waits |
+| `VOICE_SPEED_DEFAULT` | `1.2` | Speaking pace (0.7–1.2) applied at publish |
+| `ELEVENLABS_TOOL_SECRET` | falls back to the webhook secret | Signs the per-company token on the in-call KB tool |
+| `ELEVENLABS_LLM` | `gpt-4.1` | Agent model override, without a deploy |
+| `PUBLIC_BASE_URL` | Railway domain | Where the provider calls back for the KB tool + initiation webhook |
+| `SIP_TRUNK_ADDRESS` / `_USERNAME` / `_PASSWORD` | — | Defaults for `scripts/elevenlabs-provision.js` |
 | `EMBED_MODEL` | `text-embedding-3-large` | Changing this requires `node scripts/reembed.js` |
 | `REDIS_URL` | — | Enables durable BullMQ queues; without it workers use in-process timers |
 | `TZ_OFFSET_HOURS` | `3` | Saudi UTC+3, used for spoken `{{date}}`/`{{time}}` |
@@ -170,10 +187,27 @@ Boot **refuses to start** in production if a required secret is missing
 Railway auto-deploys from `main`. Then:
 
 1. `curl -s https://sermad.up.railway.app/health` — check `version`, `db: ok`.
-2. **Re-sync each company** from the admin (or `POST /api/companies/:id/sync-vapi`).
-   Assistant-level settings — prompt, voice, endpointing — live on the persisted
-   Vapi assistant, so **a deploy alone changes nothing about live calls.**
+2. **Re-publish each company** from the admin (or `POST /api/companies/:id/sync-voice`).
+   Agent-level settings — prompt, voice, tools, analysis — live on the persisted
+   ElevenLabs agent, so **a deploy alone changes nothing about live calls.**
 3. `node scripts/profile-calls.js` to confirm turn latency.
+
+### Wiring a new company's phone number
+
+The company keeps its existing 3CX number; ElevenLabs only *imports* it so it
+can be addressed and bound to an agent.
+
+```bash
+node scripts/elevenlabs-provision.js --list
+node scripts/elevenlabs-provision.js --company co-abc \
+     --address pbx.example.com --username sipuser --password 'secret'
+```
+
+The script prints the matching 3CX-side steps when it finishes. The ones that
+most often get missed: the INVITE must address the number
+(`sip:+9665…@sip.rtc.elevenlabs.io` — a bare `sip:@host` is rejected), codecs
+must be **G711 or G722 only**, and BYE must target the `Contact` header from the
+INVITE response or the call will not hang up (SIP 481).
 
 Boot-time Postgres migrations are idempotent and log what they did.
 

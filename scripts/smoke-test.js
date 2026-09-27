@@ -1,12 +1,13 @@
 // Smoke test: boots the real server against a throwaway SQLite file and
 // asserts the critical paths respond correctly. No external API keys needed —
-// everything that would call OpenAI/Vapi/ElevenLabs is either skipped or
+// everything that would call OpenAI or the voice provider is either skipped or
 // expected to fail *cleanly*. Exit code 0 = safe to deploy.
 //
 // Run: node scripts/smoke-test.js
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
@@ -23,9 +24,18 @@ const env = {
   // Deliberately fake: proves the server boots + degrades cleanly without
   // real provider credentials.
   OPENAI_API_KEY: 'sk-smoke-test',
-  VAPI_API_KEY: 'smoke-test',
-  VAPI_WEBHOOK_SECRET: 'smoke-webhook-secret',
+  ELEVENLABS_API_KEY: 'smoke-test',
+  ELEVENLABS_WEBHOOK_SECRET: 'smoke-webhook-secret',
 };
+
+// Sign a webhook body exactly the way the provider does, so the smoke run
+// exercises the REAL verification path rather than a bypass.
+const WEBHOOK_SECRET = env.ELEVENLABS_WEBHOOK_SECRET;
+function signWebhook(raw, { secret = WEBHOOK_SECRET, skewSecs = 0 } = {}) {
+  const t = Math.floor(Date.now() / 1000) + skewSecs;
+  const v0 = crypto.createHmac('sha256', secret).update(`${t}.${raw}`).digest('hex');
+  return `t=${t},v0=${v0}`;
+}
 
 // Under postgres, wipe the schema first — unlike the throwaway SQLite file,
 // the pg database persists between runs and a leftover user closes bootstrap.
@@ -94,7 +104,10 @@ async function waitForBoot() {
   // 5. Create a company through the real API.
   const cc = await fetch(B + '/api/companies', {
     method: 'POST', headers: { ...XHR, cookie },
-    body: JSON.stringify({ id: 'co-smoke', name: 'شركة الدخان', language: 'ar-SA' }),
+    // phoneNumber is the company's 3CX DID. The post-call webhook below uses
+    // it to resolve the tenant, which is the path that has to survive an agent
+    // being recreated.
+    body: JSON.stringify({ id: 'co-smoke', name: 'شركة الدخان', language: 'ar-SA', phoneNumber: '+966500000111' }),
   });
   const ccB = await cc.json().catch(() => ({}));
   const companyId = ccB.id || ccB.company?.id;
@@ -112,7 +125,8 @@ async function waitForBoot() {
   const mkB = await mk.json().catch(() => ({}));
   check('create api key → sa_ prefix', mk.status === 201 && /^sa_/.test(mkB.key || ''), `status=${mk.status}`);
 
-  // 8. Agent API: bad key → 401, good key → passes auth (fails later at Vapi = 502/404/409).
+  // 8. Agent API: bad key → 401, good key → passes auth and then fails
+  //    cleanly at the first real dependency (no active scenario yet → 409).
   const bad = await fetch(B + '/api/v1/agent/chat', {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer nope' },
     body: JSON.stringify({ customer_phone: '+966500000000', message: 'hi' }),
@@ -122,7 +136,7 @@ async function waitForBoot() {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${mkB.key}` },
     body: JSON.stringify({ customer_phone: '+966500000000', message: 'hi' }),
   });
-  check('agent api: scoped key passes auth (409 unpublished)', good.status === 409, `status=${good.status}`);
+  check('agent api: scoped key passes auth (409 no active scenario)', good.status === 409, `status=${good.status}`);
 
   // 9. Scenario lifecycle: create → read → update → activate → versions.
   const sc = await fetch(B + `/api/companies/${companyId}/scenarios`, {
@@ -163,7 +177,7 @@ async function waitForBoot() {
   });
   const st2 = await fetch(B + `/api/companies/${companyId}/settings`, {
     method: 'PATCH', headers: { ...XHR, cookie },
-    body: JSON.stringify({ transferPhoneNumber: '+966501234567', inboundPhoneNumberId: 'smoke-pn-1' }),
+    body: JSON.stringify({ transferPhoneNumber: '+966501234567', elevenlabsPhoneNumberId: 'smoke-pn-1' }),
   });
   const st2B = await st2.json().catch(() => ({}));
   check('settings merge keeps earlier keys',
@@ -229,27 +243,83 @@ async function waitForBoot() {
   const auB = await au.json().catch(() => []);
   check('audit log lists campaign.create', au.status === 200 && auB.some((r) => r.action === 'campaign.create'));
 
-  // 12. Webhook: wrong secret → 401; right secret → 200 + call logged.
-  const w1 = await fetch(B + '/webhook/vapi', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-vapi-secret': 'wrong' }, body: '{}',
-  });
-  check('webhook: wrong secret → 401', w1.status === 401, `status=${w1.status}`);
-  const w2 = await fetch(B + '/webhook/vapi', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-vapi-secret': 'smoke-webhook-secret' },
-    body: JSON.stringify({
-      message: {
-        type: 'end-of-call-report',
-        // phoneNumberId (not assistantId) so the phone-fallback company
-        // matching path gets exercised too.
-        call: { id: 'smoke-call-1', type: 'inboundPhoneCall', phoneNumberId: 'smoke-pn-1', startedAt: '2026-01-01T00:00:00Z', endedAt: '2026-01-01T00:00:30Z' },
-        summary: 'مكالمة اختبار دخان ناجحة تماماً.',
-        artifact: { transcript: 'ok', recordingUrl: 'https://storage.vapi.ai/smoke.wav' },
+  // 12. Post-call webhook: bad signature → 401; valid HMAC → 200 + call logged.
+  //     The company is matched by the DIALLED number (the 3CX DID on the
+  //     company row), which is the fallback that has to keep working when an
+  //     agent is recreated — so this exercises it rather than the easy path.
+  const wBody = JSON.stringify({
+    type: 'post_call_transcription',
+    event_timestamp: Math.floor(Date.now() / 1000),
+    data: {
+      agent_id: 'agent-that-was-recreated',
+      conversation_id: 'smoke-call-1',
+      status: 'done',
+      transcript: [
+        { role: 'agent', message: 'حياك الله', time_in_call_secs: 0 },
+        { role: 'user', message: 'تمام شكراً', time_in_call_secs: 5 },
+      ],
+      metadata: {
+        start_time_unix_secs: 1767225600,
+        call_duration_secs: 30,
+        termination_reason: 'end_call tool was called',
+        phone_call: {
+          type: 'sip_trunking', direction: 'inbound',
+          external_number: '+966555555555', agent_number: '+966500000111',
+          call_sid: 'smoke-sip-1',
+        },
       },
-    }),
+      analysis: {
+        call_successful: 'success',
+        transcript_summary: 'مكالمة اختبار دخان ناجحة تماماً.',
+        data_collection_results: { interest_level: { value: 'مهتم' } },
+      },
+      has_audio: true,
+    },
   });
-  check('webhook: valid secret → 200', w2.status === 200, `status=${w2.status}`);
+
+  const w1 = await fetch(B + '/webhook/elevenlabs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'elevenlabs-signature': signWebhook(wBody, { secret: 'wrong-secret' }) },
+    body: wBody,
+  });
+  check('webhook: wrong signing secret → 401', w1.status === 401, `status=${w1.status}`);
+
+  const wReplay = await fetch(B + '/webhook/elevenlabs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'elevenlabs-signature': signWebhook(wBody, { skewSecs: -31 * 60 }) },
+    body: wBody,
+  });
+  check('webhook: replayed signature (>30 min old) → 401', wReplay.status === 401, `status=${wReplay.status}`);
+
+  const wTampered = await fetch(B + '/webhook/elevenlabs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'elevenlabs-signature': signWebhook(wBody) },
+    body: wBody.replace('smoke-call-1', 'smoke-call-evil'),
+  });
+  check('webhook: tampered body → 401', wTampered.status === 401, `status=${wTampered.status}`);
+
+  const w2 = await fetch(B + '/webhook/elevenlabs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'elevenlabs-signature': signWebhook(wBody) },
+    body: wBody,
+  });
+  check('webhook: valid signature → 200', w2.status === 200, `status=${w2.status}`);
   await new Promise((r) => setTimeout(r, 600));
+
+  // 12a. The in-call knowledge-base tool must refuse an unauthenticated call.
+  //      The tenant comes from a minted header, never from the body, so a
+  //      request that simply asserts a company id gets nothing.
+  const kbNoAuth = await fetch(B + '/webhook/elevenlabs/tools/kb', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: 'الأسعار', company_id: companyId }),
+  });
+  check('kb tool: no company token → 401', kbNoAuth.status === 401, `status=${kbNoAuth.status}`);
+  const kbForged = await fetch(B + '/webhook/elevenlabs/tools/kb', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Company-Token': `${companyId}.deadbeefdeadbeef` },
+    body: JSON.stringify({ query: 'الأسعار' }),
+  });
+  check('kb tool: forged company token → 401', kbForged.status === 401, `status=${kbForged.status}`);
 
   // 13. Calls list + detail + CSV export carry the webhook data.
   const calls = await fetch(B + `/api/companies/${companyId}/calls`, { headers: { cookie } });

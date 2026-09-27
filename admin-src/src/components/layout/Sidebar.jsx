@@ -1,4 +1,4 @@
-import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen, PhoneOutgoing, ShieldCheck } from 'lucide-react';
+import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen, PhoneOutgoing, ShieldCheck, ClipboardList, Zap } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 // Two-tier nav: "Build" is where you author the assistant; "Monitor" is where
@@ -12,6 +12,13 @@ const NAV_GROUPS = [
     items: [
       { id: 'scenarios',  label: 'السيناريوهات', icon: FileText,  hint: 'AI agents',         roles: ['superadmin', 'client'] },
       { id: 'knowledge',  label: 'قاعدة المعرفة', icon: BookOpen, hint: 'RAG',                roles: ['superadmin', 'client'] },
+      // Company FACTS (hours, services, rules) — distinct from the Knowledge
+      // Base, which holds documents. Both feed the prompt; this one is short,
+      // structured and edited by hand.
+      { id: 'profile',    label: 'بيانات الشركة', icon: ClipboardList, hint: 'حقائق',        roles: ['superadmin', 'client'] },
+      // What the agent is ALLOWED to do. Distinct from the facts above: one is
+      // what the agent knows, this is what it can act on.
+      { id: 'capabilities', label: 'القدرات',   icon: Zap,      hint: 'أدوات',              roles: ['superadmin', 'client'] },
       { id: 'playground', label: 'التجربة',     icon: Sparkles,  hint: 'صوت + شات',          roles: ['superadmin', 'client'] },
       // 'companies' is visible to both superadmin and client. Inside a
       // workspace, the page renders only the client's own company.

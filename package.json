@@ -14,8 +14,12 @@
     "build": "vite build",
     "test:apis": "node --use-system-ca test-apis.js",
     "test:smoke": "node scripts/smoke-test.js",
-    "test:unit": "node --test scripts/test-validation.js scripts/test-secrets.js scripts/test-authz.js scripts/test-pii.js scripts/test-pdpl.js scripts/test-campaign-report.js scripts/test-campaign-window.js scripts/test-campaign-worker.js",
-    "test:pg": "node --test scripts/test-migrations-pg.js scripts/test-rls.js"
+    "test:unit": "node --test scripts/test-validation.js scripts/test-secrets.js scripts/test-authz.js scripts/test-pii.js scripts/test-pdpl.js scripts/test-campaign-report.js scripts/test-campaign-window.js scripts/test-campaign-worker.js scripts/test-voice.js scripts/test-call-integrity.js scripts/test-publish-pipeline.js scripts/test-business-profile.js scripts/test-business-profile-api.js scripts/test-capabilities.js",
+    "test:pg": "node --test scripts/test-migrations-pg.js scripts/test-rls.js",
+    "test:pg:integrity": "node --test scripts/test-call-integrity.js",
+    "test:pg:publish": "node --test scripts/test-publish-pipeline.js",
+    "test:pg:profile-api": "node --test scripts/test-business-profile-api.js",
+    "test:pg:capabilities": "node --test scripts/test-capabilities.js"
   },
   "keywords": [],
   "author": "",

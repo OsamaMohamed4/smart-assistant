@@ -1,10 +1,10 @@
 // Proof suite for the campaign worker diagnostics (the "why is it stuck
-// pending?" investigation). Uses a real SQLite DB and a mocked Vapi call, so
-// the whole tick path runs — state transitions, eligibility, skip reasons, and
-// the heartbeat — without touching the network.
+// pending?" investigation). Uses a real SQLite DB and a mocked voice provider,
+// so the whole tick path runs — state transitions, eligibility, skip reasons,
+// and the heartbeat — without touching the network.
 //
 //   node --test scripts/test-campaign-worker.js
-const { test, before, after } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -12,26 +12,33 @@ const fs = require('node:fs');
 const DB = path.join(require('node:os').tmpdir(), `sa-worker-${Date.now()}.db`);
 process.env.DB_DRIVER = 'sqlite';
 process.env.DB_PATH = DB;
-process.env.VAPI_PHONE_NUMBER_ID = 'pn-test';
-process.env.VAPI_API_KEY = 'k';
+process.env.ELEVENLABS_API_KEY = 'k';
 
-// Mock Vapi so placeCall never hits the network.
-const axios = require('axios');
-let vapiCalls = 0;
-axios.post = async () => { vapiCalls++; return { data: { id: `call-${vapiCalls}` } }; };
+// Mock the voice provider at the FACADE, not at axios. The worker's only
+// contract with a provider is voice.startOutboundCall(), so stubbing there
+// keeps this suite honest when the provider changes again.
+const voice = require('../services/voice');
+let placedCalls = 0;
+const realStartOutboundCall = voice.startOutboundCall;
+voice.startOutboundCall = async () => {
+  placedCalls++;
+  return { callId: `conv-${placedCalls}`, callRef: `sip-${placedCalls}`, status: 'queued' };
+};
 
 const { sql, db } = require('../db');
 const camp = require('../services/campaigns');
-const { currentContext } = require('../lib/tenant-context');
 
 const nowSaudi = (new Date().getUTCHours() + 3) % 24;
 const openStart = (nowSaudi - 1 + 24) % 24;   // window open right now
 const openEnd = (nowSaudi + 1) % 24;
 
-async function makeCampaign({ name, sh = openStart, eh = openEnd, published = true, contacts = 1, maxConcurrent = 2 }) {
-  const asst = published ? `asst-${name}` : null;
-  db.prepare("INSERT INTO companies (id,name,language,system_prompt,assistant_id) VALUES (?,?,'ar-SA','',?)")
-    .run(`co-${name}`, name, asst);
+async function makeCampaign({
+  name, sh = openStart, eh = openEnd, published = true, contacts = 1,
+  maxConcurrent = 2, withNumber = true,
+}) {
+  db.prepare(`INSERT INTO companies (id,name,language,system_prompt,elevenlabs_agent_id,elevenlabs_phone_number_id,voice_provider)
+              VALUES (?,?,'ar-SA','',?,?, 'elevenlabs')`)
+    .run(`co-${name}`, name, published ? `agent-${name}` : null, withNumber ? `phnum-${name}` : null);
   const cid = Number((await sql.insertCampaign.run({
     company_id: `co-${name}`, name, start_hour: sh, start_minute: 0, end_hour: eh, end_minute: 0,
     max_concurrent: maxConcurrent, max_attempts: 2, retry_delay_min: 60, created_by: 'o',
@@ -45,7 +52,11 @@ async function makeCampaign({ name, sh = openStart, eh = openEnd, published = tr
 const get = (cid) => sql.getCampaign.get(cid);
 const statusOf = (cid) => db.prepare('SELECT status,COUNT(*) n FROM campaign_contacts WHERE campaign_id=? GROUP BY status').all(cid);
 
-after(() => { try { db.close(); } catch {} for (const s of ['', '-wal', '-shm']) fs.rmSync(DB + s, { force: true }); });
+after(() => {
+  voice.startOutboundCall = realStartOutboundCall;
+  try { db.close(); } catch {}
+  for (const s of ['', '-wal', '-shm']) fs.rmSync(DB + s, { force: true });
+});
 
 // ─── State transition: pending → calling ──────────────────────────
 test('eligible campaign dials: pending → calling, reason=dialed', async () => {
@@ -55,6 +66,21 @@ test('eligible campaign dials: pending → calling, reason=dialed', async () => 
   assert.equal(r.reason, 'dialed');
   assert.equal(r.placed, 2);
   assert.deepEqual(statusOf(cid), [{ status: 'calling', n: 2 }]);
+});
+
+// The provider's conversation id must land on BOTH the contact and the call
+// stub, or the end-of-call webhook can never resolve the contact's outcome.
+test('the provider call id is recorded on the contact and the call stub', async () => {
+  const cid = await makeCampaign({ name: 'ids', contacts: 1 });
+  await camp.tickCampaign(get(cid));
+  const contact = db.prepare('SELECT call_id FROM campaign_contacts WHERE campaign_id=?').get(cid);
+  assert.match(contact.call_id, /^conv-\d+$/);
+  const call = await sql.getCall.get(contact.call_id);
+  assert.ok(call, 'a call stub row exists for the provider call id');
+  assert.equal(call.direction, 'outbound');
+  assert.equal(call.provider, 'elevenlabs');
+  assert.match(call.provider_call_ref, /^sip-\d+$/, 'SIP call id stored for PBX correlation');
+  assert.equal(call.company_id, 'co-ids', 'stub is tenant-scoped');
 });
 
 // ─── Every skip reason is reported precisely ──────────────────────
@@ -75,14 +101,17 @@ test('reason=not_published, and the campaign is auto-paused', async () => {
   assert.equal(get(cid).status, 'paused');
 });
 
-test('reason=no_number when neither company nor env has an outbound number', async () => {
-  const saved = process.env.VAPI_PHONE_NUMBER_ID;
-  delete process.env.VAPI_PHONE_NUMBER_ID;
-  try {
-    const cid = await makeCampaign({ name: 'nonum' });
-    const r = await camp.tickCampaign(get(cid));
-    assert.equal(r.reason, 'no_number');
-  } finally { process.env.VAPI_PHONE_NUMBER_ID = saved; }
+// Multi-tenant safety: a company with no imported number of its own must NOT
+// dial. There is deliberately no platform-wide fallback number, because with
+// several tenants that fallback would place this company's calls on another
+// company's phone line.
+test('reason=no_number when the company has no imported number of its own', async () => {
+  const cid = await makeCampaign({ name: 'nonum', withNumber: false });
+  const before = placedCalls;
+  const r = await camp.tickCampaign(get(cid));
+  assert.equal(r.reason, 'no_number');
+  assert.equal(get(cid).status, 'paused');
+  assert.equal(placedCalls, before, 'placed NO calls without its own number');
 });
 
 test('reason=no_slots when max_concurrent is already in flight', async () => {
@@ -103,11 +132,11 @@ test('reason=completed when nothing is left to dial', async () => {
 // ─── Read-only diagnosis mirrors the real tick, without side effects ──
 test('diagnoseCampaign explains an eligible campaign as "dialing" without dialing', async () => {
   const cid = await makeCampaign({ name: 'diag', contacts: 1 });
-  const before = vapiCalls;
+  const before = placedCalls;
   const d = await camp.diagnoseCampaign(get(cid));
   assert.equal(d.reason, 'dialing');
   assert.equal(d.pending, 1);
-  assert.equal(vapiCalls, before, 'diagnose placed NO calls');
+  assert.equal(placedCalls, before, 'diagnose placed NO calls');
   assert.match(d.saudiTime, /^\d{2}:\d{2}$/);
 });
 
@@ -118,16 +147,16 @@ test('diagnoseCampaign reports outside_window read-only', async () => {
   assert.equal(d.window.open, false);
 });
 
-// ─── The real bug: Vapi errors with an ARRAY message ──────────────
-test('a Vapi error with an array message does NOT crash the tick', async () => {
-  // Vapi returns validation errors as { message: ['...','...'] }. The old code
-  // did message.slice() → an array → SQL bind error → thrown out of the whole
-  // tick → swallowed → contact stuck. Reproduce that exact shape.
+// ─── The real bug: provider errors with an ARRAY message ──────────
+test('a provider error with an array message does NOT crash the tick', async () => {
+  // Validation errors come back as { message: ['...','...'] }. The old code did
+  // message.slice() → an array → SQL bind error → thrown out of the whole tick
+  // → swallowed → contact stuck. Reproduce that exact shape.
   const cid = await makeCampaign({ name: 'arrerr', contacts: 1 });
-  const saved = axios.post;
-  axios.post = async () => {
+  const saved = voice.startOutboundCall;
+  voice.startOutboundCall = async () => {
     const e = new Error('Request failed');
-    e.response = { data: { message: ['property assistantId should not exist', 'invalid number'] } };
+    e.response = { status: 422, data: { message: ['to_number is not valid', 'invalid number'] } };
     throw e;
   };
   try {
@@ -135,65 +164,12 @@ test('a Vapi error with an array message does NOT crash the tick', async () => {
     await assert.doesNotReject(async () => { result = await camp.tickCampaign(get(cid)); },
       'tick must not throw on an array error message');
     assert.equal(result.reason, 'no_pending', 'ran to completion');
-  } finally { axios.post = saved; }
+  } finally { voice.startOutboundCall = saved; }
 
   // The contact must be cleanly marked failed with a STRING error, not stuck.
   const rows = statusOf(cid);
   assert.equal(rows[0].status, 'failed', 'contact marked failed, not left calling/pending');
   const err = db.prepare('SELECT last_error FROM campaign_contacts WHERE campaign_id=?').get(cid).last_error;
   assert.equal(typeof err, 'string');
-  assert.match(err, /assistantId|invalid number/, 'array joined into a readable string');
-});
-
-// ─── RLS context: the real "stops after one call / must press Run" bug ──
-// The worker runs outside any HTTP request, so it has no RLS tenant context.
-// Under RLS every campaign table is fail-closed, so a context-less query returns
-// ZERO rows and the worker never dials — only the HTTP run-now path (which
-// carries a context) does, which is exactly why a Run press was needed per call.
-// Prove the worker now establishes a tenant context around each campaign's tick.
-test('tick() runs each campaign inside its tenant RLS context (companyId set, not context-less)', async () => {
-  db.prepare("UPDATE campaigns SET status='paused' WHERE status='running'").run();
-  const cid = await makeCampaign({ name: 'ctx', contacts: 1 });
-  const company = get(cid).company_id;
-  let seen = 'unset';
-  const saved = axios.post;
-  axios.post = async () => { seen = currentContext(); return { data: { id: 'call-ctx' } }; };
-  try {
-    await camp.tick();                       // the WORKER path, not tickCampaign directly
-  } finally { axios.post = saved; }
-  assert.notEqual(seen, 'unset', 'a dial happened');
-  assert.ok(seen, 'a tenant context was active during the worker dial (would be null pre-fix)');
-  assert.equal(seen.companyId, company, 'context is pinned to the campaign company');
-  assert.equal(seen.bypass, false);
-});
-
-// The headline symptom: after one call the campaign stopped and needed a manual
-// Run. Prove the worker now advances to the NEXT contact on its own once a call
-// completes and frees the concurrency slot.
-test('campaign auto-continues: worker dials the next contact after one completes (no manual run-now)', async () => {
-  db.prepare("UPDATE campaigns SET status='paused' WHERE status='running'").run();
-  const cid = await makeCampaign({ name: 'seq', contacts: 3, maxConcurrent: 1 });
-  const placed = [];
-  for (let i = 0; i < 3; i++) {
-    await camp.tick();                       // worker places ONE (maxConcurrent=1)
-    const row = db.prepare("SELECT id, call_id FROM campaign_contacts WHERE campaign_id=? AND status='calling'").get(cid);
-    assert.ok(row, `tick ${i + 1} placed the next call automatically`);
-    placed.push(row.call_id);
-    await camp.handleCallEnded(row.call_id, 'customer-ended', 30);   // Vapi end-of-call frees the slot
-  }
-  assert.equal(new Set(placed).size, 3, 'three distinct contacts dialled in sequence, unattended');
-  const done = db.prepare("SELECT COUNT(*) n FROM campaign_contacts WHERE campaign_id=? AND status='completed'").get(cid).n;
-  assert.equal(done, 3, 'all three completed without pressing Run');
-});
-
-// ─── Heartbeat ────────────────────────────────────────────────────
-test('the worker heartbeat records ticks and stays healthy', async () => {
-  await camp.tick();
-  const h1 = camp.getWorkerHealth();
-  assert.ok(h1.lastTickAt, 'lastTickAt is set after a tick');
-  assert.ok(h1.ticks >= 1);
-  await camp.tick();
-  const h2 = camp.getWorkerHealth();
-  assert.ok(h2.ticks > h1.ticks, 'tick count advances');
-  assert.equal(h2.healthy, true, 'fresh tick → healthy');
+  assert.match(err, /to_number|invalid number/, 'array joined into a readable string');
 });

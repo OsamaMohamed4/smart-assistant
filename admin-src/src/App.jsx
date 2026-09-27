@@ -6,6 +6,8 @@ import { SessionsPage } from './pages/SessionsPage';
 import { ScenariosPage } from './pages/ScenariosPage';
 import { PlaygroundPage } from './pages/PlaygroundPage';
 import { KnowledgeBasesPage } from './pages/KnowledgeBasesPage';
+import { BusinessProfilePage } from './pages/BusinessProfilePage';
+import { CapabilitiesPage } from './pages/CapabilitiesPage';
 import { WorkspaceGate } from './pages/WorkspaceGate';
 import { AuthPage } from './pages/AuthPage';
 import { ClientsPage } from './pages/ClientsPage';
@@ -115,12 +117,14 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
 
   // Workspace mode still hides the *list* of clients (that's a control-plane
   // concern), but the company-settings tab is visible — a workspace owner
-  // needs to edit their own company details and republish to Vapi.
+  // needs to edit their own company details and republish their agent.
+  // 'profile' (company facts) is visible everywhere the knowledge base is: it
+  // is the company's own content, and a workspace owner edits their own.
   const allowedTabs = isWorkspace
-    ? new Set(['dashboard', 'scenarios', 'knowledge', 'playground', 'companies', 'sessions', 'campaigns'])
+    ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'sessions', 'campaigns'])
     : isSuper
-      ? new Set(['dashboard', 'scenarios', 'knowledge', 'playground', 'companies', 'clients', 'sessions', 'campaigns', 'audit'])
-      : new Set(['dashboard', 'scenarios', 'knowledge', 'playground', 'sessions', 'campaigns']);
+      ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'clients', 'sessions', 'campaigns', 'audit'])
+      : new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'sessions', 'campaigns']);
   const activeTab = allowedTabs.has(tab) ? tab : 'dashboard';
 
   return (
@@ -150,6 +154,8 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         {activeTab === 'dashboard' && <DashboardPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'scenarios'  && <ScenariosPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'knowledge'  && <KnowledgeBasesPage pinnedCompanyId={pinnedCompanyId} />}
+        {activeTab === 'profile'    && <BusinessProfilePage pinnedCompanyId={pinnedCompanyId} />}
+        {activeTab === 'capabilities' && <CapabilitiesPage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'playground' && <PlaygroundPage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'companies' && (isSuper || isWorkspace) && (
           <CompaniesPage pinnedCompanyId={pinnedCompanyId} user={user} />

@@ -54,7 +54,7 @@ const RESULT_CARDS = [
   { key: 'ended_early',    label: 'لم يكتمل التواصل',     sub: 'انتهت المكالمة قبل إكمالها',  icon: AlertTriangle,  card: 'from-amber-500 to-orange-500',  get: (s) => s?.outcomes?.ended_early,                    filter: { kind: 'outcome', val: 'ended_early' } },
 ];
 
-// The exact provider signal for a row: Vapi's endedReason, falling back to any
+// The exact provider signal for a row: the call's endedReason, falling back to any
 // technical placement error. Shown verbatim so an operator sees the real cause
 // (e.g. "customer-busy", "twilio-failed-to-connect") behind the mapped bucket.
 const rawReason = (r) => r.endedReason || r.lastError || null;
@@ -451,9 +451,9 @@ function ContactDetailModal({ row, onClose }) {
             <p className="text-[12.5px] text-ink-800">{row.nextAction}</p>
           </div>
         )}
-        {row.callId && row.recordingUrl && (
-          // Proxied through our backend (which re-resolves a fresh URL from the
-          // provider) — the raw storage link expires and errors when opened.
+        {row.callId && (row.hasRecording || row.recordingUrl) && (
+          // Always proxied through our backend: the audio sits behind the
+          // provider's authenticated API, and our key must never reach a browser.
           <a href={`/api/calls/${row.callId}/recording`} target="_blank" rel="noreferrer"
             className="inline-block text-[12px] text-brand-600 hover:underline">استمع لتسجيل المكالمة ↗</a>
         )}

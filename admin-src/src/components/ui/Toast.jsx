@@ -11,7 +11,7 @@ export function ToastProvider({ children }) {
 
   const push = useCallback((msg, kind = 'info') => {
     const id = Math.random().toString(36).slice(2);
-    // Coerce object payloads (e.g. Vapi error events { type, msg, details })
+    // Coerce object payloads (e.g. provider error events { type, msg, details })
     // to a sensible string so we never throw React error #31 mid-render.
     const text = typeof msg === 'string'
       ? msg

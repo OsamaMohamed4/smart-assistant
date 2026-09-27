@@ -20,7 +20,7 @@ export function CompanyCard({ company, onEdit, onSync, onBindPhone, onDelete, on
     return () => document.removeEventListener('mousedown', close);
   }, [menuOpen]);
 
-  const synced     = !!c.assistantId;
+  const synced     = !!c.agentId;
   const hasPhone   = !!c.phoneNumber;
   const chatsCount = c.stats?.chats ?? 0;
   const callsCount = c.stats?.calls ?? 0;
@@ -82,7 +82,7 @@ export function CompanyCard({ company, onEdit, onSync, onBindPhone, onDelete, on
 
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
               {synced
-                ? <Badge tone="success" dot>منشور على Vapi</Badge>
+                ? <Badge tone="success" dot>منشور على ElevenLabs</Badge>
                 : <Badge tone="warning" dot>غير منشور</Badge>}
               {hasPhone && <Badge tone="brand" dot><Phone className="w-2.5 h-2.5 -mr-0.5" />{c.phoneNumber}</Badge>}
               {c.hasKB && <Badge tone="info"><BookOpen className="w-2.5 h-2.5 -mr-0.5" />KB</Badge>}
@@ -102,7 +102,7 @@ export function CompanyCard({ company, onEdit, onSync, onBindPhone, onDelete, on
         <div className="text-[11.5px] text-ink-500 flex items-center gap-1.5 truncate">
           <Bot className="w-3 h-3 shrink-0" />
           <span className="truncate font-mono">
-            {synced ? c.assistantId.slice(0, 8) + '…' : 'لم يُنشر بعد'}
+            {synced ? c.agentId.slice(0, 8) + '…' : 'لم يُنشر بعد'}
           </span>
         </div>
         <Button variant="brand" size="sm" onClick={() => onSync(c)} loading={syncing} className="gap-1.5">

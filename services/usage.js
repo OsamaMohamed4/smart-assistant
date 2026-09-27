@@ -1,6 +1,6 @@
 // Daily usage caps (cost control). The usage_counters table existed since
 // day one but nothing enforced it — a runaway integration loop could burn
-// OpenAI/Vapi budget for days. Caps are generous (normal operation never
+// OpenAI/ElevenLabs budget for days. Caps are generous (normal operation never
 // hits them); they're a circuit breaker, not a billing feature.
 // Per-company override via settings (dailyMessageCap / dailyOutboundCap),
 // platform default via env (DAILY_MSG_CAP / DAILY_OUTBOUND_CAP).

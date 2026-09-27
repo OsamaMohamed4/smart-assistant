@@ -106,12 +106,12 @@ function ScenariosListPage({ companyId, companies, pinnedCompanyId, onPickCompan
     api.getCompany(companyId).then(setCompany).catch(() => {});
   }, [companyId, tab, refreshKey]);
 
-  // A scenario is "out of sync" with Vapi when it was edited after the last
-  // successful publish. We use the active scenario only — the others don't
-  // affect what the assistant says until activated + republished.
+  // A scenario is "out of sync" with the live agent when it was edited after
+  // the last successful publish. We use the active scenario only — the others
+  // don't affect what the agent says until activated + republished.
   const isOutOfSync = (row) => {
     if (!row.isActive) return false;
-    if (!company?.assistantId) return true;          // never published at all
+    if (!company?.agentId) return true;              // never published at all
     if (!company.lastSyncedAt)  return true;
     return new Date(row.updatedAt) > new Date(company.lastSyncedAt);
   };
@@ -884,9 +884,9 @@ function DraftTestModal({ open, onClose, companyId, instructionPrompt }) {
   );
 }
 
-// Show the exact composed system prompt (scenario + KB + endCall) the assistant
-// runs on — removes the "I edit the scenario but Vapi shows something else"
-// confusion.
+// Show the exact composed system prompt (scenario + KB + end-call rule) the
+// agent runs on — removes the "I edit the scenario but the agent says something
+// else" confusion.
 function PromptPreviewModal({ open, onClose, companyId, instructionPrompt }) {
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -902,7 +902,7 @@ function PromptPreviewModal({ open, onClose, companyId, instructionPrompt }) {
 
   return (
     <Modal open={open} onClose={onClose} size="lg" title="معاينة التعليمات النهائية"
-      description="هذا بالضبط ما يصل إلى المساعد على Vapi — السيناريو + قاعدة المعرفة + قاعدة الإنهاء.">
+      description="هذا بالضبط ما يصل إلى المساعد على ElevenLabs — السيناريو + قاعدة المعرفة + قاعدة الإنهاء.">
       {busy && <div className="text-center py-8 text-ink-400 text-[13px]">جارٍ التحميل…</div>}
       {data?.error && <div className="bg-rose-50 text-rose-700 rounded-xl p-3 text-[13px]">{data.error}</div>}
       {data?.prompt && (
@@ -1230,7 +1230,7 @@ function SectionInserter({ onInsert }) {
 }
 
 // Optional per-direction inbound prompt. When filled, publishing builds a
-// SECOND Vapi assistant for inbound calls (bind the inbound number to it).
+// SECOND agent for inbound calls (the company's number is bound to it).
 // Empty = inbound uses the same prompt as outbound (default).
 function InboundPromptCard({ scenario, update }) {
   const [open, setOpen] = useState(!!scenario.instructionPromptInbound);
@@ -1269,21 +1269,42 @@ function VoiceSettingsCard({ companyId }) {
   const { push } = useToast();
   const [s, setS]       = useState(null);
   const [saving, setSaving] = useState(false);
+  // The phone-number binding is superadmin-only server-side (it decides which
+  // real phone line belongs to which tenant). Hide it for everyone else rather
+  // than showing a control that always 403s.
+  const [isSuper, setIsSuper] = useState(false);
+  // The imported number id lives in a COLUMN, not in settings JSON, so it is
+  // tracked separately and only sent when it actually changed — otherwise a
+  // client saving an unrelated slider would trip the superadmin guard.
+  const [phoneNumberId, setPhoneNumberId] = useState('');
+  const [phoneNumberIdSaved, setPhoneNumberIdSaved] = useState('');
 
   useEffect(() => {
+    api.me().then((r) => setIsSuper(r?.user?.role === 'superadmin')).catch(() => {});
     api.getCompany(companyId)
-      .then((c) => setS({
-        model: 'gpt-4.1', temperature: 0.3, maxTokens: 400,
-        stability: 0.8, optimizeStreamingLatency: 4,
-        ...(c.settings || {}),
-      }))
+      .then((c) => {
+        setS({
+          model: 'gpt-4.1', temperature: 0.3, maxTokens: 400,
+          stability: 0.8,
+          ...(c.settings || {}),
+        });
+        setPhoneNumberId(c.phoneNumberId || '');
+        setPhoneNumberIdSaved(c.phoneNumberId || '');
+      })
       .catch(() => setS({}));
   }, [companyId]);
 
   const save = async () => {
     setSaving(true);
-    try { await api.updateCompanySettings(companyId, s); push('تم حفظ الإعدادات — تظهر بعد النشر', 'success'); }
-    catch (e) { push(e.message, 'error'); }
+    try {
+      const payload = { ...s };
+      if (isSuper && phoneNumberId !== phoneNumberIdSaved) {
+        payload.elevenlabsPhoneNumberId = phoneNumberId.trim();
+      }
+      await api.updateCompanySettings(companyId, payload);
+      setPhoneNumberIdSaved(phoneNumberId);
+      push('تم حفظ الإعدادات — تظهر بعد النشر', 'success');
+    } catch (e) { push(e.message, 'error'); }
     finally { setSaving(false); }
   };
 
@@ -1298,24 +1319,23 @@ function VoiceSettingsCard({ companyId }) {
       </div>
       <p className="text-[11.5px] text-ink-500 mb-4">إعدادات على مستوى الشركة — تُطبّق بعد الضغط على نشر.</p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
-          <Label>معرّف الرقم الصادر (Vapi)</Label>
-          <Input
-            value={s.outboundPhoneNumberId || ''}
-            onChange={(e) => setS((x) => ({ ...x, outboundPhoneNumberId: e.target.value }))}
-            placeholder="Phone Number ID للمكالمات الصادرة"
-            dir="ltr"
-          />
-        </div>
-        <div>
-          <Label>معرّف الرقم الوارد (Vapi)</Label>
-          <Input
-            value={s.inboundPhoneNumberId || ''}
-            onChange={(e) => setS((x) => ({ ...x, inboundPhoneNumberId: e.target.value }))}
-            placeholder="للتوثيق — الربط يتم في Vapi"
-            dir="ltr"
-          />
-        </div>
+        {/* One number per company: the same 3CX line answers incoming calls
+            and is the caller ID on outgoing ones, so there is no in/out split
+            any more. Superadmin-only — it binds a tenant to a real phone line. */}
+        {isSuper && (
+          <div className="sm:col-span-2">
+            <Label>معرّف رقم ElevenLabs (رقم 3CX المستورد)</Label>
+            <Input
+              value={phoneNumberId}
+              onChange={(e) => setPhoneNumberId(e.target.value)}
+              placeholder="phnum_… — يُنشأ عند استيراد رقم الشركة"
+              dir="ltr"
+            />
+            <p className="mt-1 text-[11px] text-ink-500 leading-relaxed">
+              رقم الشركة نفسه على 3CX بعد استيراده إلى ElevenLabs. يُستخدم للمكالمات الواردة والصادرة معاً.
+            </p>
+          </div>
+        )}
         <div>
           <Label>الموديل</Label>
           <select value={s.model} onChange={(e) => setS((x) => ({ ...x, model: e.target.value }))}
@@ -1328,7 +1348,10 @@ function VoiceSettingsCard({ companyId }) {
         </div>
         <RangeField label="ثبات الصوت (stability)" value={s.stability ?? 0.8} min={0} max={1} step={0.05} onChange={num('stability')} />
         <RangeField label="حرارة الردود (temperature)" value={s.temperature ?? 0.6} min={0} max={1} step={0.05} onChange={num('temperature')} />
-        <RangeField label="سرعة البث (latency 0-4)" value={s.optimizeStreamingLatency ?? 4} min={0} max={4} step={1} onChange={num('optimizeStreamingLatency')} />
+        {/* Replaces the old "streaming latency 0-4" slider, which was a knob on
+            the previous provider's TTS bridge and has no equivalent here.
+            Speaking pace is the real, supported control. */}
+        <RangeField label="سرعة الكلام (speed)" value={s.voiceSpeed ?? 1.2} min={0.7} max={1.2} step={0.05} onChange={num('voiceSpeed')} />
         <RangeField label="أقصى طول للرد (tokens)" value={s.maxTokens ?? 200} min={50} max={500} step={10} onChange={num('maxTokens')} />
         <div>
           <Label>رقم التحويل لموظف بشري</Label>

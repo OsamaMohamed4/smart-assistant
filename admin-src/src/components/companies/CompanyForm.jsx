@@ -41,7 +41,7 @@ export function CompanyForm({ open, onClose, onSave, initial, saving }) {
   }, [open, initial]);
 
   // Keep id auto-derived from name during creation. The user never sees the
-  // field, but the URL slug (and Vapi assistant name) get something stable
+  // field, but the URL slug (and the voice agent's name) get something stable
   // and URL-safe out of the box.
   const updateName = (e) => {
     const name = e.target.value;

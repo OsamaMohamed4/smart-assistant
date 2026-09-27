@@ -70,8 +70,12 @@ export const api = {
   createCompany     : (body) => request('/api/companies', { method: 'POST', body: JSON.stringify(body) }),
   updateCompany     : (id, body) => request(`/api/companies/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteCompany     : (id) => request(`/api/companies/${id}`, { method: 'DELETE' }),
-  syncVapi          : (id) => request(`/api/companies/${id}/sync-vapi`, { method: 'POST', body: '{}' }),
+  // Publish the company's active scenario to its voice agent. Provider-neutral
+  // name: which provider runs the call is a backend detail.
+  syncVoice         : (id) => request(`/api/companies/${id}/sync-voice`, { method: 'POST', body: '{}' }),
   updateCompanySettings: (id, settings) => request(`/api/companies/${id}/settings`, { method: 'PATCH', body: JSON.stringify(settings) }),
+  // Point the company's own number at its own agent (which agent answers when
+  // someone dials the company's 3CX line).
   bindPhone         : (id) => request(`/api/companies/${id}/bind-phone`, { method: 'POST', body: '{}' }),
 
   // API keys (public Agent API)
@@ -135,11 +139,11 @@ export const api = {
   // to render the input-data form.
   activeScenario    : (companyId) => request(`/api/companies/${companyId}/scenarios/active`),
 
-  // Vapi calls the user's phone using the company's synced assistant.
+  // Rings the given phone from the company's OWN number, using its own agent.
   outboundCall      : (companyId, body) => request(`/api/companies/${companyId}/outbound-call`, {
     method: 'POST', body: JSON.stringify(body),
   }),
-  // Text chat against the Vapi assistant — same prompt, no audio.
+  // Text chat against the same scenario + knowledge base — same prompt, no audio.
   assistantChat     : (companyId, body) => request(`/api/companies/${companyId}/assistant-chat`, {
     method: 'POST', body: JSON.stringify(body),
   }),
@@ -202,4 +206,27 @@ export const api = {
   ragTest           : (companyId, query) => request(`/api/companies/${companyId}/rag-test`, {
     method: 'POST', body: JSON.stringify({ query }),
   }),
+
+  // Company facts (business profile). Saving does NOT change the live agent —
+  // publishing does — so the save response carries `needsPublish`.
+  getBusinessProfile: (companyId) => request(`/api/companies/${companyId}/business-profile`),
+  saveBusinessProfile: (companyId, businessProfile) =>
+    request(`/api/companies/${companyId}/business-profile`, {
+      method: 'PATCH', body: JSON.stringify({ businessProfile }),
+    }),
+  // Render an UNSAVED draft. Server-side on purpose: a preview re-implemented
+  // in the browser would drift from what publishing actually sends.
+  previewBusinessProfile: (companyId, businessProfile) =>
+    request(`/api/companies/${companyId}/business-profile/preview`, {
+      method: 'POST', body: JSON.stringify({ businessProfile }),
+    }),
+  // Exactly what a publish would send to the provider, without sending it.
+  publishPreview    : (companyId) => request(`/api/companies/${companyId}/publish-preview`),
+
+  // Capabilities: what this company's agent is allowed to do.
+  listFeatures      : (companyId) => request(`/api/companies/${companyId}/features`),
+  setFeature        : (companyId, key, enabled) =>
+    request(`/api/companies/${companyId}/features/${key}`, {
+      method: 'PATCH', body: JSON.stringify({ enabled }),
+    }),
 };

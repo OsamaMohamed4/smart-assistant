@@ -13,17 +13,20 @@ import { useToast } from '../components/ui/Toast';
 import { api } from '../lib/api';
 import { cn, relTime } from '../lib/utils';
 
-// Playground = sarj-style test bench for the synced Vapi assistant.
+// Playground = test bench for the company's published voice agent.
 //
 // Two modes:
-//   voice → fill phone number + "Start Call" → Vapi rings the user's phone.
-//           Uses the company's assistantId with assistantOverrides for the
-//           variable values. No WebRTC in the browser at all.
-//   chat  → text exchange via Vapi's /chat endpoint. Same assistant, same
-//           prompt, same variables — just no audio.
+//   voice → fill phone number + "Start Call" → the platform rings that phone
+//           from the company's OWN number, over the real SIP/3CX path, using
+//           the company's own agent. There is deliberately no microphone and
+//           no WebRTC in the browser: a browser session would exercise a
+//           different code path than a real caller, which is exactly the kind
+//           of "works in the Playground, fails on the phone" gap this page
+//           exists to prevent.
+//   chat  → text exchange against the same scenario prompt and the same
+//           knowledge base, minus the audio. Useful for iterating on wording.
 //
-// Both modes run the EXACT same Vapi assistant. What you test here is what
-// callers will get on the phone for real.
+// What you test here is what callers get on the phone for real.
 const GLOBAL_VARS = new Set(['agent_name', 'date', 'time']);
 
 export function PlaygroundPage({ pinnedCompanyId }) {
@@ -106,7 +109,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
     [vars, agentName],
   );
 
-  const published = !!activeCompany?.assistantId;
+  const published = !!activeCompany?.agentId;
   const phoneOk   = /^\+[1-9]\d{7,14}$/.test(phone.trim());
   const canCall   = published && phoneOk && !missingRequired && !calling && !!scenario;
   const scenarioOutOfSync = scenario && activeCompany?.lastSyncedAt
@@ -138,9 +141,10 @@ export function PlaygroundPage({ pinnedCompanyId }) {
     setMessages((m) => [...m, { role: 'user', content: msg, time: new Date().toISOString() }]);
     setChatBusy(true);
     try {
+      // sessionId alone carries the thread: history is rebuilt server-side
+      // from the stored turns, so there is no provider chat id to expire.
       const r = await api.assistantChat(companyId, {
         message       : msg,
-        previousChatId: chatId,
         sessionId,
         variableValues: runtimeVars,
       });
@@ -186,7 +190,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
           right={
             <div className="flex items-center gap-2">
               <Badge tone={published ? 'success' : 'warning'} dot>
-                Vapi · {published ? 'منشور' : 'غير منشور'}
+                {published ? 'منشور' : 'غير منشور'}
               </Badge>
               {/* Mode toggle */}
               <div className="flex items-center gap-1 bg-ink-100/80 border border-ink-200 rounded-xl p-0.5">
@@ -361,13 +365,13 @@ export function PlaygroundPage({ pinnedCompanyId }) {
                   «{scenario.firstMessage}»
                 </p>
               )}
-              {activeCompany?.assistantId && (
+              {activeCompany?.agentId && (
                 <a
-                  href={`https://dashboard.vapi.ai/assistants/${activeCompany.assistantId}`}
+                  href={`https://elevenlabs.io/app/agents/${activeCompany.agentId}`}
                   target="_blank" rel="noreferrer"
                   className="mt-2 inline-flex items-center gap-1 text-[11px] text-brand-700 hover:text-brand-900"
                 >
-                  افتح في Vapi <ArrowUpRight className="w-3 h-3" />
+                  افتح في ElevenLabs <ArrowUpRight className="w-3 h-3" />
                 </a>
               )}
             </div>

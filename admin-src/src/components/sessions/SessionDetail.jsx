@@ -61,7 +61,10 @@ export function SessionDetail({ open, onClose, kind, data, companyName, onResumm
             </div>
           )}
 
-          {data.recording_url && (
+          {/* has_recording is the current signal; recording_url is checked too
+              so historical calls (which stored a provider URL and predate the
+              flag) keep their player. */}
+          {(data.has_recording || data.recording_url) && (
             <div className="rounded-2xl bg-white ring-1 ring-ink-100 p-4">
               <div className="flex items-center gap-2 mb-2">
                 <div className="w-6 h-6 rounded-md bg-brand-500 flex items-center justify-center">
@@ -69,8 +72,9 @@ export function SessionDetail({ open, onClose, kind, data, companyName, onResumm
                 </div>
                 <span className="text-[12px] font-semibold text-ink-700 uppercase tracking-wider">تسجيل المكالمة</span>
               </div>
-              {/* Proxied via our backend, which re-resolves a fresh URL from the
-                  provider — the raw storage link expires and then errors. */}
+              {/* Always proxied through our backend: the audio sits behind the
+                  provider's authenticated API, and our key must never reach a
+                  browser. */}
               <audio controls preload="none" src={`/api/calls/${data.id}/recording`} className="w-full h-10" />
             </div>
           )}

@@ -72,19 +72,42 @@ async function testAll() {
     console.log(`   failed: ${e.message}`);
   }
 
-  // ─── 3. Vapi ──────────────────────────────────────────────
-  console.log('Vapi.ai...');
+  // ─── 3. ElevenLabs Agents ─────────────────────────────────
+  // Same key as TTS above, different surface: this proves the key is actually
+  // entitled to the Agents platform, which a TTS-only check would not catch.
+  console.log('ElevenLabs Agents...');
   const t3 = Date.now();
   try {
-    const vapi = await axios.get('https://api.vapi.ai/assistant', {
-      headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}` },
+    const r = await axios.get('https://api.elevenlabs.io/v1/convai/agents', {
+      headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY },
+      params : { page_size: 30 },
     });
     const ms3 = Date.now() - t3;
-    const count = Array.isArray(vapi.data) ? vapi.data.length : '-';
-    console.log(`   assistants currently: ${count}`);
+    const agents = r.data?.agents || r.data || [];
+    console.log(`   agents currently: ${Array.isArray(agents) ? agents.length : '-'}`);
     console.log(`   ${rating(ms3, 300, 600)} ${ms3}ms  (target: < 300ms)`);
   } catch (e) {
-    console.log(`   failed: ${e.message}`);
+    console.log(`   failed: ${e.response?.status || ''} ${e.message}`);
+  }
+
+  // ─── 4. Imported phone numbers ────────────────────────────
+  // Each company's 3CX DID should appear here exactly once. A missing number
+  // means inbound calls for that tenant have nowhere to land.
+  console.log('ElevenLabs phone numbers...');
+  try {
+    const r = await axios.get('https://api.elevenlabs.io/v1/convai/phone-numbers', {
+      headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY },
+    });
+    const nums = r.data?.phone_numbers || r.data || [];
+    if (!Array.isArray(nums) || !nums.length) {
+      console.log('   none imported yet — run scripts/elevenlabs-provision.js');
+    } else {
+      for (const n of nums) {
+        console.log(`   ${n.phone_number || '?'}  ${n.label || ''}  agent=${n.assigned_agent?.agent_id || n.agent_id || '(unassigned)'}`);
+      }
+    }
+  } catch (e) {
+    console.log(`   failed: ${e.response?.status || ''} ${e.message}`);
   }
 
   console.log('Legend: good < target | ok  < 2x target | slow >= 2x target');

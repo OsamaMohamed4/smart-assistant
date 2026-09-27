@@ -55,7 +55,7 @@ export function CompaniesPage({ onPickCompany, pinnedCompanyId, user }) {
     if (!companies) return null;
     return {
       companies: companies.length,
-      synced   : companies.filter((c) => c.assistantId).length,
+      synced   : companies.filter((c) => c.agentId).length,
       chats    : companies.reduce((s, c) => s + (c.stats?.chats || 0), 0),
       calls    : companies.reduce((s, c) => s + (c.stats?.calls || 0), 0),
     };
@@ -81,7 +81,7 @@ export function CompaniesPage({ onPickCompany, pinnedCompanyId, user }) {
   const onSync = async (c) => {
     setSyncingId(c.id);
     try {
-      await api.syncVapi(c.id);
+      await api.syncVoice(c.id);
       push(`تم نشر ${c.name}`, 'success');
       load();
     } catch (e) { push(e.message, 'error'); }
@@ -116,7 +116,7 @@ export function CompaniesPage({ onPickCompany, pinnedCompanyId, user }) {
         subtitle={
           totals
             ? (isWorkspace
-                ? (totals.synced ? 'منشورة على Vapi' : 'غير منشورة على Vapi')
+                ? (totals.synced ? 'منشورة على ElevenLabs' : 'غير منشورة على ElevenLabs')
                 : `${fmtNumber(totals.companies)} شركة · ${fmtNumber(totals.synced)} منشورة · ${fmtNumber(totals.chats + totals.calls)} تفاعل`)
             : 'جارٍ التحميل...'
         }
@@ -144,9 +144,9 @@ export function CompaniesPage({ onPickCompany, pinnedCompanyId, user }) {
         {!isWorkspace && totals && (
           <div className="grid grid-cols-4 gap-4 mb-6">
             <HeroStat label="إجمالي الشركات" value={fmtNumber(totals.companies)} hint="مفعّلة في النظام" accent="brand" />
-            <HeroStat label="منشورة على Vapi" value={fmtNumber(totals.synced)} hint={`${totals.companies - totals.synced} غير منشورة`} accent="emerald" />
+            <HeroStat label="منشورة على ElevenLabs" value={fmtNumber(totals.synced)} hint={`${totals.companies - totals.synced} غير منشورة`} accent="emerald" />
             <HeroStat label="جلسات الشات" value={fmtNumber(totals.chats)} hint="منذ بدء التشغيل" accent="sky" />
-            <HeroStat label="المكالمات" value={fmtNumber(totals.calls)} hint="عبر Twilio + Vapi" accent="violet" />
+            <HeroStat label="المكالمات" value={fmtNumber(totals.calls)} hint="عبر 3CX + ElevenLabs" accent="violet" />
           </div>
         )}
 

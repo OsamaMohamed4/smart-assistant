@@ -87,6 +87,64 @@ test('the indexes moved out of the DDL are actually declared in ADD_INDEXES', ()
   }
 });
 
+test('every tenant table in the RLS list is actually created by the DDL', () => {
+  // A table listed for row-level security but never created is silently skipped
+  // by applyRls, so /health reports fewer enforced tables than the list claims
+  // and nobody notices the backstop is missing.
+  const { TENANT_TABLES } = require('../lib/rls');
+  const created = new Set(
+    [...DDL.matchAll(/CREATE TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)/gi)].map((m) => m[1]),
+  );
+  const orphans = TENANT_TABLES.filter((t) => !created.has(t));
+  assert.deepStrictEqual(
+    orphans, [],
+    'listed for RLS but never created by the schema DDL: ' + orphans.join(', '),
+  );
+});
+
+test('the new capability tables are among the tenant tables', () => {
+  const { TENANT_TABLES } = require('../lib/rls');
+  for (const t of ['company_features', 'company_tools', 'company_publish_runs']) {
+    assert.ok(TENANT_TABLES.includes(t), `${t} holds per-company rows and must be policed`);
+  }
+});
+
+test('armMissingRls only touches tables Postgres is not already policing', async () => {
+  const { armMissingRls, TENANT_TABLES } = require('../lib/rls');
+  const seen = [];
+  const fake = {
+    query: async (text, params) => {
+      if (/pg_tables/.test(text)) {
+        // Everything armed except the three capability-layer tables.
+        const armed = params[0].filter(
+          (t) => !['company_features', 'company_tools', 'company_publish_runs'].includes(t),
+        );
+        return { rows: armed.map((tablename) => ({ tablename })) };
+      }
+      if (/to_regclass/.test(text)) { seen.push(params[0]); return { rows: [{ reg: params[0] }] }; }
+      return { rows: [] };
+    },
+  };
+  const armed = await armMissingRls(fake);
+  assert.deepStrictEqual(armed.sort(), ['company_features', 'company_publish_runs', 'company_tools']);
+  assert.strictEqual(seen.length, 3, 'it probed tables that were already armed');
+  assert.ok(TENANT_TABLES.length > 3);
+});
+
+test('armMissingRls does nothing when every table is already armed', async () => {
+  const { armMissingRls } = require('../lib/rls');
+  let writes = 0;
+  const fake = {
+    query: async (text, params) => {
+      if (/pg_tables/.test(text)) return { rows: params[0].map((tablename) => ({ tablename })) };
+      writes++;
+      return { rows: [] };
+    },
+  };
+  assert.deepStrictEqual(await armMissingRls(fake), []);
+  assert.strictEqual(writes, 0, 'a steady-state boot must issue no writes');
+});
+
 test('every ADD_INDEXES entry names a real table and column', () => {
   const known = new Set();
   for (const [table, col] of ADD_COLUMNS) known.add(`${table}.${col}`);

@@ -735,6 +735,29 @@ async function initDb() {
   // non-fatal — see lib/migrations-pg.js.
   const { runPgMigrations } = require('./lib/migrations-pg');
   await runPgMigrations(q);
+
+  // Arm row-level security on any tenant table Postgres is not already
+  // policing. Gated on RLS_ENABLED so a deployment that has not rolled RLS out
+  // is left exactly as it was; where it HAS been rolled out, a newly added
+  // tenant table now inherits the backstop instead of waiting for someone to
+  // remember scripts/rls-migrate.js. Does no writes once everything is armed.
+  //
+  // Deliberately non-fatal. Losing the backstop is serious and is logged as an
+  // error, but the application filter still stands, and taking the process down
+  // over a catalog probe is how a deploy turns into an outage.
+  if (process.env.RLS_ENABLED === '1') {
+    try {
+      const { armMissingRls } = require('./lib/rls');
+      const armed = await armMissingRls({ query: (text, params) => q(text, params) });
+      if (armed.length) {
+        require('./lib/logger').logger.info('RLS armed on new tenant tables', { tables: armed });
+      }
+    } catch (e) {
+      require('./lib/logger').logger.error(
+        'RLS arming FAILED — tenant tables may lack the database backstop', { err: e.message },
+      );
+    }
+  }
 }
 
 module.exports = {

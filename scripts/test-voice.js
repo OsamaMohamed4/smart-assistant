@@ -447,6 +447,50 @@ test('per-call overrides are ENABLED, or personalised outbound greetings do noth
   assert.equal(o.tts.voice_id, true);
 });
 
+test('the agent is given a wall clock, or it cannot resolve "tomorrow at four"', () => {
+  // prompt.timezone defaults to null, and null is not a soft failure for
+  // appointment booking — the model has no reference point for any relative
+  // time the caller says. Verified against the live API (2026-10-03): PATCHing
+  // 'Asia/Riyadh' reads back verbatim.
+  const p = cfgFor().conversation_config.agent.prompt;
+  assert.equal(p.timezone, 'Asia/Riyadh', 'Saudi default');
+
+  const prev = process.env.ELEVENLABS_AGENT_TIMEZONE;
+  try {
+    // The module reads the env at load time, so this asserts the DEFAULT is not
+    // hard-coded past the override rather than re-reading it here.
+    assert.ok(typeof p.timezone === 'string' && p.timezone.includes('/'),
+      'an IANA zone name, not an offset — offsets break across DST');
+  } finally {
+    if (prev === undefined) delete process.env.ELEVENLABS_AGENT_TIMEZONE;
+    else process.env.ELEVENLABS_AGENT_TIMEZONE = prev;
+  }
+});
+
+test('the greeting cannot be interrupted', () => {
+  // A caller's "ألو" lands on top of the greeting otherwise, and the company
+  // name gets cut in half on the very first thing the customer hears.
+  assert.equal(cfgFor().conversation_config.agent.disable_first_message_interruptions, true);
+});
+
+test('prompt-injection screening is on', () => {
+  // The agent answers a published phone number and holds tools that read
+  // tenant data. Provider default is false. Verified on the live API
+  // (2026-10-03): { version:'1', prompt_injection:{ is_enabled:true } } reads
+  // back enabled.
+  const g = cfgFor().platform_settings.guardrails;
+  assert.equal(g.prompt_injection.is_enabled, true);
+  assert.equal(g.version, '1', 'the provider rejects a guardrails block with no version');
+});
+
+test('the TTS model stays on turbo v2.5 unless an operator opts out', () => {
+  // The expressive v3/v4 line supports Arabic but has never been heard on a
+  // real Saudi call here, and it drops tts.speed — which every company's pacing
+  // is tuned with. This test is the thing that makes flipping it deliberate.
+  assert.equal(cfgFor().conversation_config.tts.model_id, 'eleven_turbo_v2_5');
+  assert.equal(cfgFor().conversation_config.tts.speed, 1.2, 'speed is still ours to set');
+});
+
 test('the end_call tool is always attached', () => {
   const tools = cfgFor().conversation_config.agent.prompt.tools;
   assert.ok(tools.some((t) => t.params?.system_tool_type === 'end_call'));

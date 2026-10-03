@@ -475,6 +475,20 @@ function resolveLlm(model) {
   return override || model || 'gpt-4.1';
 }
 
+// The TTS model. Held at turbo v2.5 ON PURPOSE. The expressive line
+// (eleven_v3, eleven_v3_conversational, eleven_v4) does list Arabic support,
+// but two things make it a change that must be heard before it ships: nobody
+// here has listened to a real Saudi call on it, and it drops `tts.speed`,
+// which every company's pacing is tuned with. Env-tunable so one deployment
+// can try it without a code change — and so switching back is instant.
+const TTS_MODEL = (process.env.ELEVENLABS_TTS_MODEL || '').trim() || 'eleven_turbo_v2_5';
+
+// The agent's wall clock. Left unset, `prompt.timezone` reads back null and the
+// model has NO idea what "tomorrow at four" refers to — it cannot resolve a
+// relative time at all, which is the first thing the appointment-booking flow
+// asks of it. Saudi default; env-tunable for a tenant outside the Kingdom.
+const AGENT_TIMEZONE = (process.env.ELEVENLABS_AGENT_TIMEZONE || '').trim() || 'Asia/Riyadh';
+
 // Post-call extraction. These identifiers and Arabic descriptions are carried
 // over VERBATIM from the previous provider's analysis schema, because
 // lib/lead-scoring.js and the campaign report read them by name. Renaming one
@@ -532,17 +546,22 @@ function buildAgentConfig({
       agent: {
         first_message: firstMessage,
         language     : langCode(language),
+        // A caller's "ألو" must not cut the greeting off half-way. The greeting
+        // is one short sentence, so holding it to the end costs nothing and
+        // stops the call opening on a truncated company name.
+        disable_first_message_interruptions: true,
         prompt: {
           prompt     : prompt,
           llm        : resolveLlm(model),
           temperature,
           max_tokens : maxTokens,
+          timezone   : AGENT_TIMEZONE,
           tools,
           ...(toolIds.length ? { tool_ids: toolIds } : {}),
         },
       },
       tts: {
-        model_id        : 'eleven_turbo_v2_5',
+        model_id        : TTS_MODEL,
         voice_id        : voiceId,
         stability,
         similarity_boost: similarityBoost,
@@ -576,6 +595,18 @@ function buildAgentConfig({
         enable_conversation_initiation_client_data_from_webhook: true,
       },
       data_collection: DATA_COLLECTION,
+      // Prompt-injection screening. This agent is reachable by anyone who can
+      // dial the company's published number, and it carries tools that read
+      // tenant data, so a caller reciting instructions at it is a real attack
+      // surface rather than a theoretical one. Off by default on the provider
+      // side. The other guardrail families (content moderation, synthetic-voice
+      // detection) are left at their defaults deliberately: they need
+      // per-tenant thresholds nobody has set, and a false positive there drops
+      // a real customer's call.
+      guardrails: {
+        version: '1',
+        prompt_injection: { is_enabled: true },
+      },
     },
   };
 }

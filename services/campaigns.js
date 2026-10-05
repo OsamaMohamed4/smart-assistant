@@ -102,7 +102,10 @@ async function placeCall(company, campaign, contact) {
   }
 
   const activeScenario = await sql.getActiveScenarioForCompany.get(company.id);
-  const firstMessage = activeScenario?.first_message || null;
+  // Globals resolved here too — an unresolved {{agent_name}} makes the provider
+  // reject the call, which would fail every contact in the campaign silently.
+  const firstMessage = require('../companies').fillGlobals(
+    activeScenario?.first_message || null, company);
 
   return voice.startOutboundCall({
     company, toNumber: dialNumber, variables: vars, firstMessage,

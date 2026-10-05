@@ -821,7 +821,9 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
   // dynamic variables above. This override only takes effect because the sync
   // enables first_message in platform_settings.overrides.
   const activeScenario = await sql.getActiveScenarioForCompany.get(c.id);
-  const firstMessage = activeScenario?.first_message || null;
+  // Same unresolved-{{agent_name}} trap as the publish path: an override sent
+  // with a global still in it makes the provider refuse the call outright.
+  const firstMessage = fillGlobals(activeScenario?.first_message || null, c);
 
   try {
     const { callId, callRef, status } = await voice.startOutboundCall({

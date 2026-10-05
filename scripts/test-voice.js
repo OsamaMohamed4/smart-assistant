@@ -491,6 +491,42 @@ test('the TTS model stays on turbo v2.5 unless an operator opts out', () => {
   assert.equal(cfgFor().conversation_config.tts.speed, 1.2, 'speed is still ours to set');
 });
 
+test('{{agent_name}} is resolved before a first message reaches the provider', () => {
+  // THE BUG THIS GUARDS, observed live on 2026-10-05: the instruction prompt
+  // went through fillGlobals but the FIRST MESSAGE did not, so {{agent_name}}
+  // arrived at the provider unresolved. The provider then refused to start the
+  // conversation at all —
+  //
+  //   termination_reason: "Missing required dynamic variables in
+  //                        first message: {'agent_name'}"
+  //
+  // — so every call died at second zero while the publish reported success and
+  // the agent looked perfectly configured in the dashboard.
+  const { fillGlobals } = require('../companies');
+  const company = { id: 'co-a', name: 'وكن العقارية' };
+
+  const filled = fillGlobals('حياك الله في وكن، معك {{agent_name}}، كيف أقدر أساعدك؟', company);
+  assert.ok(!filled.includes('{{agent_name}}'), 'the provider rejects the call if this survives');
+  assert.ok(filled.includes('وكن العقارية'), 'resolved to the company name');
+});
+
+test('per-call placeholders SURVIVE that resolution', () => {
+  // {{customer_name}} is supplied per call from dynamic variables. Resolving it
+  // at publish time would bake one contact's name into every future call, so
+  // fillGlobals must leave anything it does not own exactly as it found it.
+  const { fillGlobals } = require('../companies');
+  const out = fillGlobals('مرحباً {{customer_name}}، معك {{agent_name}}', { id: 'co-a', name: 'وكن' });
+  assert.ok(out.includes('{{customer_name}}'), 'the provider fills this one per call');
+  assert.ok(!out.includes('{{agent_name}}'));
+});
+
+test('fillGlobals tolerates a null first message', () => {
+  // firstMessageInbound is legitimately null for companies with no separate
+  // inbound greeting, and it is now passed through fillGlobals on every publish.
+  const { fillGlobals } = require('../companies');
+  assert.strictEqual(fillGlobals(null, { id: 'co-a', name: 'وكن' }), null);
+});
+
 test('the end_call tool is always attached', () => {
   const tools = cfgFor().conversation_config.agent.prompt.tools;
   assert.ok(tools.some((t) => t.params?.system_tool_type === 'end_call'));

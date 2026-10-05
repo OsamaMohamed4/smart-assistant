@@ -8,6 +8,7 @@ import { ConfirmDialog } from '../components/ui/Modal';
 import { CompanyCard } from '../components/companies/CompanyCard';
 import { CompanyForm } from '../components/companies/CompanyForm';
 import { ApiKeysModal } from '../components/companies/ApiKeysModal';
+import { ImportPhoneModal } from '../components/companies/ImportPhoneModal';
 import { useToast } from '../components/ui/Toast';
 import { api } from '../lib/api';
 import { cn, fmtNumber } from '../lib/utils';
@@ -28,6 +29,7 @@ export function CompaniesPage({ onPickCompany, pinnedCompanyId, user }) {
   const [bindingId, setBindingId] = useState(null);
   const [deleteOf, setDeleteOf]   = useState(null);
   const [bindOf, setBindOf]       = useState(null);
+  const [importOf, setImportOf]   = useState(null);
   const [apiKeysOf, setApiKeysOf] = useState(null);
 
   const load = async () => {
@@ -212,6 +214,7 @@ export function CompaniesPage({ onPickCompany, pinnedCompanyId, user }) {
                 onEdit={(c) => { setEditing(c); setFormOpen(true); }}
                 onSync={onSync}
                 onBindPhone={(c) => setBindOf(c)}
+                onImportPhone={(c) => setImportOf(c)}
                 onDelete={(c) => setDeleteOf(c)}
                 onApiKeys={(c) => setApiKeysOf(c)}
               />
@@ -245,6 +248,14 @@ export function CompaniesPage({ onPickCompany, pinnedCompanyId, user }) {
         confirmLabel="نعم، اربط"
         title={`ربط الرقم بـ ${bindOf?.name}؟`}
         message="سيتم نقل الرقم لهذه الشركة وفصله عن أي شركة أخرى."
+      />
+
+      <ImportPhoneModal
+        open={!!importOf}
+        onClose={() => setImportOf(null)}
+        company={importOf}
+        push={push}
+        onDone={load}
       />
 
       <ApiKeysModal

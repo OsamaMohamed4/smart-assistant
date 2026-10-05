@@ -77,6 +77,12 @@ export const api = {
   // Point the company's own number at its own agent (which agent answers when
   // someone dials the company's 3CX line).
   bindPhone         : (id) => request(`/api/companies/${id}/bind-phone`, { method: 'POST', body: '{}' }),
+  // Register the company's EXISTING 3CX number with the voice provider. No
+  // number is ever purchased: this hands the provider the DID the company
+  // already owns plus the address of their own PBX, so the provider knows how
+  // to reach it. Superadmin-only server-side — it writes the tenant↔phone-line
+  // binding and accepts SIP credentials.
+  importPhone       : (id, body) => request(`/api/companies/${id}/import-phone`, { method: 'POST', body: JSON.stringify(body) }),
 
   // API keys (public Agent API)
   listApiKeys       : (id) => request(`/api/companies/${id}/api-keys`),

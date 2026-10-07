@@ -302,6 +302,15 @@ async function publishCompany({ company, deps, actorEmail = null, log = null }) 
         stability      : clamp(s.stability, 0, 1, 0.8),
         similarityBoost: clamp(s.similarityBoost, 0, 1, 0.8),
         voiceSpeed     : clamp(s.voiceSpeed, 0.7, 1.2, voiceSpeedDefault),
+        ttsModel       : s.ttsModel || null,
+        expressiveMode : s.expressiveMode === true,
+        // Turn pacing. Both have always been parameters of buildAgentConfig
+        // and were simply never supplied, so every agent got 15/30 whatever
+        // its company needed. -1 is the provider's "never end the call on
+        // silence" and must survive the clamp, so it is passed through.
+        idleTimeoutSeconds   : clamp(s.turnTimeoutSeconds, 1, 60, 15),
+        silenceTimeoutSeconds: (Number(s.silenceEndCallSeconds) === -1)
+          ? -1 : clamp(s.silenceEndCallSeconds, 5, 300, 30),
         transferNumber,
         webhookTools,
         publicBaseUrl,

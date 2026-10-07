@@ -576,7 +576,10 @@ const KB_PRIORITY_RE = /[0-9٠-٩]|ريال|سعر|أسعار|السعر|ضما�
 //   - eval judge           (services/evals.js — grading must stay independent
 //                           of the model under test, or it grades itself)
 //   - transcript summarize (summarize.js — post-call batch work)
-const ALLOWED_MODELS = ['gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4o-mini'];
+// The provider accepts its own hosted models alongside OpenAI's. gemini flash
+// lite is listed because a company is live on it: one short sentence per turn
+// at 120 tokens, and markedly faster on a scripted flow.
+const ALLOWED_MODELS = ['gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4o-mini', 'gemini-3.1-flash-lite'];
 const clampNum = (v, lo, hi, dflt) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt);
 
 function resolveAgentModel(company) {
@@ -750,6 +753,14 @@ const DEFAULT_VOICE_ID = 'MI88rOZjXbH22N8KHXUo'; // Ali علي — الصوت ا
 // The companion `optimizeStreamingLatency` knob is gone: it was a property of
 // the previous provider's TTS bridge, and the Agents TTS config has no such
 // field. Sending it would be rejected, so it is removed rather than renamed.
+// Voice models a company may select. Confirmed against GET /v1/models — each
+// one reports Arabic support. The expressive line is what expressiveMode acts
+// on; on the rest the flag is stored and ignored.
+const ALLOWED_TTS_MODELS = [
+  'eleven_turbo_v2_5', 'eleven_flash_v2_5', 'eleven_multilingual_v2',
+  'eleven_v3', 'eleven_v3_conversational', 'eleven_v4', 'eleven_v4_turbo',
+];
+
 const VOICE_SPEED_DEFAULT   = clampRange(process.env.VOICE_SPEED_DEFAULT, 0.7, 1.2, 1.2);
 function clampRange(v, lo, hi, dflt) {
   return Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt;
@@ -758,6 +769,9 @@ function clampRange(v, lo, hi, dflt) {
 const PLAYGROUND_VOICES = [
   { id: 'MI88rOZjXbH22N8KHXUo', name: 'Ali', label: 'علي', description: 'صوت هادئ وواضح', gender: 'male', accent: 'arabic' },
   { id: 'cFUFIbKkO2iZFwS8cRnY', name: 'Nasser', label: 'ناصر', description: 'صوت سعودي طبيعي', gender: 'male', accent: 'saudi' },
+  // Name and description read from GET /v1/voices, not invented. A live
+  // company already runs on this voice.
+  { id: 'yXEnnEln9armDCyhkXcA', name: 'Jeddawi', label: 'جداوي', description: 'صوت سعودي عميق وواثق', gender: 'male', accent: 'saudi' },
 ];
 const PLAYGROUND_VOICE_IDS = new Set(PLAYGROUND_VOICES.map((v) => v.id));
 
@@ -1085,6 +1099,15 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, validate({ params
   }
   if (ALLOWED_MODELS.includes(b.model)) clean.model = b.model;
   for (const k of ['temperature', 'maxTokens', 'stability', 'similarityBoost', 'voiceSpeed']) {
+    if (b[k] !== undefined && Number.isFinite(Number(b[k]))) clean[k] = Number(b[k]);
+  }
+  // Voice-engine settings that publishing overwrites, so the company must own
+  // them or they are lost on the next publish. Allow-listed rather than free
+  // text: an unknown model id surfaces only at publish time, as an opaque
+  // provider error, long after the operator left this screen.
+  if (ALLOWED_TTS_MODELS.includes(b.ttsModel)) clean.ttsModel = b.ttsModel;
+  if (typeof b.expressiveMode === 'boolean') clean.expressiveMode = b.expressiveMode;
+  for (const k of ['turnTimeoutSeconds', 'silenceEndCallSeconds']) {
     if (b[k] !== undefined && Number.isFinite(Number(b[k]))) clean[k] = Number(b[k]);
   }
   // Spending caps are the platform's cost circuit-breaker (services/usage.js
@@ -1605,6 +1628,83 @@ app.post('/api/companies/:id/sync-voice', requireCompanyAccess, handlePublishCom
 // platform-wide fallback: with multiple tenants, a fallback would bind one
 // company's line to another company's agent. The DB is only updated after the
 // provider confirms, so a failed call leaves no misleading state behind.
+// Adopt the agent's CURRENT provider-side configuration as the company's own.
+//
+// Publishing rebuilds the agent from company settings and therefore replaces
+// every field it sends, so anything tuned directly in the provider's dashboard
+// is lost on the next publish. That is the correct behaviour -- publish has to
+// be authoritative -- but it leaves no way to keep a configuration that was
+// arrived at by ear, on real calls, outside this system.
+//
+// This reads the live agent and writes the handful of values back into the
+// company, so the next publish REPRODUCES what is there instead of flattening
+// it. It changes nothing on the provider: it is a read plus a local save.
+//
+// Only the fields publish actually overwrites are adopted. asr.keywords,
+// asr.user_input_audio_format and prompt.knowledge_base are deliberately
+// absent because publish never sends them and they survive on their own --
+// copying them here would imply an ownership this system does not have.
+app.post('/api/companies/:id/adopt-agent-settings', requireCompanyAdmin, async (req, res) => {
+  const row = await sql.getCompany.get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const c = await loadCompany(req.params.id);
+  if (!c?.agentId) {
+    return res.status(409).json({ error: 'الشركة غير منشورة بعد — لا يوجد وكيل لقراءة إعداداته.', code: 'NOT_PUBLISHED' });
+  }
+
+  let agent;
+  try {
+    agent = await voice.getAgent(c.agentId, c);
+  } catch (e) {
+    return res.status(502).json({ error: voice.errText(e) });
+  }
+  if (!agent) return res.status(404).json({ error: 'الوكيل غير موجود لدى المزوّد.', code: 'AGENT_GONE' });
+
+  const cc = agent.conversation_config || {};
+  const p  = cc.agent?.prompt || {};
+  const adopted = {};
+  const num = (v, lo, hi) => (Number.isFinite(Number(v)) && Number(v) >= lo && Number(v) <= hi ? Number(v) : undefined);
+
+  if (ALLOWED_MODELS.includes(p.llm)) adopted.model = p.llm;
+  if (num(p.temperature, 0, 1) !== undefined) adopted.temperature = Number(p.temperature);
+  if (num(p.max_tokens, 50, 800) !== undefined) adopted.maxTokens = Number(p.max_tokens);
+  if (ALLOWED_TTS_MODELS.includes(cc.tts?.model_id)) adopted.ttsModel = cc.tts.model_id;
+  if (typeof cc.tts?.expressive_mode === 'boolean') adopted.expressiveMode = cc.tts.expressive_mode;
+  // A voice the provider holds but our catalogue does not is reported rather
+  // than stored: saving it would make every later publish fail with the
+  // provider's opaque "Couldn't Find Voice".
+  const unknownVoice = cc.tts?.voice_id && !isAllowedVoiceId(cc.tts.voice_id) ? cc.tts.voice_id : null;
+  if (cc.tts?.voice_id && !unknownVoice) adopted.voiceId = cc.tts.voice_id;
+  if (num(cc.tts?.stability, 0, 1) !== undefined) adopted.stability = Number(cc.tts.stability);
+  if (num(cc.tts?.similarity_boost, 0, 1) !== undefined) adopted.similarityBoost = Number(cc.tts.similarity_boost);
+  if (num(cc.tts?.speed, 0.7, 1.2) !== undefined) adopted.voiceSpeed = Number(cc.tts.speed);
+  if (num(cc.turn?.turn_timeout, 1, 60) !== undefined) adopted.turnTimeoutSeconds = Number(cc.turn.turn_timeout);
+  // -1 is the provider's "never end the call on silence" and is a real choice,
+  // not a missing value, so it is adopted as-is rather than clamped away.
+  if (Number(cc.turn?.silence_end_call_timeout) === -1) adopted.silenceEndCallSeconds = -1;
+  else if (num(cc.turn?.silence_end_call_timeout, 5, 300) !== undefined) {
+    adopted.silenceEndCallSeconds = Number(cc.turn.silence_end_call_timeout);
+  }
+
+  let existing = {};
+  try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
+  const changed = Object.keys(adopted).filter((k) => String(existing[k]) !== String(adopted[k]));
+  await sql.updateCompanySettings.run({
+    id: row.id, settings: JSON.stringify({ ...existing, ...adopted }),
+  });
+  invalidateCache(row.id);
+  audit(req, 'voice.adopt_agent_settings', `companies/${row.id}`, { changed, unknownVoice: unknownVoice || undefined });
+  req.log.info('adopted provider agent settings', { companyId: row.id, changed });
+
+  res.json({
+    adopted, changed,
+    unknownVoice,
+    note: unknownVoice
+      ? 'الصوت الحالي غير موجود في قائمة الأصوات المعتمدة ولم يُحفظ — أضفه عبر EXTRA_VOICE_IDS أولاً.'
+      : null,
+  });
+});
+
 app.post('/api/companies/:id/bind-phone', requireCompanyAdmin, async (req, res) => {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });

@@ -517,6 +517,15 @@ function buildAgentConfig({
   name, prompt, firstMessage, language,
   model, temperature, maxTokens,
   voiceId, stability, similarityBoost, voiceSpeed,
+  // Per-company overrides for fields that used to be fixed. Publishing
+  // REPLACES whatever the provider's dashboard holds for every field we send,
+  // so a value an operator tuned by hand there is lost on the next publish
+  // unless the company carries it. Verified field by field against the live
+  // API (2026-10-07): llm, max_tokens, model_id, expressive_mode, voice_id,
+  // stability, speed, turn_timeout and silence_end_call_timeout are all
+  // overwritten, while asr.keywords, asr.user_input_audio_format and
+  // prompt.knowledge_base survive because we never name them.
+  ttsModel = null, expressiveMode = false,
   toolIds = [], transferNumber = null,
   maxDurationSeconds = 600, idleTimeoutSeconds = 15, silenceTimeoutSeconds = 30,
 }) {
@@ -561,11 +570,15 @@ function buildAgentConfig({
         },
       },
       tts: {
-        model_id        : TTS_MODEL,
+        model_id        : ttsModel || TTS_MODEL,
         voice_id        : voiceId,
         stability,
         similarity_boost: similarityBoost,
         speed           : voiceSpeed,
+        // Only the expressive model line reacts to this; the others store it
+        // and ignore it, so sending it unconditionally keeps publish
+        // authoritative without branching on the model name.
+        expressive_mode : !!expressiveMode,
       },
       asr: { quality: 'high' },
       turn: {

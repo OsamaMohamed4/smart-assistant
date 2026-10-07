@@ -527,6 +527,49 @@ test('fillGlobals tolerates a null first message', () => {
   assert.strictEqual(fillGlobals(null, { id: 'co-a', name: 'وكن' }), null);
 });
 
+test('a company can carry its own TTS model through publish', () => {
+  // Publishing REPLACES tts.model_id, so a model chosen in the provider's
+  // dashboard is lost on the next publish unless the company owns it.
+  // Confirmed on the live API (2026-10-07): eleven_v3_conversational reverted
+  // to eleven_turbo_v2_5 after a publish that did not carry it.
+  assert.equal(cfgFor().conversation_config.tts.model_id, 'eleven_turbo_v2_5',
+    'unchanged for every company that has not set one');
+  assert.equal(
+    cfgFor({ ttsModel: 'eleven_v3_conversational' }).conversation_config.tts.model_id,
+    'eleven_v3_conversational');
+});
+
+test('expressive mode is carried, and off unless asked for', () => {
+  assert.equal(cfgFor().conversation_config.tts.expressive_mode, false);
+  assert.equal(cfgFor({ expressiveMode: true }).conversation_config.tts.expressive_mode, true);
+});
+
+test('turn pacing is carried, and -1 survives as "never end on silence"', () => {
+  // These were always parameters and were never supplied by the pipeline, so
+  // every agent got 15/30 regardless of its company. -1 is the provider's
+  // "do not end the call on silence"; a naive clamp to a positive minimum
+  // would turn an intentionally disabled timeout into a 5-second hang-up.
+  const d = cfgFor().conversation_config.turn;
+  assert.equal(d.turn_timeout, 15);
+  assert.equal(d.silence_end_call_timeout, 30);
+
+  const t = cfgFor({ idleTimeoutSeconds: 6, silenceTimeoutSeconds: -1 }).conversation_config.turn;
+  assert.equal(t.turn_timeout, 6);
+  assert.equal(t.silence_end_call_timeout, -1);
+});
+
+test('the fields that survive a publish are still NOT sent', () => {
+  // asr.keywords, asr.user_input_audio_format and prompt.knowledge_base are
+  // left alone by the provider precisely because we never name them — proven
+  // against the live API. Naming any of them here would start wiping an
+  // operator's keyword list and detaching uploaded knowledge bases on every
+  // publish, which is the exact failure this whole change exists to prevent.
+  const cc = cfgFor().conversation_config;
+  assert.ok(!('keywords' in cc.asr), 'sending asr.keywords would wipe the company list');
+  assert.ok(!('user_input_audio_format' in cc.asr), 'telephony audio format must not be reset');
+  assert.ok(!('knowledge_base' in cc.agent.prompt), 'naming this detaches uploaded documents');
+});
+
 test('the end_call tool is always attached', () => {
   const tools = cfgFor().conversation_config.agent.prompt.tools;
   assert.ok(tools.some((t) => t.params?.system_tool_type === 'end_call'));

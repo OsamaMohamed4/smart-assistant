@@ -1,4 +1,4 @@
-import { Phone, PhoneIncoming, Mic, Bot, BookOpen, MessageSquare, PhoneCall, MoreHorizontal, Rocket, Trash2, Pencil, Key } from 'lucide-react';
+import { Phone, PhoneIncoming, Mic, Bot, BookOpen, MessageSquare, PhoneCall, MoreHorizontal, Rocket, Trash2, Pencil, Key, DownloadCloud } from 'lucide-react';
 import { Avatar } from '../ui/Avatar';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
@@ -8,7 +8,7 @@ import { useState, useRef, useEffect } from 'react';
 // `canManage = false` hides destructive / platform-only actions (delete,
 // bind-phone). Clients see only edit + sync because that's all the backend
 // would let them do anyway — keeping the UI honest.
-export function CompanyCard({ company, onEdit, onSync, onBindPhone, onImportPhone, onDelete, onApiKeys, syncing, binding, canManage = true }) {
+export function CompanyCard({ company, onEdit, onSync, onBindPhone, onImportPhone, onAdoptSettings, onDelete, onApiKeys, syncing, binding, canManage = true }) {
   const c = company;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
@@ -62,6 +62,11 @@ export function CompanyCard({ company, onEdit, onSync, onBindPhone, onImportPhon
                     {canManage && (
                       <button onClick={() => { setMenuOpen(false); onImportPhone(c); }} className="w-full px-3 py-2 text-right text-[13px] flex items-center gap-2.5 hover:bg-ink-50 text-ink-800">
                         <PhoneIncoming className="w-3.5 h-3.5 text-ink-500" strokeWidth={2} /> استيراد الرقم
+                      </button>
+                    )}
+                    {canManage && synced && (
+                      <button onClick={() => { setMenuOpen(false); onAdoptSettings(c); }} className="w-full px-3 py-2 text-right text-[13px] flex items-center gap-2.5 hover:bg-ink-50 text-ink-800">
+                        <DownloadCloud className="w-3.5 h-3.5 text-ink-500" strokeWidth={2} /> اعتمد إعدادات ElevenLabs
                       </button>
                     )}
                     {canManage && (

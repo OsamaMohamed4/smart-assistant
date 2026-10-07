@@ -90,6 +90,19 @@ export function CompaniesPage({ onPickCompany, pinnedCompanyId, user }) {
     finally { setSyncingId(null); }
   };
 
+  // Keep the agent's live provider-side configuration as the company's own,
+  // so the next publish reproduces it rather than resetting it to defaults.
+  // Reads from the provider and saves locally — it changes nothing remotely.
+  const onAdoptSettings = async (c) => {
+    try {
+      const r = await api.adoptAgentSettings(c.id);
+      if (r.unknownVoice) push(r.note, 'error');
+      else if (!r.changed?.length) push('الإعدادات المحفوظة مطابقة بالفعل لما لدى ElevenLabs', 'info');
+      else push(`تم اعتماد ${r.changed.length} إعداد — النشر القادم سيعيد نفس التهيئة`, 'success');
+      load();
+    } catch (e) { push(e.message, 'error'); }
+  };
+
   const onBindPhone = async () => {
     if (!bindOf) return;
     setBindingId(bindOf.id);
@@ -215,6 +228,7 @@ export function CompaniesPage({ onPickCompany, pinnedCompanyId, user }) {
                 onSync={onSync}
                 onBindPhone={(c) => setBindOf(c)}
                 onImportPhone={(c) => setImportOf(c)}
+                onAdoptSettings={onAdoptSettings}
                 onDelete={(c) => setDeleteOf(c)}
                 onApiKeys={(c) => setApiKeysOf(c)}
               />

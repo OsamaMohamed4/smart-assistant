@@ -77,6 +77,9 @@ export const api = {
   // Point the company's own number at its own agent (which agent answers when
   // someone dials the company's 3CX line).
   bindPhone         : (id) => request(`/api/companies/${id}/bind-phone`, { method: 'POST', body: '{}' }),
+  // Read the live agent's configuration and keep it as the company's own, so
+  // the next publish reproduces it instead of overwriting it.
+  adoptAgentSettings: (id) => request(`/api/companies/${id}/adopt-agent-settings`, { method: 'POST', body: '{}' }),
   // Register the company's EXISTING 3CX number with the voice provider. No
   // number is ever purchased: this hands the provider the DID the company
   // already owns plus the address of their own PBX, so the provider knows how

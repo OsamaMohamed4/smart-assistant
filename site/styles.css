@@ -407,6 +407,46 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
 .contact p { margin-inline: auto; }
 
 /* ── Footer ────────────────────────────────────────────── */
+/* Legal pages. The page chrome stays RTL Arabic; the instrument itself is LTR
+   English, because it is reproduced verbatim and a legal text is not
+   translated in passing. .legal-body carries dir="ltr" so lists, punctuation
+   and numbering read correctly inside an RTL document. */
+.legal-wrap { max-width: 760px; }
+.legal-kicker {
+  font-size: 14px; letter-spacing: .04em; color: var(--brand);
+  margin-bottom: var(--s-2);
+}
+.legal h1 { font-size: clamp(28px, 4vw, 38px); margin-bottom: var(--s-3); }
+.legal-meta {
+  font-size: 14.5px; line-height: 1.9; color: var(--ink-2);
+  padding-bottom: var(--s-5); border-bottom: 1px solid var(--line);
+  margin-bottom: var(--s-6);
+}
+.legal-body { font-size: 15.5px; line-height: 1.85; color: var(--ink-2); text-align: left; }
+.legal-body h2 {
+  font-size: 19px; color: var(--ink-1);
+  margin-top: var(--s-6); margin-bottom: var(--s-3);
+  padding-top: var(--s-5); border-top: 1px solid var(--line);
+}
+.legal-body h2:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.legal-body h3 { font-size: 16px; color: var(--ink-1); margin-top: var(--s-4); margin-bottom: var(--s-2); }
+.legal-body p { margin-bottom: var(--s-3); }
+.legal-body ul { margin: 0 0 var(--s-3) 0; padding-left: 1.3em; padding-right: 0; list-style: disc; }
+.legal-body li { margin-bottom: var(--s-1); }
+.legal-body strong { color: var(--ink-1); font-weight: 600; }
+/* An unresolved fact is marked so it cannot be published unnoticed. */
+.legal-todo {
+  background: #FDF3E3; border: 1px dashed var(--brand);
+  color: var(--brand); padding: 1px 8px; border-radius: 4px;
+  font-size: 14px; unicode-bidi: isolate; direction: rtl;
+}
+.legal-foot {
+  margin-top: var(--s-7); padding-top: var(--s-5);
+  border-top: 1px solid var(--line); font-size: 15px;
+}
+.legal-foot a { color: var(--brand); border-bottom: 1px solid var(--line-2); padding-bottom: 2px; }
+.legal-foot a:hover { border-bottom-color: var(--brand); }
+
 .site-footer {
   border-top: 1px solid var(--line);
   padding-block: var(--s-7) var(--s-6);

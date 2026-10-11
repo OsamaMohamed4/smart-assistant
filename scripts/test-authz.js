@@ -219,3 +219,57 @@ test('F-10: unknown placeholders survive untouched', () => {
   const out = fillGlobals('مرحباً {{customer_name}}', { name: 'شركة' });
   assert.match(out, /\{\{customer_name\}\}/);
 });
+
+// ─── Administrative password reset ────────────────────────────────
+// A reset has three jobs beyond changing the hash, and the two easy ones to
+// forget are the two that matter.
+
+test('reset refuses anyone who is not a client of THIS company', () => {
+  // Without this the :id in the path is decoration, and a reset route reachable
+  // by company admins becomes a way to take over a superadmin account.
+  const targetIsResettable = (u, companyId) =>
+    !!u && u.role === 'client' && u.company_id === companyId;
+
+  assert.equal(targetIsResettable({ role: 'client', company_id: 'co-a' }, 'co-a'), true);
+  assert.equal(targetIsResettable({ role: 'client', company_id: 'co-b' }, 'co-a'), false,
+    'another company\'s client');
+  assert.equal(targetIsResettable({ role: 'superadmin', company_id: null }, 'co-a'), false,
+    'a superadmin must never be resettable through a company-scoped route');
+  assert.equal(targetIsResettable(null, 'co-a'), false);
+});
+
+test('unlockUser clears the lockout WITHOUT stamping a login', () => {
+  // clearFailedLogins also sets last_login_at, which is right after a real
+  // login and wrong after a reset: the clients list would show someone as
+  // freshly active when they have not been back at all.
+  const sqlite = require('fs').readFileSync(require('path').join(__dirname, '..', 'db-sqlite.js'), 'utf8');
+  const pg     = require('fs').readFileSync(require('path').join(__dirname, '..', 'db-postgres.js'), 'utf8');
+
+  for (const [label, src] of [['sqlite', sqlite], ['postgres', pg]]) {
+    const m = src.match(/unlockUser[^\n]*\n?[^\n]*/);
+    assert.ok(m, `${label}: unlockUser statement is missing`);
+    assert.match(m[0], /failed_logins\s*=\s*0/, `${label}: must clear the counter`);
+    assert.match(m[0], /locked_until\s*=\s*NULL/, `${label}: must lift the lockout`);
+    assert.doesNotMatch(m[0], /last_login_at/, `${label}: must NOT claim a login happened`);
+  }
+});
+
+test('reset kills every existing session for that user', () => {
+  // A reset is what an operator reaches for when an account may be
+  // compromised. Leaving the old cookies alive makes it theatre: the intruder
+  // keeps their access and only the owner gets a new password.
+  const src = require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'routes', 'clients.js'), 'utf8');
+  const route = src.slice(src.indexOf('reset-password'));
+  assert.match(route, /deleteUserSessions/, 'sessions must be revoked on reset');
+  assert.match(route, /unlockUser/, 'a reset must also lift a lockout');
+  // The generated password is handed back to the operator once; it must never
+  // also be written into the permanent audit trail. Checked against the
+  // metadata ARGUMENT, not the surrounding text: the action name is literally
+  // 'client.reset_password', so a search for the word matches the innocent
+  // case and tells you nothing.
+  const meta = route.match(/metadata\s*:\s*JSON\.stringify\(([^)]*)\)/);
+  assert.ok(meta, 'the reset must record an audit event');
+  assert.doesNotMatch(meta[1], /\bpassword\b/,
+    'the audit metadata must not carry the generated password');
+});

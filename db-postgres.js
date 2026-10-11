@@ -83,6 +83,11 @@ const sql = {
     `UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = ${NOW} WHERE id = $1`,
   ),
   updatePassword: stmt(`UPDATE users SET password_hash = $1 WHERE id = $2`),
+  // Lift a lockout WITHOUT claiming the user just signed in. clearFailedLogins
+  // also stamps last_login_at, which is correct after a successful login and
+  // wrong after an administrative reset — the client list would show someone
+  // as freshly active when they have not been back at all.
+  unlockUser: stmt(`UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1`),
   getUserPasswordHash: stmt(`SELECT password_hash FROM users WHERE id = $1`),
 
   // ─── sessions ────────────────────────────────────────────

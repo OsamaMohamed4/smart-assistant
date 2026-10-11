@@ -91,6 +91,9 @@ export const api = {
   listApiKeys       : (id) => request(`/api/companies/${id}/api-keys`),
   createApiKey      : (id, name) => request(`/api/companies/${id}/api-keys`, { method: 'POST', body: JSON.stringify({ name }) }),
   revokeApiKey      : (id, keyId) => request(`/api/companies/${id}/api-keys/${keyId}`, { method: 'DELETE' }),
+  // Issue a client a new password. Returns it once; the server keeps only the
+  // hash, so a closed dialog means it is gone for good.
+  resetClientPassword: (id, userId) => request(`/api/companies/${id}/clients/${userId}/reset-password`, { method: 'POST', body: '{}' }),
 
   // Campaigns (outbound dialer)
   listCampaigns     : (id) => request(`/api/companies/${id}/campaigns`),

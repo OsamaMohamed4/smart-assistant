@@ -17,6 +17,7 @@ export function ClientsPage() {
   const [loading, setLoading]       = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [confirmDel, setConfirmDel] = useState(null);
+  const [confirmReset, setConfirmReset] = useState(null);
   const [newCred, setNewCred]       = useState(null);
   const { push } = useToast();
 
@@ -51,6 +52,18 @@ export function ClientsPage() {
     setCreateOpen(false);
     setNewCred(cred);
     api.listClients(companyId).then(setClients).catch(() => {});
+  };
+
+  // The new password is shown in the same dialog as a newly created client's,
+  // because it is the same one-shot handover: the server keeps only the hash,
+  // so once the dialog closes nobody can recover it.
+  const onReset = async () => {
+    if (!confirmReset) return;
+    try {
+      const cred = await api.resetClientPassword(companyId, confirmReset.id);
+      setNewCred(cred);
+    } catch (e) { push(e.message, 'error'); }
+    finally { setConfirmReset(null); }
   };
 
   const onDelete = async () => {
@@ -135,6 +148,13 @@ export function ClientsPage() {
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1">
                       <button
+                        onClick={() => setConfirmReset(c)}
+                        className="w-8 h-8 rounded-lg text-ink-500 hover:text-brand-600 hover:bg-brand-50 flex items-center justify-center transition-colors"
+                        title="إعادة تعيين كلمة المرور"
+                      >
+                        <KeyRound className="w-3.5 h-3.5" />
+                      </button>
+                      <button
                         onClick={() => setConfirmDel(c)}
                         className="w-8 h-8 rounded-lg text-ink-500 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition-colors"
                         title="حذف"
@@ -159,6 +179,15 @@ export function ClientsPage() {
       />
 
       <NewCredentialsModal cred={newCred} companyId={companyId} onClose={() => setNewCred(null)} />
+
+      <ConfirmDialog
+        open={!!confirmReset}
+        onClose={() => setConfirmReset(null)}
+        onConfirm={onReset}
+        title="إعادة تعيين كلمة المرور"
+        message={`سيتم إصدار كلمة مرور جديدة لـ ${confirmReset?.email} وتُعرض مرة واحدة فقط. كلمته الحالية تتوقف فوراً، ويُسجَّل خروجه من كل الأجهزة.`}
+        confirmLabel="أعد التعيين"
+      />
 
       <ConfirmDialog
         open={!!confirmDel}
@@ -256,7 +285,8 @@ function NewCredentialsModal({ cred, companyId, onClose }) {
       <div className="space-y-4">
         <div className="rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-[12.5px] text-amber-900">
           <KeyRound className="w-3.5 h-3.5 inline ml-1" />
-          <strong>تنبيه:</strong> كلمة المرور تظهر مرة واحدة فقط. عند فقدها يلزم إنشاء حساب جديد.
+          <strong>تنبيه:</strong> كلمة المرور تظهر مرة واحدة فقط — النظام يحفظ بصمتها لا نصّها.
+          عند فقدها استخدم «إعادة تعيين كلمة المرور» من قائمة العملاء.
         </div>
 
         <div>

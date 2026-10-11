@@ -673,6 +673,7 @@ app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'site', 'index.htm
 // stay stable and readable rather than carrying a .html suffix.
 app.get('/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'site', 'privacy.html')));
 app.get('/terms', (_req, res) => res.sendFile(path.join(__dirname, 'site', 'terms.html')));
+app.get('/contact', (_req, res) => res.sendFile(path.join(__dirname, 'site', 'contact.html')));
 
 // Health check that actually checks. 503 only on hard DB failure (so a
 // platform health-gate restarts us); soft issues (webhook backlog) are

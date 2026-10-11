@@ -440,6 +440,37 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
   color: var(--brand); padding: 1px 8px; border-radius: 4px;
   font-size: 14px; unicode-bidi: isolate; direction: rtl;
 }
+/* Contact page. Three channels side by side on a desktop, stacked on a
+   phone — the layout says "pick one" rather than burying the useful line in
+   a paragraph. */
+.contact-grid {
+  display: grid; gap: var(--s-4);
+  grid-template-columns: 1fr;
+  margin-bottom: var(--s-7);
+}
+@media (min-width: 640px) { .contact-grid { grid-template-columns: repeat(3, 1fr); } }
+.contact-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: var(--s-4) var(--s-4) calc(var(--s-4) + 2px);
+  background: var(--surface-2);
+}
+.contact-label {
+  font-size: 12.5px; letter-spacing: .03em; color: var(--ink-3);
+  margin-bottom: var(--s-2);
+}
+.contact-value { font-size: 15px; color: var(--ink-1); word-break: break-word; margin: 0; }
+.contact-value a { color: var(--brand); border-bottom: 1px solid var(--line-2); padding-bottom: 1px; }
+.contact-value a:hover { border-bottom-color: var(--brand); }
+.contact-h2 {
+  font-size: 19px; color: var(--ink-1);
+  padding-top: var(--s-5); border-top: 1px solid var(--line);
+  margin-bottom: var(--s-3);
+}
+.contact-entity { font-size: 15px; line-height: 2; color: var(--ink-2); }
+.contact-entity p { margin: 0; }
+.contact-entity strong { color: var(--ink-1); font-weight: 600; }
+
 .legal-foot {
   margin-top: var(--s-7); padding-top: var(--s-5);
   border-top: 1px solid var(--line); font-size: 15px;

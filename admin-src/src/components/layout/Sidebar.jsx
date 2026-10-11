@@ -1,5 +1,6 @@
 import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen, PhoneOutgoing, ShieldCheck, ClipboardList, Zap } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { MasarMark } from '../ui/MasarMark';
 
 // Two-tier nav: "Build" is where you author the assistant; "Monitor" is where
 // you watch it run. Mirrors the structure of larger voice-agent dashboards
@@ -63,13 +64,12 @@ export function Sidebar({ active, onChange, user, onLogout, workspaceMode = fals
       {/* ─── Brand ─── */}
       <div className="px-5 pt-6 pb-5 border-b border-white/[0.06] dot-grid">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-400 to-brand-700 flex items-center justify-center shadow-[0_2px_8px_rgba(91,91,214,0.45)]">
-            <svg viewBox="0 0 24 24" className="w-4.5 h-4.5 text-white" fill="currentColor">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 1 0 6 0V4a3 3 0 0 0-3-3Zm7 11v-2a1 1 0 1 0-2 0v2a5 5 0 0 1-10 0v-2a1 1 0 1 0-2 0v2a7 7 0 0 0 6 6.92V21H8a1 1 0 1 0 0 2h8a1 1 0 1 0 0-2h-3v-2.08A7 7 0 0 0 19 12Z" />
-            </svg>
-          </div>
+          {/* The mark carries the brand on its own — no tile behind it. On the
+              dark sidebar it is drawn in the lightest bronze tint, the only
+              one of the brand's derived shades that stays legible there. */}
+          <MasarMark className="h-7 shrink-0 text-[#C5A677]" title="مسار" />
           <div className="flex-1 min-w-0">
-            <div className="text-white text-[14px] font-semibold leading-tight">Smart Assistant</div>
+            <div className="text-white text-[14px] font-semibold leading-tight">مسار</div>
             <div className="text-ink-500 text-[11px] mt-0.5">لوحة التحكم</div>
           </div>
           <button onClick={onClose} aria-label="إغلاق القائمة" className="text-ink-500 hover:text-ink-300 w-7 h-7 rounded-md hover:bg-white/[0.06] flex items-center justify-center transition-colors">

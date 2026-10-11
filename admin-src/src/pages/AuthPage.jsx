@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Mail, Lock, User, ShieldCheck, AlertCircle, Sparkles } from 'lucide-react';
+import { Mail, Lock, User, AlertCircle, Sparkles } from 'lucide-react';
 import { Input, Label } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
+import { MasarMark } from '../components/ui/MasarMark';
 import { api } from '../lib/api';
 
 export function AuthPage({ onAuthed }) {
@@ -62,16 +63,14 @@ export function AuthPage({ onAuthed }) {
     <div className="min-h-screen bg-gradient-to-br from-ink-50 via-white to-brand-50/40 flex items-center justify-center p-6" dir="rtl">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-brand-400 to-brand-700 shadow-[0_8px_28px_rgba(91,91,214,0.35)] mb-4">
-            <ShieldCheck className="w-7 h-7 text-white" strokeWidth={2} />
-          </div>
+          <MasarMark className="h-9 mx-auto text-brand-600 mb-5" title="مسار" />
           <h1 className="text-[22px] font-bold text-ink-900 tracking-tight">
             {isSignup ? 'إعداد المنصّة' : 'تسجيل الدخول'}
           </h1>
           <p className="mt-1.5 text-[13px] text-ink-500">
             {isSignup
               ? 'أنشئ حساب المسؤول الرئيسي للمنصّة'
-              : 'أهلاً بعودتك إلى Smart Assistant'}
+              : 'أهلاً بعودتك إلى مسار'}
           </p>
           {isSignup && bootstrapOpen && (
             <div className="mt-4 inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-[11.5px] text-amber-800">

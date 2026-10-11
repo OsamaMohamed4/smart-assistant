@@ -38,7 +38,7 @@ const { startCampaignWorker, getWorkerHealth: getCampaignWorkerHealth } = requir
 const { startRetentionWorker } = require('./services/retention');
 const { dailyCap, checkAndBumpUsage } = require('./services/usage');
 const { audit } = require('./lib/audit');
-const { requireAuth, requireCompanyAccess, requireCompanyAdmin, canChatWithCompany, startSessionCleanup } = require('./lib/auth');
+const { requireAuth, requireCompanyAccess, requireCompanyAdmin, canChatWithCompany, startSessionCleanup, sessionFromCookie } = require('./lib/auth');
 const { logger } = require('./lib/logger');
 const { initMonitoring, captureError } = require('./lib/monitoring');
 const { startBackupScheduler, runBackup, getBackupStatus } = require('./lib/backup');
@@ -155,7 +155,29 @@ app.use(express.json({
   limit: '2mb',
   verify: (req, _res, buf) => { req.rawBody = buf; },
 }));
-app.use('/admin', express.static(path.join(__dirname, 'public', 'admin')));
+// The admin shell is not advertised and is not served to the public. Anyone
+// without a signed-in superadmin session gets 404 — not 401 — so the path
+// gives away nothing about whether it exists. /login is the front door, and
+// it forwards a superadmin here once they are actually signed in.
+//
+// Only the HTML is gated. /admin/assets/* stays open because the SAME bundle
+// is what /login and every client workspace at /c/<id> load; gating it would
+// take the client portal down with it. The assets are compiled JS and CSS and
+// carry no tenant data — every byte of that comes from the API, which does
+// its own authentication on every request.
+async function adminShellOnly(req, res, next) {
+  try {
+    const s = await sessionFromCookie(req);
+    if (s?.user?.role === 'superadmin') return next();
+  } catch (e) {
+    req.log?.warn?.('admin shell gate: session lookup failed', { err: e.message });
+  }
+  return res.status(404).send('Not found');
+}
+app.get(['/admin', '/admin/', '/admin/index.html'], adminShellOnly, (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin', 'index.html'));
+});
+app.use('/admin', express.static(path.join(__dirname, 'public', 'admin'), { index: false }));
 
 // Attach a per-request id + child logger. Echoed back as `X-Request-Id` so
 // clients can correlate. Honors an incoming X-Request-Id if the upstream
@@ -232,6 +254,13 @@ startSessionCleanup();
 
 // Customer page: SPA handles routing inside the same React build.
 app.get('/c/:companyId', async (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin', 'index.html'));
+});
+
+// The public front door, linked from the marketing site. Deliberately open:
+// it is a sign-in form and nothing more. Where the visitor goes afterwards is
+// decided from the session the server issues, never from the URL.
+app.get('/login', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin', 'index.html'));
 });
 

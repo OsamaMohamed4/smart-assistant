@@ -1547,7 +1547,18 @@ app.patch('/api/companies/:id/features/:key', requireCompanyAccess, async (req, 
   if (!c) return res.status(404).json({ error: 'not found' });
 
   const enabled = req.body?.enabled === true;
-  const r = await setFeature(c.id, req.params.key, enabled, req.body?.config ?? null);
+  // A request that does not mention config keeps the stored one. The toggle in
+  // the UI sends only `enabled`, and this used to write `config: null` on every
+  // flip — so switching a capability off and on again silently erased its
+  // settings, such as a company's own confirmation message.
+  let config = req.body?.config;
+  if (config === undefined) {
+    try {
+      const row = await sql.getCompanyFeature.get(c.id, req.params.key);
+      config = row?.config ? JSON.parse(row.config) : null;
+    } catch { config = null; }
+  }
+  const r = await setFeature(c.id, req.params.key, enabled, config ?? null);
   if (!r.ok) return res.status(r.code === 'UNKNOWN_FEATURE' ? 404 : 400).json(r);
 
   invalidateCache(c.id);
@@ -1563,6 +1574,76 @@ app.patch('/api/companies/:id/features/:key', requireCompanyAccess, async (req, 
     needsPublish: enabled,
     effectiveImmediately: !enabled,
   });
+});
+
+// ─── Customer requests ───────────────────────────────────────────
+// What the agent filed, for the sales team to work through. Visible to the
+// company's own client users as well as the superadmin: these are their
+// leads, not platform internals.
+const { REQUEST_TYPES, FIELDS: REQUEST_FIELDS, STATUSES: REQUEST_STATUSES } = require('./lib/request-types');
+
+app.get('/api/companies/:id/requests', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+
+  const rows = await sql.listCustomerRequests.all(c.id);
+  const status = String(req.query.status || '').trim();
+  const type   = String(req.query.type || '').trim();
+  const out = (rows || [])
+    .filter((r) => (!status || r.status === status) && (!type || r.request_type === type))
+    .map((r) => {
+      let fields = {};
+      try { fields = r.fields ? JSON.parse(r.fields) : {}; } catch {}
+      return {
+        id            : r.id,
+        conversationId: r.conversation_id,
+        type          : r.request_type,
+        typeLabel     : REQUEST_TYPES[r.request_type]?.labelAr || r.request_type,
+        status        : r.status,
+        statusLabel   : REQUEST_STATUSES[r.status] || r.status,
+        customerName  : r.customer_name,
+        // From the call, never from the model. Null until the call's record
+        // lands for an inbound call, and always null for a browser test.
+        customerPhone : decryptField(r.caller_number) || null,
+        // Labelled in the client's own words, in the order their sheet lists.
+        fields: (REQUEST_TYPES[r.request_type]?.fields || Object.keys(fields))
+          .filter((k) => fields[k])
+          .map((k) => ({ key: k, label: REQUEST_FIELDS[k]?.labelAr || k, value: fields[k] })),
+        staffNotes: r.staff_notes || '',
+        createdAt : r.created_at,
+        updatedAt : r.updated_at,
+      };
+    });
+
+  res.json({
+    requests: out,
+    statuses: REQUEST_STATUSES,
+    types: Object.fromEntries(Object.entries(REQUEST_TYPES).map(([k, v]) => [k, v.labelAr])),
+  });
+});
+
+app.patch('/api/companies/:id/requests/:requestId', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+
+  const id = Number(req.params.requestId);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid id' });
+  // Scoped by company in the query itself: an id from another tenant answers
+  // 404, exactly like an id that does not exist.
+  const row = await sql.getCustomerRequest.get(id, c.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+
+  const status = req.body?.status !== undefined ? String(req.body.status) : row.status;
+  if (!REQUEST_STATUSES[status]) {
+    return res.status(400).json({ error: 'حالة غير معروفة', allowed: Object.keys(REQUEST_STATUSES) });
+  }
+  const notes = req.body?.staffNotes !== undefined
+    ? String(req.body.staffNotes).slice(0, 2000)
+    : (row.staff_notes || '');
+
+  await sql.updateCustomerRequestStatus.run({ id, company_id: c.id, status, staff_notes: notes });
+  audit(req, 'request.update', `companies/${c.id}/requests/${id}`, { status });
+  res.json({ ok: true, id, status, statusLabel: REQUEST_STATUSES[status] });
 });
 
 // Render a DRAFT profile without saving it, so the editor can show a live

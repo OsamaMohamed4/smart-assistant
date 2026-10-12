@@ -237,8 +237,22 @@ export const api = {
 
   // Capabilities: what this company's agent is allowed to do.
   listFeatures      : (companyId) => request(`/api/companies/${companyId}/features`),
-  setFeature        : (companyId, key, enabled) =>
+  // `config` is optional; omitted, the server keeps whatever is stored.
+  setFeature        : (companyId, key, enabled, config) =>
     request(`/api/companies/${companyId}/features/${key}`, {
-      method: 'PATCH', body: JSON.stringify({ enabled }),
+      method: 'PATCH',
+      body: JSON.stringify(config === undefined ? { enabled } : { enabled, config }),
+    }),
+  // Requests the agent filed, for the sales team to follow up.
+  listRequests      : (companyId, { status, type } = {}) => {
+    const q = new URLSearchParams();
+    if (status) q.set('status', status);
+    if (type) q.set('type', type);
+    const qs = q.toString();
+    return request(`/api/companies/${companyId}/requests${qs ? `?${qs}` : ''}`);
+  },
+  updateRequest     : (companyId, requestId, body) =>
+    request(`/api/companies/${companyId}/requests/${requestId}`, {
+      method: 'PATCH', body: JSON.stringify(body),
     }),
 };

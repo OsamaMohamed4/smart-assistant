@@ -664,6 +664,28 @@ runMigration(37, 'adopt_existing_kb_tools', `
    WHERE elevenlabs_kb_tool_id IS NOT NULL AND elevenlabs_kb_tool_id <> '';
 `);
 
+// Migration 38: requests an agent files during a call. Mirrors the Postgres
+// DDL — see db-pg-schema.js for why the customer's number lives on the call
+// rather than here, and why the triple is unique.
+runMigration(38, 'create_customer_requests', `
+  CREATE TABLE IF NOT EXISTS customer_requests (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id      TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    conversation_id TEXT,
+    request_type    TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'new',
+    customer_name   TEXT,
+    fields          TEXT,
+    staff_notes     TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_requests_conversation
+    ON customer_requests(company_id, conversation_id, request_type);
+  CREATE INDEX IF NOT EXISTS idx_customer_requests_company
+    ON customer_requests(company_id, created_at);
+`);
+
 // ─── Tenant-safety: one company per phone number ──────────────────
 // A DID and an imported provider number each identify exactly ONE tenant.
 // Inbound calls are attributed by those values (services/voice resolves a call
@@ -877,6 +899,42 @@ const sql = {
   deleteCompanyTool  : db.prepare(
     'DELETE FROM company_tools WHERE company_id = @company_id AND feature_key = @feature_key'
   ),
+
+  // ─── Customer requests ──────────────────────────────────────────
+  // Every statement here is scoped by company_id in its WHERE clause, the
+  // join included: a request must never surface another tenant's call, even
+  // if a conversation id were ever shared or guessed.
+  getCustomerRequestByConversation: db.prepare(`
+    SELECT id, fields FROM customer_requests
+     WHERE company_id = ? AND conversation_id = ? AND request_type = ?
+  `),
+  insertCustomerRequest: db.prepare(`
+    INSERT INTO customer_requests (company_id, conversation_id, request_type, customer_name, fields)
+    VALUES (@company_id, @conversation_id, @request_type, @customer_name, @fields)
+  `),
+  updateCustomerRequestFields: db.prepare(`
+    UPDATE customer_requests
+       SET customer_name = @customer_name, fields = @fields, updated_at = datetime('now')
+     WHERE id = @id AND company_id = @company_id
+  `),
+  listCustomerRequests: db.prepare(`
+    SELECT r.id, r.conversation_id, r.request_type, r.status, r.customer_name,
+           r.fields, r.staff_notes, r.created_at, r.updated_at,
+           c.caller_number
+      FROM customer_requests r
+      LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
+     WHERE r.company_id = ?
+     ORDER BY r.created_at DESC, r.id DESC
+     LIMIT 500
+  `),
+  getCustomerRequest: db.prepare(
+    'SELECT id, status, staff_notes FROM customer_requests WHERE id = ? AND company_id = ?'
+  ),
+  updateCustomerRequestStatus: db.prepare(`
+    UPDATE customer_requests
+       SET status = @status, staff_notes = @staff_notes, updated_at = datetime('now')
+     WHERE id = @id AND company_id = @company_id
+  `),
 
   // ─── Publish pipeline ───────────────────────────────────────────
   // A run is opened BEFORE any provider call so a process that dies mid-publish

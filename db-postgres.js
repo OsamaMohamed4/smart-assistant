@@ -267,6 +267,46 @@ const sql = {
     ['company_id', 'feature_key'],
   ),
 
+  // ─── Customer requests ──────────────────────────────────────────
+  // Every statement is scoped by company_id, the join included: a request must
+  // never surface another tenant's call, even if a conversation id were ever
+  // shared or guessed. RLS polices the table as well; this is the first line.
+  getCustomerRequestByConversation: stmt(
+    `SELECT id, fields FROM customer_requests
+      WHERE company_id = $1 AND conversation_id = $2 AND request_type = $3`,
+  ),
+  insertCustomerRequest: stmt(
+    `INSERT INTO customer_requests (company_id, conversation_id, request_type, customer_name, fields)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id`,
+    ['company_id', 'conversation_id', 'request_type', 'customer_name', 'fields'],
+  ),
+  updateCustomerRequestFields: stmt(
+    `UPDATE customer_requests
+        SET customer_name = $1, fields = $2, updated_at = ${NOW}
+      WHERE id = $3 AND company_id = $4`,
+    ['customer_name', 'fields', 'id', 'company_id'],
+  ),
+  listCustomerRequests: stmt(
+    `SELECT r.id, r.conversation_id, r.request_type, r.status, r.customer_name,
+            r.fields, r.staff_notes, r.created_at, r.updated_at,
+            c.caller_number
+       FROM customer_requests r
+       LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
+      WHERE r.company_id = $1
+      ORDER BY r.created_at DESC, r.id DESC
+      LIMIT 500`,
+  ),
+  getCustomerRequest: stmt(
+    `SELECT id, status, staff_notes FROM customer_requests WHERE id = $1 AND company_id = $2`,
+  ),
+  updateCustomerRequestStatus: stmt(
+    `UPDATE customer_requests
+        SET status = $1, staff_notes = $2, updated_at = ${NOW}
+      WHERE id = $3 AND company_id = $4`,
+    ['status', 'staff_notes', 'id', 'company_id'],
+  ),
+
   // ─── Publish pipeline ───────────────────────────────────────────
   // A run is opened BEFORE any provider call so a process that dies mid-publish
   // still leaves evidence of what was attempted. RETURNING id because pg has no

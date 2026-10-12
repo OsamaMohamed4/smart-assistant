@@ -16,6 +16,7 @@ import { ClientsPage } from './pages/ClientsPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { CampaignsPage } from './pages/CampaignsPage';
 import { AuditPage } from './pages/AuditPage';
+import { RequestsPage } from './pages/RequestsPage';
 import { ToastProvider } from './components/ui/Toast';
 import { api, setUnauthenticatedHandler } from './lib/api';
 
@@ -148,11 +149,12 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
   // needs to edit their own company details and republish their agent.
   // 'profile' (company facts) is visible everywhere the knowledge base is: it
   // is the company's own content, and a workspace owner edits their own.
+  // 'requests' is open to clients too: the leads are theirs to work.
   const allowedTabs = isWorkspace
-    ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'sessions', 'campaigns'])
+    ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'sessions', 'requests', 'campaigns'])
     : isSuper
-      ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'clients', 'sessions', 'campaigns', 'audit'])
-      : new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'sessions', 'campaigns']);
+      ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'clients', 'sessions', 'requests', 'campaigns', 'audit'])
+      : new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'sessions', 'requests', 'campaigns']);
   const activeTab = allowedTabs.has(tab) ? tab : 'dashboard';
 
   return (
@@ -188,6 +190,7 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         )}
         {activeTab === 'clients'   && isSuper && !isWorkspace && <ClientsPage />}
         {activeTab === 'sessions'  && <SessionsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
+        {activeTab === 'requests'  && <RequestsPage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'campaigns' && <CampaignsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'audit'     && isSuper && !isWorkspace && <AuditPage />}
         </main>

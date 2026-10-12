@@ -529,13 +529,23 @@ function buildAgentConfig({
   toolIds = [], transferNumber = null,
   maxDurationSeconds = 600, idleTimeoutSeconds = 15, silenceTimeoutSeconds = 30,
 }) {
-  // System tools are declared inline; the knowledge-base tool is a workspace
-  // tool referenced by id (that is the only form the tools API supports).
-  const tools = [
-    { type: 'system', name: 'end_call', description: '', params: { system_tool_type: 'end_call' } },
-  ];
+  // System tools go in `built_in_tools`, keyed by name. NOT the `tools` array,
+  // which this used to send: the provider refuses a payload carrying both that
+  // array and `tool_ids` —
+  //
+  //   400 both_tools_and_tool_ids_provided
+  //   "Cannot specify both tools and tool IDs - please provide only one"
+  //
+  // and `tool_ids` is the only way to attach a workspace tool. So every
+  // company with a knowledge-base document failed to publish outright, which
+  // is why no agent in the workspace had ever had a tool attached. The two
+  // shapes were measured side by side against the live API (2026-10-12):
+  // tools+tool_ids 400, built_in_tools+tool_ids 200 with both present.
+  const builtInTools = {
+    end_call: { type: 'system', name: 'end_call', description: '', params: { system_tool_type: 'end_call' } },
+  };
   if (transferNumber) {
-    tools.push({
+    builtInTools.transfer_to_number = {
       type: 'system',
       name: 'transfer_to_number',
       description: 'تحويل المكالمة إلى موظف بشري عند الحاجة.',
@@ -546,7 +556,7 @@ function buildAgentConfig({
           condition: 'عندما يطلب العميل التحدث مع موظف بشري أو عندما لا تستطيع مساعدته.',
         }],
       },
-    });
+    };
   }
 
   return {
@@ -565,7 +575,7 @@ function buildAgentConfig({
           temperature,
           max_tokens : maxTokens,
           timezone   : AGENT_TIMEZONE,
-          tools,
+          built_in_tools: builtInTools,
           ...(toolIds.length ? { tool_ids: toolIds } : {}),
         },
       },
@@ -801,15 +811,13 @@ async function upsertAgentTolerant(cfg, existingId, log) {
   try {
     return await upsertAgent(cfg, existingId, log);
   } catch (e) {
-    const hasTransfer = (cfg.conversation_config?.agent?.prompt?.tools || [])
-      .some((t) => t?.name === 'transfer_to_number');
+    const hasTransfer = !!cfg.conversation_config?.agent?.prompt?.built_in_tools?.transfer_to_number;
     if (!hasTransfer || e?.response?.status !== 422) throw e;
     log?.error?.('voice: agent rejected the transfer_to_number tool — syncing WITHOUT human transfer', {
       err: errText(e),
     });
     const stripped = JSON.parse(JSON.stringify(cfg));
-    stripped.conversation_config.agent.prompt.tools =
-      stripped.conversation_config.agent.prompt.tools.filter((t) => t?.name !== 'transfer_to_number');
+    delete stripped.conversation_config.agent.prompt.built_in_tools.transfer_to_number;
     return upsertAgent(stripped, existingId, log);
   }
 }

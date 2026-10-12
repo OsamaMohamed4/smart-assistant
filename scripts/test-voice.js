@@ -571,16 +571,44 @@ test('the fields that survive a publish are still NOT sent', () => {
 });
 
 test('the end_call tool is always attached', () => {
-  const tools = cfgFor().conversation_config.agent.prompt.tools;
-  assert.ok(tools.some((t) => t.params?.system_tool_type === 'end_call'));
+  const bt = cfgFor().conversation_config.agent.prompt.built_in_tools;
+  assert.equal(bt.end_call?.params?.system_tool_type, 'end_call');
 });
 
 test('human transfer is added only when a number is configured', () => {
-  assert.equal(cfgFor().conversation_config.agent.prompt.tools.length, 1);
-  const withTransfer = cfgFor({ transferNumber: '+966500000009' }).conversation_config.agent.prompt.tools;
-  const t = withTransfer.find((x) => x.params?.system_tool_type === 'transfer_to_number');
+  assert.equal(cfgFor().conversation_config.agent.prompt.built_in_tools.transfer_to_number, undefined);
+  const t = cfgFor({ transferNumber: '+966500000009' })
+    .conversation_config.agent.prompt.built_in_tools.transfer_to_number;
   assert.ok(t, 'transfer tool present');
   assert.equal(t.params.transfers[0].transfer_destination.phone_number, '+966500000009');
+});
+
+test('system tools NEVER travel in the `tools` array alongside tool_ids', () => {
+  // THE BUG THIS GUARDS, measured on the live API (2026-10-12): a payload
+  // carrying both prompt.tools and prompt.tool_ids is rejected outright —
+  //
+  //   400 both_tools_and_tool_ids_provided
+  //   "Cannot specify both tools and tool IDs - please provide only one"
+  //
+  // tool_ids is the ONLY way to attach a workspace tool, so every company with
+  // a knowledge-base document failed to publish. Not degraded: the publish
+  // step is required, the error is a 400 rather than the 422 the tolerant
+  // retry handles, so the whole thing aborted. It is also why no agent in the
+  // workspace had ever had a single tool attached.
+  //
+  // built_in_tools + tool_ids is accepted and attaches both. Keeping the old
+  // array out is the entire fix, so the array's absence is what gets asserted.
+  const withTool = cfgFor({ toolIds: ['tool_abc'] }).conversation_config.agent.prompt;
+  assert.ok(!('tools' in withTool),
+    'sending the legacy tools array next to tool_ids is a hard 400 from the provider');
+  assert.deepEqual(withTool.tool_ids, ['tool_abc']);
+  assert.ok(withTool.built_in_tools.end_call, 'system tools still reach the agent');
+
+  // And with no workspace tool, tool_ids is omitted entirely rather than sent
+  // empty — an empty array would detach anything an operator attached by hand.
+  const noTool = cfgFor().conversation_config.agent.prompt;
+  assert.ok(!('tools' in noTool));
+  assert.ok(!('tool_ids' in noTool));
 });
 
 test('language is sent as a bare ISO code, not the stored ar-SA locale', () => {

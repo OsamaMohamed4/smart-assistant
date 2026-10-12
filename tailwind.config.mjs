@@ -3,10 +3,12 @@ export default {
   content: ['./admin-src/index.html', './admin-src/src/**/*.{js,jsx}'],
   theme: {
     extend: {
+      // Same families the public site loads, so the marketing page and the
+      // dashboard are visibly one product rather than two that share a logo.
       fontFamily: {
-        sans   : ['Inter', 'Cairo', 'system-ui', '-apple-system', 'sans-serif'],
-        arabic : ['Cairo', 'Inter', 'system-ui', 'sans-serif'],
-        mono   : ['JetBrains Mono', 'ui-monospace', 'monospace'],
+        sans   : ['IBM Plex Sans Arabic', 'IBM Plex Sans', 'system-ui', '-apple-system', 'sans-serif'],
+        arabic : ['IBM Plex Sans Arabic', 'system-ui', 'sans-serif'],
+        mono   : ['IBM Plex Mono', 'ui-monospace', 'monospace'],
       },
       colors: {
         // Premium palette — Linear-inspired
@@ -23,17 +25,23 @@ export default {
           900 : '#1c1d21',
           950 : '#0e0f12',
         },
+        // MASAR. #765C36 is the ONE official colour — every other step is a
+        // derived tint, and 100/200/300/500/700 are the exact values the
+        // public site already uses so the two never drift apart.
+        //
+        // 300 (#C5A677) is the only bronze that stays legible on a dark
+        // ground, which is why the sidebar is tinted with it.
         brand: {
-          50  : '#eef0ff',
-          100 : '#e0e3ff',
-          200 : '#c6caff',
-          300 : '#a3a9ff',
-          400 : '#8085ff',
-          500 : '#5b5bd6',                            // primary
-          600 : '#4b48be',
-          700 : '#3d3a9c',
-          800 : '#2e2c75',
-          900 : '#1f1d50',
+          50  : '#FAF6F0',
+          100 : '#F1E8DA',
+          200 : '#DECCAF',
+          300 : '#C5A677',
+          400 : '#AE8C5C',
+          500 : '#9B7946',
+          600 : '#765C36',                            // official
+          700 : '#5B4729',
+          800 : '#43351E',
+          900 : '#2B2213',
         },
         accent: {
           violet  : '#8b5cf6',
@@ -48,7 +56,7 @@ export default {
         'card'    : '0 1px 2px rgba(16,18,27,0.04), 0 4px 12px rgba(16,18,27,0.04)',
         'pop'     : '0 4px 6px rgba(16,18,27,0.04), 0 20px 25px -5px rgba(16,18,27,0.10)',
         'inner-1' : 'inset 0 1px 0 rgba(255,255,255,0.04)',
-        'glow'    : '0 0 0 4px rgba(91,91,214,0.12)',
+        'glow'    : '0 0 0 4px rgba(118,92,54,0.14)',
       },
       borderRadius: {
         'xl'   : '14px',

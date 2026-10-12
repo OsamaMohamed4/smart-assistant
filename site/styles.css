@@ -455,6 +455,13 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
   padding: var(--s-4) var(--s-4) calc(var(--s-4) + 2px);
   background: var(--surface-2);
 }
+.contact-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; border-radius: 10px;
+  background: var(--b-100); color: var(--brand);
+  margin-bottom: var(--s-3);
+}
+.contact-icon svg { width: 19px; height: 19px; }
 .contact-label {
   font-size: 12.5px; letter-spacing: .03em; color: var(--ink-3);
   margin-bottom: var(--s-2);

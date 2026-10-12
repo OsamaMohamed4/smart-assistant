@@ -17,6 +17,7 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [busy, setBusy]         = useState(false);
   const [error, setError]       = useState('');
+  const [forgot, setForgot]     = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -70,7 +71,16 @@ export function LoginPage() {
             </div>
 
             <div>
-              <Label>كلمة المرور</Label>
+              <div className="flex items-center justify-between">
+                <Label>كلمة المرور</Label>
+                <button
+                  type="button"
+                  onClick={() => setForgot((v) => !v)}
+                  className="text-[11.5px] text-brand-600 hover:text-brand-700 mb-1.5"
+                >
+                  نسيت كلمة المرور؟
+                </button>
+              </div>
               <Input
                 type="password"
                 value={password}
@@ -81,6 +91,18 @@ export function LoginPage() {
                 autoComplete="current-password"
                 dir="ltr"
               />
+              {/* Says what actually happens instead of offering a "send reset
+                  link" button that would do nothing: the platform has no mail
+                  transport, so a reset is issued by an operator from the
+                  Clients screen and handed over directly. A dead button that
+                  claims an email is on its way is worse than the truth. */}
+              {forgot && (
+                <div className="mt-2.5 rounded-xl bg-brand-50 border border-brand-200 px-3.5 py-2.5 text-[12px] text-ink-700 leading-relaxed">
+                  إعادة التعيين تتم عبر مسؤول النظام — يصدر لك كلمة مرور جديدة
+                  ويسلّمها لك مباشرة.{' '}
+                  <a href="/contact" className="text-brand-700 underline">تواصل معنا</a>
+                </div>
+              )}
             </div>
 
             {error && (

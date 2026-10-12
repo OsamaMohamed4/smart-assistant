@@ -380,7 +380,7 @@ function ScenarioCreatePage({ companyId, onBack, onGenerating, onCreated }) {
 
       <div className="px-8 py-7 max-w-6xl mx-auto">
         <div className="text-center mb-7">
-          <div className="inline-flex w-14 h-14 rounded-2xl bg-gradient-to-br from-brand-400 to-accent-violet items-center justify-center shadow-pop mb-4">
+          <div className="inline-flex w-14 h-14 rounded-2xl bg-gradient-to-br from-brand-400 to-brand-700 items-center justify-center shadow-pop mb-4">
             <Sparkles className="w-6 h-6 text-white" strokeWidth={2} />
           </div>
           <h1 className="text-[24px] font-bold text-ink-900 tracking-tight">أي وكيل صوتي تريد بناءه؟</h1>
@@ -583,7 +583,7 @@ function ScenarioGeneratingPage({ companyId, description, language, onDone, onEr
     <div className="min-h-[calc(100vh-1px)] flex items-center justify-center p-8 bg-gradient-to-br from-ink-50 via-white to-brand-50/30">
       <div className="w-full max-w-xl">
         <div className="text-center mb-8">
-          <div className="inline-flex w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-400 to-accent-violet items-center justify-center shadow-pop mb-5 animate-pulse">
+          <div className="inline-flex w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-400 to-brand-700 items-center justify-center shadow-pop mb-5 animate-pulse">
             <Sparkles className="w-7 h-7 text-white" strokeWidth={2} />
           </div>
           <h1 className="text-[26px] font-bold text-ink-900 tracking-tight">جارٍ توليد السيناريو</h1>
@@ -634,7 +634,7 @@ function ScenarioGeneratingPage({ companyId, description, language, onDone, onEr
         {/* progress bar */}
         <div className="h-1.5 bg-ink-100 rounded-full overflow-hidden">
           <div
-            className="h-full bg-gradient-to-r from-brand-400 to-accent-violet transition-all duration-500 ease-out"
+            className="h-full bg-gradient-to-r from-brand-400 to-brand-700 transition-all duration-500 ease-out"
             style={{ width: `${progress}%` }}
           />
         </div>

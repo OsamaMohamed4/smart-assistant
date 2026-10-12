@@ -46,8 +46,8 @@ export function fmtNumber(n) {
 
 // ─── Avatar gradient from string (consistent hash) ───────────
 const GRADIENTS = [
-  ['#5b5bd6', '#8b5cf6'],
-  ['#0ea5e9', '#5b5bd6'],
+  ['#765C36', '#8b5cf6'],
+  ['#0ea5e9', '#765C36'],
   ['#10b981', '#0ea5e9'],
   ['#f59e0b', '#f43f5e'],
   ['#8b5cf6', '#ec4899'],

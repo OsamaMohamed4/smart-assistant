@@ -337,7 +337,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
                   <div className="flex items-center gap-3">
                     <div className={cn(
                       'w-9 h-9 rounded-xl flex items-center justify-center shrink-0',
-                      active ? 'bg-gradient-to-br from-brand-400 to-accent-violet text-white' : 'bg-ink-100 text-ink-600',
+                      active ? 'bg-gradient-to-br from-brand-400 to-brand-700 text-white' : 'bg-ink-100 text-ink-600',
                     )}>
                       <span className="text-[14px] font-bold">{v.label?.[0] || v.name?.[0]}</span>
                     </div>
@@ -388,7 +388,7 @@ function VoiceModePanel({ phone, setPhone, phoneOk, missingRequired, calling, on
   return (
     <div className="flex-1 flex items-center justify-center p-8">
       <div className="w-full max-w-md text-center">
-        <div className="inline-flex w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-400 to-accent-violet items-center justify-center shadow-pop mb-5">
+        <div className="inline-flex w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-400 to-brand-700 items-center justify-center shadow-pop mb-5">
           <Phone className="w-7 h-7 text-white" strokeWidth={2} />
         </div>
         <h2 className="text-[22px] font-bold text-ink-900 tracking-tight">جرّب الوكيل على جوّالك</h2>
@@ -430,7 +430,7 @@ function VoiceModePanel({ phone, setPhone, phoneOk, missingRequired, calling, on
           className={cn(
             'mt-7 w-full h-14 rounded-2xl flex items-center justify-center gap-2.5 font-semibold text-[15px] shadow-pop transition-all',
             canCall
-              ? 'bg-gradient-to-br from-brand-500 to-accent-violet text-white hover:-translate-y-0.5'
+              ? 'bg-gradient-to-br from-brand-500 to-brand-700 text-white hover:-translate-y-0.5'
               : 'bg-ink-200 text-ink-400 cursor-not-allowed',
           )}>
           {calling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Phone className="w-4 h-4" />}

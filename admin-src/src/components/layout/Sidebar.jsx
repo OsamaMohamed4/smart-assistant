@@ -128,7 +128,7 @@ export function Sidebar({ active, onChange, user, onLogout, workspaceMode = fals
         {user && (
           <div>
             <div className="flex items-center gap-3 px-3 py-2">
-              <div className="w-7 h-7 rounded-full bg-gradient-to-br from-brand-400 to-accent-violet text-white text-[12px] font-bold flex items-center justify-center shrink-0">
+              <div className="w-7 h-7 rounded-full bg-gradient-to-br from-brand-400 to-brand-700 text-white text-[12px] font-bold flex items-center justify-center shrink-0">
                 {initials(user.name || user.email)}
               </div>
               <div className="flex-1 min-w-0">

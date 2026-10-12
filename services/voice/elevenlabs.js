@@ -636,6 +636,31 @@ function buildAgentConfig({
 
 // ─── Workspace tools ──────────────────────────────────────────────
 /**
+ * The two body fields the PROVIDER fills on every tool call, bound to its own
+ * system variables so the model can neither see nor set them.
+ *
+ * `dynamic_variable` and nothing else. This used to send
+ * { description: 'internal', constant_value: '{{system__agent_id}}' }, which
+ * the provider now rejects outright when the tool is created —
+ *
+ *   422 "Can only set one of: description, dynamic_variable,
+ *        is_system_provided, constant_value, or is_omitted"
+ *
+ * — so no webhook tool, the knowledge-base one included, could be registered
+ * at all. Measured against the live API (2026-10-12): the old pair 422,
+ * constant_value alone 200, dynamic_variable alone 200. dynamic_variable is
+ * chosen because it is an explicit binding to the variable, where a
+ * constant_value holding "{{...}}" is a literal string whose substitution is
+ * the provider's to decide.
+ */
+function providerFilledIds() {
+  return {
+    agent_id       : { type: 'string', dynamic_variable: 'system__agent_id' },
+    conversation_id: { type: 'string', dynamic_variable: 'system__conversation_id' },
+  };
+}
+
+/**
  * Build a webhook tool from a registry feature declaration.
  *
  * Generic so a capability is added by declaring it, not by writing another
@@ -667,16 +692,7 @@ function buildFeatureToolConfig({ feature, companyId, publicBaseUrl }) {
           ...(feature.bodyProperties || {}),
           // Filled by the provider, not the model. The handler checks agent_id
           // maps to the same company as the header — defence in depth.
-          agent_id: {
-            type: 'string',
-            description: 'internal',
-            constant_value: '{{system__agent_id}}',
-          },
-          conversation_id: {
-            type: 'string',
-            description: 'internal',
-            constant_value: '{{system__conversation_id}}',
-          },
+          ...providerFilledIds(),
         },
         required: feature.bodyRequired || [],
       },
@@ -708,16 +724,7 @@ function buildKbToolConfig({ companyId, publicBaseUrl }) {
           query: { type: 'string', description: 'نص السؤال أو الكلمات المفتاحية للبحث' },
           // Filled by the provider, not the model. The handler checks it maps
           // to the same company as the header — defence in depth.
-          agent_id: {
-            type: 'string',
-            description: 'internal',
-            constant_value: '{{system__agent_id}}',
-          },
-          conversation_id: {
-            type: 'string',
-            description: 'internal',
-            constant_value: '{{system__conversation_id}}',
-          },
+          ...providerFilledIds(),
         },
         required: ['query'],
       },

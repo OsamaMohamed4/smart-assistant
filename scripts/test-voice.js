@@ -628,9 +628,38 @@ test('the KB tool lets the model supply ONLY the query', () => {
   const tool = el.buildKbToolConfig({ companyId: 'co-a', publicBaseUrl: 'https://example.test' });
   const props = tool.api_schema.request_body_schema.properties;
   assert.deepEqual(tool.api_schema.request_body_schema.required, ['query']);
-  assert.equal(props.agent_id.constant_value, '{{system__agent_id}}', 'agent id is filled by the provider');
-  assert.equal(props.conversation_id.constant_value, '{{system__conversation_id}}');
+  assert.equal(props.agent_id.dynamic_variable, 'system__agent_id', 'agent id is filled by the provider');
+  assert.equal(props.conversation_id.dynamic_variable, 'system__conversation_id');
   assert.equal(tool.api_schema.url, 'https://example.test/webhook/elevenlabs/tools/kb');
+});
+
+test('every provider-filled field sets exactly ONE value source', () => {
+  // THE BUG THIS GUARDS, measured on the live API (2026-10-12): a body field
+  // carrying more than one of description / dynamic_variable /
+  // is_system_provided / constant_value / is_omitted is rejected when the tool
+  // is created —
+  //
+  //   422 "Can only set one of: description, dynamic_variable,
+  //        is_system_provided, constant_value, or is_omitted"
+  //
+  // The builders sent description + constant_value on agent_id and
+  // conversation_id, so no webhook tool could be registered at all — the
+  // knowledge-base tool included. Checked across every tool we build, since
+  // they all share the same provider-filled fields.
+  const SOURCES = ['description', 'dynamic_variable', 'is_system_provided', 'constant_value', 'is_omitted'];
+  const { FEATURES } = require('../services/features/registry');
+  const tools = [
+    el.buildKbToolConfig({ companyId: 'co-a', publicBaseUrl: 'https://example.test' }),
+    ...FEATURES.filter((f) => f.kind === 'webhook' && f.endpoint)
+      .map((feature) => el.buildFeatureToolConfig({ feature, companyId: 'co-a', publicBaseUrl: 'https://example.test' })),
+  ];
+  assert.ok(tools.length >= 2, 'at least the KB and request tools are built');
+  for (const tool of tools) {
+    for (const [name, prop] of Object.entries(tool.api_schema.request_body_schema.properties)) {
+      const set = SOURCES.filter((k) => prop[k] !== undefined);
+      assert.equal(set.length, 1, `${tool.name}.${name} sets ${JSON.stringify(set)} — the provider allows exactly one`);
+    }
+  }
 });
 
 test('the KB tool carries a company token the model can neither read nor forge', () => {

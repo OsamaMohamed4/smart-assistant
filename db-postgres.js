@@ -745,6 +745,23 @@ const sql = {
       GROUP BY 1, 2`,
     ['from', 'to', 'company_id'],
   ),
+  // See db-sqlite.js. Cast so the driver hands back numbers: a bare SUM over
+  // BIGINT is NUMERIC, which node-postgres returns as a string.
+  usageByCompanyInRange: stmt(
+    `SELECT company_id,
+            SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 0 ELSE 1 END)::int AS inbound_calls,
+            SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 0 ELSE COALESCE(duration_sec, 0) END)::int AS inbound_sec,
+            SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 0 ELSE COALESCE(cost_credits, 0) END)::float8 AS inbound_credits,
+            SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 1 ELSE 0 END)::int AS outbound_calls,
+            SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN COALESCE(duration_sec, 0) ELSE 0 END)::int AS outbound_sec,
+            SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN COALESCE(cost_credits, 0) ELSE 0 END)::float8 AS outbound_credits
+       FROM calls
+      WHERE created_at >= $1 AND created_at < $2
+        AND company_id IS NOT NULL
+        AND ($3::text IS NULL OR company_id = $3)
+      GROUP BY company_id`,
+    ['from', 'to', 'company_id'],
+  ),
   chatsPerHourInRange: stmt(
     `SELECT substr(created_at, 12, 2) AS hour, COUNT(*)::int AS n
        FROM chats

@@ -29,8 +29,9 @@ import { cn, relTime } from '../lib/utils';
 // What you test here is what callers get on the phone for real.
 const GLOBAL_VARS = new Set(['agent_name', 'date', 'time']);
 
-export function PlaygroundPage({ pinnedCompanyId }) {
+export function PlaygroundPage({ user, pinnedCompanyId }) {
   const { push } = useToast();
+  const isSuper = user?.role === 'superadmin';
   const [companies, setCompanies] = useState([]);
   const [companyId, setCompanyId] = useState(pinnedCompanyId || null);
   const [voices, setVoices]       = useState([]);
@@ -55,10 +56,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
 
   // ─── Bootstrap ──────────────────────────────────────────
   useEffect(() => {
-    api.listVoices().then((v) => {
-      setVoices(v);
-      if (v[0]) setVoiceId(v[0].id);
-    }).catch((e) => push(e.message, 'error'));
+    api.listVoices().then(setVoices).catch((e) => push(e.message, 'error'));
 
     api.listCompanies().then((cs) => {
       const scoped = pinnedCompanyId ? cs.filter((c) => c.id === pinnedCompanyId) : cs;
@@ -93,6 +91,12 @@ export function PlaygroundPage({ pinnedCompanyId }) {
   }, [messages, chatBusy]);
 
   const activeCompany = companies.find((c) => c.id === companyId);
+  // The voice the company's published agent speaks with. The list opens on it,
+  // so an untouched test call is the production call; picking the other voice
+  // tries it on that one call only.
+  const companyVoiceId = activeCompany?.settings?.voiceId
+    || voices.find((v) => v.isDefault)?.id || voices[0]?.id || null;
+  useEffect(() => { setVoiceId(companyVoiceId); }, [companyVoiceId]);
   const selectedVoice = useMemo(
     () => voices.find((v) => v.id === voiceId) || null,
     [voices, voiceId],
@@ -123,6 +127,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
       await api.outboundCall(companyId, {
         phoneNumber   : phone.trim(),
         variableValues: runtimeVars,
+        voiceId,
       });
       push(`جارٍ الاتصال بـ ${phone.trim()}`, 'success');
     } catch (e) {
@@ -321,7 +326,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
             <span className="text-[12px] font-semibold text-ink-900 uppercase tracking-wider">صوت الـ Agent</span>
           </div>
           <p className="text-[11px] text-ink-500 mb-3 leading-relaxed">
-            اسم الصوت الذي تختاره يُستخدم كاسم الوكيل في المحادثة.
+            مكالمة التجربة تتكلم بالصوت الذي تختاره، واسمه يُستخدم كاسم الوكيل. صوت الشركة نفسه يتغيّر من «إعدادات الصوت والموديل» ثم النشر.
           </p>
           <div className="space-y-2">
             {voices.map((v) => {
@@ -343,7 +348,12 @@ export function PlaygroundPage({ pinnedCompanyId }) {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-[13.5px] font-semibold text-ink-900 truncate">{v.label || v.name}</span>
+                        <span className="text-[13.5px] font-semibold text-ink-900 truncate">
+                          {v.label || v.name}
+                          {v.id === companyVoiceId && (
+                            <span className="mr-1.5 text-[10.5px] font-medium text-ink-500">· صوت الشركة</span>
+                          )}
+                        </span>
                         {active && <CheckCircle2 className="w-3.5 h-3.5 text-brand-600 shrink-0" />}
                       </div>
                       <div className="text-[11px] text-ink-500 mt-0.5 truncate">{v.description}</div>
@@ -365,7 +375,9 @@ export function PlaygroundPage({ pinnedCompanyId }) {
                   «{scenario.firstMessage}»
                 </p>
               )}
-              {activeCompany?.agentId && (
+              {/* A deep link into the voice provider's console: an operator
+                  tool, and it would name the vendor to a client. */}
+              {isSuper && activeCompany?.agentId && (
                 <a
                   href={`https://elevenlabs.io/app/agents/${activeCompany.agentId}`}
                   target="_blank" rel="noreferrer"

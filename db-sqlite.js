@@ -686,6 +686,23 @@ runMigration(38, 'create_customer_requests', `
     ON customer_requests(company_id, created_at);
 `);
 
+// Migration 39: the reference agent became every company's default. Tuning
+// stored before then would outrank it on every publish, so it is removed once;
+// voice, transfer number, webhook and caps stay. JSON is edited in JS, not SQL,
+// so both drivers share stripTuning -- see lib/migrations-pg.js for Postgres.
+if (!db.prepare('SELECT 1 FROM schema_migrations WHERE id = 39').get()) {
+  const { stripTuning } = require('./lib/agent-defaults');
+  const update = db.prepare('UPDATE companies SET settings = ? WHERE id = ?');
+  db.transaction(() => {
+    for (const r of db.prepare('SELECT id, settings FROM companies').all()) {
+      const { settings, removed } = stripTuning(r.settings);
+      if (removed) update.run(settings, r.id);
+    }
+    db.prepare('INSERT INTO schema_migrations (id, name) VALUES (39, ?)')
+      .run('reset_agent_tuning_to_reference');
+  })();
+}
+
 // ─── Tenant-safety: one company per phone number ──────────────────
 // A DID and an imported provider number each identify exactly ONE tenant.
 // Inbound calls are attributed by those values (services/voice resolves a call
@@ -1483,6 +1500,26 @@ const sql = {
      WHERE created_at BETWEEN @from AND @to
        AND (@company_id IS NULL OR company_id = @company_id)
      GROUP BY hour, COALESCE(direction, 'inbound')
+  `),
+  // Per-company consumption, inbound and outbound apart. A row with no
+  // direction is inbound, as everywhere else; a call that never connected
+  // counts as a call with zero seconds. Calls not yet tied to a company are
+  // left out: there is no one to attribute them to. `to` is EXCLUSIVE (the
+  // start of the next period): created_at can carry fractional seconds, which
+  // an inclusive "23:59:59" bound would silently drop.
+  usageByCompanyInRange: db.prepare(`
+    SELECT company_id,
+           SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 0 ELSE 1 END) AS inbound_calls,
+           SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 0 ELSE COALESCE(duration_sec, 0) END) AS inbound_sec,
+           SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 0 ELSE COALESCE(cost_credits, 0) END) AS inbound_credits,
+           SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 1 ELSE 0 END) AS outbound_calls,
+           SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN COALESCE(duration_sec, 0) ELSE 0 END) AS outbound_sec,
+           SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN COALESCE(cost_credits, 0) ELSE 0 END) AS outbound_credits
+      FROM calls
+     WHERE created_at >= @from AND created_at < @to
+       AND company_id IS NOT NULL
+       AND (@company_id IS NULL OR company_id = @company_id)
+     GROUP BY company_id
   `),
   chatsPerHourInRange : db.prepare(`
     SELECT substr(created_at, 12, 2) AS hour, COUNT(*) AS n

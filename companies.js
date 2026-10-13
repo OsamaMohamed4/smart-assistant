@@ -1,6 +1,7 @@
 const { sql } = require('./db');
 const { MASTER_PROMPT } = require('./lib/master-prompt');
 const { parseBusinessProfile } = require('./lib/business-profile');
+const { resolveVoiceId } = require('./lib/voices');
 
 const cache = new Map();
 
@@ -102,6 +103,11 @@ function toCompany(row) {
   if (!row) return null;
   let settings = {};
   try { if (row.settings) settings = JSON.parse(row.settings) || {}; } catch {}
+  // A voice retired from the catalogue reads as its replacement everywhere --
+  // the settings screen, publishing, the Playground -- so the company neither
+  // fails to publish nor shows a voice it can no longer pick. The stored value
+  // is rewritten the next time its settings are saved.
+  if (settings.voiceId) settings.voiceId = resolveVoiceId(settings.voiceId);
   return {
     id            : row.id,
     userId        : row.user_id || null,
@@ -161,4 +167,6 @@ module.exports = {
   loadCompany, listCompanies, listCompaniesFull, invalidateCache,
   buildSystemPromptWithRAG, fillGlobals, fillRuntimeVars,
   NoActiveScenarioError, localNow, TZ_OFFSET_HOURS,
+  // exported for tests
+  toCompany,
 };

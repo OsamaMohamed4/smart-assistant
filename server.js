@@ -574,10 +574,11 @@ async function askGPT(company, message, history, vars) {
     { role: 'user', content: message },
   ];
   const t0 = Date.now();
-  // Same model the live voice agent runs on — see resolveAgentModel().
+  // Same model the live voice agent runs on — see resolveAgentModel() — unless
+  // that is a provider-hosted Gemini model, which OpenAI cannot serve.
   const m = resolveAgentModel(company);
   const completion = await openai.chat.completions.create({
-    model: m.model, messages, max_tokens: m.maxTokens, temperature: m.temperature,
+    model: textChannelModel(m.model), messages, max_tokens: m.maxTokens, temperature: m.temperature,
   });
   return { reply: completion.choices[0].message.content, ms: Date.now() - t0, usage: completion.usage };
 }
@@ -605,19 +606,17 @@ const KB_PRIORITY_RE = /[0-9٠-٩]|ريال|سعر|أسعار|السعر|ضما�
 //   - eval judge           (services/evals.js — grading must stay independent
 //                           of the model under test, or it grades itself)
 //   - transcript summarize (summarize.js — post-call batch work)
-// The provider accepts its own hosted models alongside OpenAI's. gemini flash
-// lite is listed because a company is live on it: one short sentence per turn
-// at 120 tokens, and markedly faster on a scripted flow.
-const ALLOWED_MODELS = ['gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4o-mini', 'gemini-3.1-flash-lite'];
-const clampNum = (v, lo, hi, dflt) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt);
+// The catalogue and the defaults live in lib/agent-defaults.js: the reference
+// agent's settings (Gemini flash lite, one short sentence per turn) unless
+// the company chose otherwise. The text channel cannot run the provider's
+// Gemini models itself, so it runs textChannelModel() instead -- see there.
+const {
+  AGENT_MODELS: ALLOWED_MODELS, AGENT_DEFAULTS,
+  resolveAgentModel: resolveModelSettings, resolveVoiceTuning, textChannelModel,
+} = require('./lib/agent-defaults');
 
 function resolveAgentModel(company) {
-  const s = company?.settings || {};
-  return {
-    model      : ALLOWED_MODELS.includes(s.model) ? s.model : 'gpt-4.1',
-    temperature: clampNum(s.temperature, 0, 1, 0.3),
-    maxTokens  : clampNum(s.maxTokens, 50, 800, 400),
-  };
+  return resolveModelSettings(company?.settings);
 }
 async function composeSystemPrompt(company, instructionPrompt) {
   let systemContent = fillGlobals(instructionPrompt || '', company);
@@ -773,21 +772,15 @@ app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
   }
 });
 
-// Playground voice catalog. Whitelist — only these IDs can be requested from
-// /chat-voice, so a tampered client can't bill an arbitrary ElevenLabs voice.
-// Arabic male voices on the account.
-// Global default voice for every agent. Code is the source of truth (not the
-// Railway env var) so a stale ELEVENLABS_VOICE_ID can't silently override it.
-// Per-company overrides still win via settings.voiceId (set in the admin UI).
-const DEFAULT_VOICE_ID = 'MI88rOZjXbH22N8KHXUo'; // Ali علي — الصوت الافتراضي (مختبَر وجيد)
+// The voice catalogue, the default voice and the allow-list live in
+// lib/voices.js, so the company loader and publishing read the same list.
+// A company's own choice (settings.voiceId) wins over the default.
+const { VOICES, DEFAULT_VOICE_ID, isAllowedVoiceId } = require('./lib/voices');
 
-// Voice pacing default applied at every publish (env-tunable, no deploy):
-// speed 1.2 (faster speech), per the operator's request. Clamped to the valid
-// ElevenLabs range.
+// Speaking pace, stability and the rest default to the reference agent's (see
+// lib/agent-defaults.js). VOICE_SPEED_DEFAULT is no longer read: a stale value
+// left in the environment would quietly hold every agent off the reference.
 //
-// The companion `optimizeStreamingLatency` knob is gone: it was a property of
-// the previous provider's TTS bridge, and the Agents TTS config has no such
-// field. Sending it would be rejected, so it is removed rather than renamed.
 // Voice models a company may select. Confirmed against GET /v1/models — each
 // one reports Arabic support. The expressive line is what expressiveMode acts
 // on; on the rest the flag is stored and ignored.
@@ -796,35 +789,17 @@ const ALLOWED_TTS_MODELS = [
   'eleven_v3', 'eleven_v3_conversational', 'eleven_v4', 'eleven_v4_turbo',
 ];
 
-const VOICE_SPEED_DEFAULT   = clampRange(process.env.VOICE_SPEED_DEFAULT, 0.7, 1.2, 1.2);
-function clampRange(v, lo, hi, dflt) {
-  return Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt;
-}
+// What a company that has chosen nothing is published with, so the settings
+// screen shows real values instead of guessing its own. The voice is listed
+// with the voices (isDefault), not here.
+app.get('/api/agent-defaults', requireAuth, (_req, res) => {
+  res.json({ ...AGENT_DEFAULTS, models: ALLOWED_MODELS });
+});
 
-const PLAYGROUND_VOICES = [
-  { id: 'MI88rOZjXbH22N8KHXUo', name: 'Ali', label: 'علي', description: 'صوت هادئ وواضح', gender: 'male', accent: 'arabic' },
-  { id: 'cFUFIbKkO2iZFwS8cRnY', name: 'Nasser', label: 'ناصر', description: 'صوت سعودي طبيعي', gender: 'male', accent: 'saudi' },
-  // Name and description read from GET /v1/voices, not invented. A live
-  // company already runs on this voice.
-  { id: 'yXEnnEln9armDCyhkXcA', name: 'Jeddawi', label: 'جداوي', description: 'صوت سعودي عميق وواثق', gender: 'male', accent: 'saudi' },
-];
-const PLAYGROUND_VOICE_IDS = new Set(PLAYGROUND_VOICES.map((v) => v.id));
-
-// Voices a company may select in settings. The Playground catalog plus any
-// ids added via EXTRA_VOICE_IDS (comma-separated) so a new ElevenLabs voice
-// can be enabled from Railway without a code change.
-const EXTRA_VOICE_IDS = new Set(
-  String(process.env.EXTRA_VOICE_IDS || '')
-    .split(',').map((s) => s.trim()).filter(Boolean),
-);
-function isAllowedVoiceId(id) {
-  const v = String(id || '').trim();
-  if (!v) return false;
-  return PLAYGROUND_VOICE_IDS.has(v) || EXTRA_VOICE_IDS.has(v);
-}
-
+// The default is flagged so a screen can show which voice a company that never
+// chose one is actually speaking with.
 app.get('/api/voices', requireAuth, async (_req, res) => {
-  res.json(PLAYGROUND_VOICES);
+  res.json(VOICES.map((v) => ({ ...v, isDefault: v.id === DEFAULT_VOICE_ID })));
 });
 
 // Outbound call: the provider rings the customer's phone THROUGH this
@@ -834,17 +809,30 @@ app.get('/api/voices', requireAuth, async (_req, res) => {
 app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, res) => {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'company not found' });
+  // Both messages reach a client's screen, so neither names the voice vendor.
   if (!c.agentId) {
-    return res.status(409).json({ error: 'انشر الشركة على ElevenLabs أولاً.', code: 'NOT_PUBLISHED' });
+    return res.status(409).json({ error: 'انشر الشركة أولاً.', code: 'NOT_PUBLISHED' });
   }
   // Each company dials from its OWN number. There is deliberately NO
   // platform-wide fallback: with multiple tenants, falling back would place
   // one company's calls on another company's line.
   if (!c.phoneNumberId) {
     return res.status(503).json({
-      error: 'رقم الشركة غير مستورد إلى ElevenLabs بعد — استورد رقم 3CX الخاص بها أولاً.',
+      error: 'رقم الشركة غير مربوط بالمساعد بعد — استورد رقم 3CX الخاص بها أولاً.',
       code : 'NO_PHONE_NUMBER_ID',
     });
+  }
+  // The Playground can try a catalogue voice on a real call before it becomes
+  // the company's voice. The id comes from the browser, so it must be on the
+  // list. The override is sent only when it differs from the company's own
+  // voice, which leaves an ordinary test call exactly the production path.
+  let voiceOverride = null;
+  if (req.body?.voiceId) {
+    const v = String(req.body.voiceId).trim();
+    if (!isAllowedVoiceId(v)) {
+      return res.status(400).json({ error: 'معرّف الصوت غير معروف. اختر صوتاً من القائمة المتاحة.' });
+    }
+    if (v !== (c.settings?.voiceId || DEFAULT_VOICE_ID)) voiceOverride = v;
   }
   if (!(await checkAndBumpUsage(c.id, 'outbound_calls', dailyCap(c, 'dailyOutboundCap', 'DAILY_OUTBOUND_CAP', 200)))) {
     return res.status(429).json({ error: 'تم بلوغ الحد اليومي للمكالمات الصادرة لهذه الشركة.' });
@@ -876,7 +864,7 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
 
   try {
     const { callId, callRef, status } = await voice.startOutboundCall({
-      company: c, toNumber: phoneNumber, variables: vars, firstMessage,
+      company: c, toNumber: phoneNumber, variables: vars, firstMessage, voiceId: voiceOverride,
     });
     // Pre-register the call so it appears in Conversations immediately, even
     // before the post-call webhook arrives. That webhook's upsert fills in
@@ -893,7 +881,7 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
     } catch (e) {
       req.log.error('outbound-call stub insert failed', { err: e.message });
     }
-    audit(req, 'playground.outbound', `calls/${callId}`, { phoneNumber, companyId: c.id });
+    audit(req, 'playground.outbound', `calls/${callId}`, { phoneNumber, companyId: c.id, voiceOverride: voiceOverride || undefined });
     res.json({ callId, status });
   } catch (e) {
     const detail = voice.errText(e);
@@ -1442,7 +1430,6 @@ async function handlePublishCompany(req, res) {
       resolveAgentModel,
       isAllowedVoiceId,
       defaultVoiceId  : DEFAULT_VOICE_ID,
-      voiceSpeedDefault: VOICE_SPEED_DEFAULT,
       publicBaseUrl   : PUBLIC_BASE_URL,
     },
   });
@@ -1690,7 +1677,6 @@ app.get('/api/companies/:id/publish-preview', requireCompanyAccess, async (req, 
   const factsBlock = renderFactsBlock(c, c.businessProfile);
 
   const s = c.settings || {};
-  const clamp = (v, lo, hi, dflt) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt);
   const { model, temperature, maxTokens } = resolveAgentModel(c);
   const kbChunkCount = Number((await sql.countCompanyChunks.get(c.id))?.n || 0);
 
@@ -1705,9 +1691,9 @@ app.get('/api/companies/:id/publish-preview', requireCompanyAccess, async (req, 
     language    : c.language,
     model, temperature, maxTokens,
     voiceId        : s.voiceId || DEFAULT_VOICE_ID,
-    stability      : clamp(s.stability, 0, 1, 0.8),
-    similarityBoost: clamp(s.similarityBoost, 0, 1, 0.8),
-    voiceSpeed     : clamp(s.voiceSpeed, 0.7, 1.2, VOICE_SPEED_DEFAULT),
+    // Resolved by the same function the pipeline uses, so the preview cannot
+    // show one pacing while publishing sends another.
+    ...resolveVoiceTuning(s),
     // Tool ids are resolved at publish time; showing the stored one keeps the
     // preview honest about what is currently attached.
     toolIds        : c.kbToolId ? [c.kbToolId] : [],
@@ -1744,83 +1730,6 @@ app.post('/api/companies/:id/sync-voice', requireCompanyAccess, handlePublishCom
 // platform-wide fallback: with multiple tenants, a fallback would bind one
 // company's line to another company's agent. The DB is only updated after the
 // provider confirms, so a failed call leaves no misleading state behind.
-// Adopt the agent's CURRENT provider-side configuration as the company's own.
-//
-// Publishing rebuilds the agent from company settings and therefore replaces
-// every field it sends, so anything tuned directly in the provider's dashboard
-// is lost on the next publish. That is the correct behaviour -- publish has to
-// be authoritative -- but it leaves no way to keep a configuration that was
-// arrived at by ear, on real calls, outside this system.
-//
-// This reads the live agent and writes the handful of values back into the
-// company, so the next publish REPRODUCES what is there instead of flattening
-// it. It changes nothing on the provider: it is a read plus a local save.
-//
-// Only the fields publish actually overwrites are adopted. asr.keywords,
-// asr.user_input_audio_format and prompt.knowledge_base are deliberately
-// absent because publish never sends them and they survive on their own --
-// copying them here would imply an ownership this system does not have.
-app.post('/api/companies/:id/adopt-agent-settings', requireCompanyAdmin, async (req, res) => {
-  const row = await sql.getCompany.get(req.params.id);
-  if (!row) return res.status(404).json({ error: 'not found' });
-  const c = await loadCompany(req.params.id);
-  if (!c?.agentId) {
-    return res.status(409).json({ error: 'الشركة غير منشورة بعد — لا يوجد وكيل لقراءة إعداداته.', code: 'NOT_PUBLISHED' });
-  }
-
-  let agent;
-  try {
-    agent = await voice.getAgent(c.agentId, c);
-  } catch (e) {
-    return res.status(502).json({ error: voice.errText(e) });
-  }
-  if (!agent) return res.status(404).json({ error: 'الوكيل غير موجود لدى المزوّد.', code: 'AGENT_GONE' });
-
-  const cc = agent.conversation_config || {};
-  const p  = cc.agent?.prompt || {};
-  const adopted = {};
-  const num = (v, lo, hi) => (Number.isFinite(Number(v)) && Number(v) >= lo && Number(v) <= hi ? Number(v) : undefined);
-
-  if (ALLOWED_MODELS.includes(p.llm)) adopted.model = p.llm;
-  if (num(p.temperature, 0, 1) !== undefined) adopted.temperature = Number(p.temperature);
-  if (num(p.max_tokens, 50, 800) !== undefined) adopted.maxTokens = Number(p.max_tokens);
-  if (ALLOWED_TTS_MODELS.includes(cc.tts?.model_id)) adopted.ttsModel = cc.tts.model_id;
-  if (typeof cc.tts?.expressive_mode === 'boolean') adopted.expressiveMode = cc.tts.expressive_mode;
-  // A voice the provider holds but our catalogue does not is reported rather
-  // than stored: saving it would make every later publish fail with the
-  // provider's opaque "Couldn't Find Voice".
-  const unknownVoice = cc.tts?.voice_id && !isAllowedVoiceId(cc.tts.voice_id) ? cc.tts.voice_id : null;
-  if (cc.tts?.voice_id && !unknownVoice) adopted.voiceId = cc.tts.voice_id;
-  if (num(cc.tts?.stability, 0, 1) !== undefined) adopted.stability = Number(cc.tts.stability);
-  if (num(cc.tts?.similarity_boost, 0, 1) !== undefined) adopted.similarityBoost = Number(cc.tts.similarity_boost);
-  if (num(cc.tts?.speed, 0.7, 1.2) !== undefined) adopted.voiceSpeed = Number(cc.tts.speed);
-  if (num(cc.turn?.turn_timeout, 1, 60) !== undefined) adopted.turnTimeoutSeconds = Number(cc.turn.turn_timeout);
-  // -1 is the provider's "never end the call on silence" and is a real choice,
-  // not a missing value, so it is adopted as-is rather than clamped away.
-  if (Number(cc.turn?.silence_end_call_timeout) === -1) adopted.silenceEndCallSeconds = -1;
-  else if (num(cc.turn?.silence_end_call_timeout, 5, 300) !== undefined) {
-    adopted.silenceEndCallSeconds = Number(cc.turn.silence_end_call_timeout);
-  }
-
-  let existing = {};
-  try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
-  const changed = Object.keys(adopted).filter((k) => String(existing[k]) !== String(adopted[k]));
-  await sql.updateCompanySettings.run({
-    id: row.id, settings: JSON.stringify({ ...existing, ...adopted }),
-  });
-  invalidateCache(row.id);
-  audit(req, 'voice.adopt_agent_settings', `companies/${row.id}`, { changed, unknownVoice: unknownVoice || undefined });
-  req.log.info('adopted provider agent settings', { companyId: row.id, changed });
-
-  res.json({
-    adopted, changed,
-    unknownVoice,
-    note: unknownVoice
-      ? 'الصوت الحالي غير موجود في قائمة الأصوات المعتمدة ولم يُحفظ — أضفه عبر EXTRA_VOICE_IDS أولاً.'
-      : null,
-  });
-});
-
 app.post('/api/companies/:id/bind-phone', requireCompanyAdmin, async (req, res) => {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
@@ -2022,6 +1931,8 @@ function shiftedPrev({ from, to }) {
 }
 function isoUtc(d) { return d.toISOString().replace('T', ' ').slice(0, 19); }
 
+const { currentSaudiMonth, saudiMonthRange, buildUsageReport } = require('./lib/usage-report');
+
 app.get('/api/dashboard', async (req, res) => {
   const period   = String(req.query.period || 'today');
   const fromStr  = req.query.from || null;
@@ -2056,7 +1967,14 @@ app.get('/api/dashboard', async (req, res) => {
     const total    = okRow?.total || 0;
     const success  = total ? ok / total : 0;
     const chats    = (await sql.countChatSessionsInRange.get(a))?.n || 0;
-    return { calls, avgDur, success, chats };
+    // Inbound and outbound apart, from the same query the usage page reads.
+    // Its upper bound is exclusive, so it gets the instant after range.to.
+    const usageRows = await sql.usageByCompanyInRange.all({
+      from: a.from, to: isoUtc(new Date(range.to.getTime() + 1)), company_id,
+    });
+    const { totals: usage } = buildUsageReport(usageRows,
+      usageRows.map((r) => ({ id: r.company_id, name: '' })));
+    return { calls, avgDur, success, chats, inbound: usage.inbound, outbound: usage.outbound };
   };
   const current  = await stat(cur);
   const previous = await stat(prev);
@@ -2096,6 +2014,41 @@ app.get('/api/dashboard', async (req, res) => {
     scenarios,
     chart,
   });
+});
+
+// ─── Usage: consumption per company for one Saudi month ──────────────
+// Inbound and outbound apart, for every company the viewer may see -- zeros
+// included, so a quiet month still lists the client. Clients are pinned to
+// their own company. Provider credits are platform cost, not the client's
+// business, so they leave the server only for a superadmin.
+//
+// WhatsApp is deliberately absent: no WhatsApp channel is connected to the
+// platform yet, so there are no messages to count, and a zero would read as
+// "connected, and nothing was sent".
+app.get('/api/usage', async (req, res) => {
+  const month = String(req.query.month || currentSaudiMonth());
+  const range = saudiMonthRange(month);
+  if (!range) return res.status(400).json({ error: 'صيغة الشهر غير صحيحة — المطلوب YYYY-MM' });
+
+  const isSuper = req.user.role === 'superadmin';
+  let companyId = req.query.companyId ? String(req.query.companyId) : null;
+  if (companyId && !COMPANY_ID_RE.test(companyId)) {
+    return res.status(400).json({ error: 'invalid companyId' });
+  }
+  if (!isSuper) {
+    if (!req.user.companyId) return res.status(403).json({ error: 'no company associated' });
+    if (companyId && companyId !== req.user.companyId) return res.status(403).json({ error: 'forbidden' });
+    companyId = req.user.companyId;
+  }
+
+  const companies = companyId
+    ? [await sql.getCompanyIdName.get(companyId)].filter(Boolean)
+    : await sql.listCompanyIdNames.all();
+  const rows = await sql.usageByCompanyInRange.all({ from: range.from, to: range.to, company_id: companyId });
+  const report = buildUsageReport(rows, companies, { includeCredits: isSuper });
+  report.rows.sort((x, y) => (y.inbound.seconds + y.outbound.seconds) - (x.inbound.seconds + x.outbound.seconds)
+    || String(x.companyName).localeCompare(String(y.companyName), 'ar'));
+  res.json({ month, ...report });
 });
 
 // ─── Conversations (chats + calls unified for the dashboard table) ──────
@@ -2634,12 +2587,15 @@ app.post('/api/companies/:id/scenarios/test-draft', chatLimiter, requireCompanyA
     const t0 = Date.now();
     // The whole point of the draft tester is to preview what will ship, so it
     // must run the company's OWN model/temperature — not a cheaper stand-in.
+    // A Gemini model runs at the provider only; the reply names the model that
+    // actually answered, so a stand-in is never mistaken for the real thing.
     const m = resolveAgentModel(c);
+    const ran = textChannelModel(m.model);
     const completion = await openai.chat.completions.create({
-      model: m.model, temperature: m.temperature, max_tokens: m.maxTokens,
+      model: ran, temperature: m.temperature, max_tokens: m.maxTokens,
       messages: [{ role: 'system', content: systemContent }, ...history, { role: 'user', content: message }],
     });
-    res.json({ reply: completion.choices[0].message.content, ms: Date.now() - t0, model: m.model });
+    res.json({ reply: completion.choices[0].message.content, ms: Date.now() - t0, model: ran });
   } catch (e) {
     req.log.error('test-draft error', { err: e.message, companyId: c.id });
     res.status(502).json({ error: 'تعذّر تشغيل الاختبار. حاول مرة ثانية.' });

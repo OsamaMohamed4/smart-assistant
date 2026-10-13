@@ -80,22 +80,16 @@ test('F-06: a client PATCH without cap keys is unaffected', () => {
 });
 
 // ─── F-11: one model resolver for every agent-simulating path ─────
-const ALLOWED_MODELS = ['gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4o-mini'];
-const clampNum = (v, lo, hi, d) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : d);
-function resolveAgentModel(company) {
-  const s = company?.settings || {};
-  return {
-    model: ALLOWED_MODELS.includes(s.model) ? s.model : 'gpt-4.1',
-    temperature: clampNum(s.temperature, 0, 1, 0.3),
-    maxTokens: clampNum(s.maxTokens, 50, 800, 400),
-  };
-}
+// The real resolver (lib/agent-defaults.js), not a copy: the copy that lived
+// here kept asserting gpt-4.1 after the default had moved.
+const agentDefaults = require('../lib/agent-defaults');
+const resolveAgentModel = (company) => agentDefaults.resolveAgentModel(company?.settings);
 
-test('F-11: default is production gpt-4.1 @ 0.3, not a mini stand-in', () => {
+test('F-11: the default is the reference agent\'s model, not a mini stand-in', () => {
   const m = resolveAgentModel({ settings: {} });
-  assert.equal(m.model, 'gpt-4.1');
-  assert.equal(m.temperature, 0.3);
-  assert.equal(m.maxTokens, 400);
+  assert.equal(m.model, agentDefaults.AGENT_DEFAULTS.model);
+  assert.equal(m.temperature, agentDefaults.AGENT_DEFAULTS.temperature);
+  assert.equal(m.maxTokens, agentDefaults.AGENT_DEFAULTS.maxTokens);
 });
 
 test('F-11: an explicit per-company model is honoured', () => {
@@ -103,7 +97,8 @@ test('F-11: an explicit per-company model is honoured', () => {
 });
 
 test('F-11: an unknown model falls back rather than reaching the API', () => {
-  assert.equal(resolveAgentModel({ settings: { model: 'gpt-5-turbo-ultra' } }).model, 'gpt-4.1');
+  assert.equal(resolveAgentModel({ settings: { model: 'gpt-5-turbo-ultra' } }).model,
+    agentDefaults.AGENT_DEFAULTS.model);
 });
 
 test('F-11: out-of-range values are clamped, not passed through', () => {
@@ -165,26 +160,85 @@ test('F-12: blocked URLs carry an explanatory reason', () => {
 });
 
 // ─── F-14: voice id whitelist ─────────────────────────────────────
-const PLAYGROUND_VOICE_IDS = new Set(['MI88rOZjXbH22N8KHXUo', 'cFUFIbKkO2iZFwS8cRnY']);
-function isAllowedVoiceId(id, extra = new Set()) {
-  const v = String(id || '').trim();
-  if (!v) return false;
-  return PLAYGROUND_VOICE_IDS.has(v) || extra.has(v);
-}
+// The real module rather than a copy of it: a mirrored list kept passing here
+// after the catalogue it was meant to guard had changed.
+const VOICES_PATH = require.resolve('../lib/voices');
+const {
+  VOICES, DEFAULT_VOICE_ID, RETIRED_VOICES, isAllowedVoiceId, resolveVoiceId,
+} = require('../lib/voices');
+const ALI = 'MI88rOZjXbH22N8KHXUo';
+const JEDDAWI = 'yXEnnEln9armDCyhkXcA';
 
-test('F-14: catalog voices are accepted', () => {
-  assert.equal(isAllowedVoiceId('MI88rOZjXbH22N8KHXUo'), true);   // Ali
-  assert.equal(isAllowedVoiceId('cFUFIbKkO2iZFwS8cRnY'), true);   // Nasser
+test('F-14: the catalogue is exactly the two voices the operator chose', () => {
+  assert.deepEqual(VOICES.map((v) => [v.id, v.label, v.gender]), [
+    ['o0oG1TnHDWDdKbAeBgCO', 'منى', 'female'],
+    [JEDDAWI, 'جداوي', 'male'],
+  ]);
+  for (const v of VOICES) assert.equal(isAllowedVoiceId(v.id), true, v.name);
 });
 
-test('F-14: an unknown voice is rejected at write, not at Vapi sync', () => {
+test('F-14: the default voice is one a company could also pick', () => {
+  assert.equal(DEFAULT_VOICE_ID, JEDDAWI);
+  assert.equal(isAllowedVoiceId(DEFAULT_VOICE_ID), true);
+});
+
+test('F-14: an unknown voice is rejected at write, not at publish', () => {
   assert.equal(isAllowedVoiceId('totally-made-up-voice'), false);
   assert.equal(isAllowedVoiceId(''), false);
   assert.equal(isAllowedVoiceId(null), false);
 });
 
-test('F-14: EXTRA_VOICE_IDS extends the catalog without a deploy', () => {
-  assert.equal(isAllowedVoiceId('newVoice123', new Set(['newVoice123'])), true);
+test('F-14: a retired voice can no longer be picked, but resolves to one that can', () => {
+  assert.ok(Object.keys(RETIRED_VOICES).length >= 2, 'Ali and Nasser');
+  for (const [old, now] of Object.entries(RETIRED_VOICES)) {
+    assert.equal(isAllowedVoiceId(old), false, `${old} is retired`);
+    assert.equal(resolveVoiceId(old), now);
+    assert.equal(isAllowedVoiceId(now), true, 'the replacement itself publishes');
+  }
+});
+
+test('F-14: a retired voice is replaced by one of the same gender', () => {
+  // Both retired voices were male. An agent whose scenario names it as a man
+  // must not start speaking as a woman because of a catalogue change.
+  for (const now of Object.values(RETIRED_VOICES)) {
+    assert.equal(VOICES.find((v) => v.id === now).gender, 'male');
+  }
+});
+
+test('F-14: an unknown voice resolves to itself, so publish still refuses it loudly', () => {
+  assert.equal(resolveVoiceId('totally-made-up-voice'), 'totally-made-up-voice');
+  assert.equal(resolveVoiceId(JEDDAWI), JEDDAWI);
+  assert.equal(resolveVoiceId(''), null);
+  assert.equal(resolveVoiceId(undefined), null);
+});
+
+test('F-14: EXTRA_VOICE_IDS extends the catalogue without a deploy', () => {
+  const saved = process.env.EXTRA_VOICE_IDS;
+  process.env.EXTRA_VOICE_IDS = ` newVoice123 , ${ALI} `;
+  delete require.cache[VOICES_PATH];
+  try {
+    const fresh = require('../lib/voices');
+    assert.equal(fresh.isAllowedVoiceId('newVoice123'), true);
+    // Listing a retired voice there keeps it on purpose: it is not swapped.
+    assert.equal(fresh.isAllowedVoiceId(ALI), true);
+    assert.equal(fresh.resolveVoiceId(ALI), ALI);
+  } finally {
+    if (saved === undefined) delete process.env.EXTRA_VOICE_IDS;
+    else process.env.EXTRA_VOICE_IDS = saved;
+    delete require.cache[VOICES_PATH];
+  }
+});
+
+test('F-14: a company saved with a retired voice loads with its replacement', () => {
+  const { toCompany } = require('../companies');
+  const row = (settings) => ({ id: 'co-x', name: 'x', settings: JSON.stringify(settings) });
+  const c = toCompany(row({ voiceId: ALI, model: 'gpt-4.1', voiceSpeed: 1.1 }));
+  assert.equal(c.settings.voiceId, JEDDAWI);
+  assert.equal(c.settings.model, 'gpt-4.1', 'the rest of the settings are untouched');
+  assert.equal(c.settings.voiceSpeed, 1.1);
+  // No voice stays no voice: the default applies at publish, not here.
+  assert.equal(toCompany(row({ model: 'gpt-4.1' })).settings.voiceId, undefined);
+  assert.equal(toCompany(row({ voiceId: 'o0oG1TnHDWDdKbAeBgCO' })).settings.voiceId, 'o0oG1TnHDWDdKbAeBgCO');
 });
 
 // ─── F-10: Saudi local time for spoken {{date}}/{{time}} ──────────

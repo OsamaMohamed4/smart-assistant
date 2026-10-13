@@ -50,6 +50,14 @@ export const api = {
     return request(`/api/dashboard?${params.toString()}`);
   },
 
+  // consumption per company for one Saudi month (YYYY-MM), inbound/outbound apart
+  usage             : ({ month, companyId } = {}) => {
+    const params = new URLSearchParams();
+    if (month)     params.set('month', month);
+    if (companyId) params.set('companyId', companyId);
+    return request(`/api/usage?${params.toString()}`);
+  },
+
   // conversations (chats + calls, unified)
   conversations     : ({
     period = 'all', type = 'all', status = 'all', outcome = 'all',
@@ -77,9 +85,9 @@ export const api = {
   // Point the company's own number at its own agent (which agent answers when
   // someone dials the company's 3CX line).
   bindPhone         : (id) => request(`/api/companies/${id}/bind-phone`, { method: 'POST', body: '{}' }),
-  // Read the live agent's configuration and keep it as the company's own, so
-  // the next publish reproduces it instead of overwriting it.
-  adoptAgentSettings: (id) => request(`/api/companies/${id}/adopt-agent-settings`, { method: 'POST', body: '{}' }),
+  // What a company that has chosen nothing is published with (the reference
+  // agent's settings), plus the LLMs a company may pick.
+  agentDefaults     : () => request('/api/agent-defaults'),
   // Register the company's EXISTING 3CX number with the voice provider. No
   // number is ever purchased: this hands the provider the DID the company
   // already owns plus the address of their own PBX, so the provider knows how
@@ -144,7 +152,7 @@ export const api = {
   // chat (playground)
   chat              : (body) => request('/chat', { method: 'POST', body: JSON.stringify(body) }),
 
-  // playground voice catalog (3 Saudi voices)
+  // voice catalogue (منى، جداوي); the platform default carries isDefault
   listVoices        : () => request('/api/voices'),
 
   // currently-active scenario for a company (null if none) — used by playground

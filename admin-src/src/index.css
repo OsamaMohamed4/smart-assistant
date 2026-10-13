@@ -7,8 +7,8 @@
   --bg-app       : #f7f7f9;
   --bg-surface   : #ffffff;
   --bg-elevated  : #ffffff;
-  --bg-sidebar   : #0e0f12;
-  --bg-sidebar-2 : #16171c;
+  --bg-sidebar   : #ffffff;
+  --bg-sidebar-2 : #f8f8f9;
   --border       : #e8e9ed;
   --border-strong: #d8d9dd;
   --text-1       : #0e0f12;
@@ -78,12 +78,6 @@ dialog::backdrop { background: rgba(14,15,18,0.45); backdrop-filter: blur(2px); 
 
 /* ─── Number font feature for tabular numerals ────────────── */
 .tabular-nums { font-variant-numeric: tabular-nums; }
-
-/* ─── Decorative dot grid bg (sidebar header) ─────────────── */
-.dot-grid {
-  background-image: radial-gradient(rgba(255,255,255,0.08) 1px, transparent 1px);
-  background-size: 14px 14px;
-}
 
 /* ─── Playground orb: drifting blobs that blend to a liquid look ── */
 .blob-anim   { animation: blob1 14s ease-in-out infinite; }

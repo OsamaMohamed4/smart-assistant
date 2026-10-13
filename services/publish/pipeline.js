@@ -22,6 +22,7 @@ const { fillGlobals } = require('../../companies');
 const voice = require('../voice');
 const { planCapabilities, loadTools } = require('../features/store');
 const { getFeature } = require('../features/registry');
+const { resolveVoiceTuning } = require('../../lib/agent-defaults');
 
 // A step marked `required: false` may fail without failing the publish — it is
 // reported as `skipped` or `failed` but the company still reaches 'published'.
@@ -103,7 +104,7 @@ function createRecorder() {
 async function publishCompany({ company, deps, actorEmail = null, log = null }) {
   const {
     composeSystemPrompt, shapeScenario, resolveAgentModel,
-    isAllowedVoiceId, defaultVoiceId, voiceSpeedDefault, publicBaseUrl,
+    isAllowedVoiceId, defaultVoiceId, publicBaseUrl,
   } = deps;
 
   const rec = createRecorder();
@@ -182,9 +183,9 @@ async function publishCompany({ company, deps, actorEmail = null, log = null }) 
     });
 
     const s = company.settings || {};
-    const clamp = (v, lo, hi, dflt) =>
-      (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt);
     const { model, temperature, maxTokens } = resolveAgentModel(company);
+    // The company's own voice choices over the reference agent's.
+    const tuning = resolveVoiceTuning(s);
     const configuredTransfer = /^\+[0-9]{8,15}$/.test(String(s.transferPhoneNumber || '').trim())
       ? String(s.transferPhoneNumber).trim()
       : null;
@@ -299,18 +300,7 @@ async function publishCompany({ company, deps, actorEmail = null, log = null }) 
         firstMessageInbound: fillGlobals(scenario.firstMessageInbound || null, company),
         model, temperature, maxTokens,
         voiceId        : s.voiceId || defaultVoiceId,
-        stability      : clamp(s.stability, 0, 1, 0.8),
-        similarityBoost: clamp(s.similarityBoost, 0, 1, 0.8),
-        voiceSpeed     : clamp(s.voiceSpeed, 0.7, 1.2, voiceSpeedDefault),
-        ttsModel       : s.ttsModel || null,
-        expressiveMode : s.expressiveMode === true,
-        // Turn pacing. Both have always been parameters of buildAgentConfig
-        // and were simply never supplied, so every agent got 15/30 whatever
-        // its company needed. -1 is the provider's "never end the call on
-        // silence" and must survive the clamp, so it is passed through.
-        idleTimeoutSeconds   : clamp(s.turnTimeoutSeconds, 1, 60, 15),
-        silenceTimeoutSeconds: (Number(s.silenceEndCallSeconds) === -1)
-          ? -1 : clamp(s.silenceEndCallSeconds, 5, 300, 30),
+        ...tuning,
         transferNumber,
         webhookTools,
         publicBaseUrl,

@@ -23,6 +23,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const { logger } = require('../../lib/logger');
 const { sql } = require('../../db');
+const { AGENT_DEFAULTS } = require('../../lib/agent-defaults');
 const {
   toStamp, durationBetween, isE164, flattenTranscript,
 } = require('./provider');
@@ -467,21 +468,17 @@ async function resolveCompanyForEvent(ev, log) {
 }
 
 // ─── Agent configuration ──────────────────────────────────────────
-// The agent's LLM. Our own catalogue (lib/… resolveAgentModel) speaks OpenAI
-// model names, which this provider also accepts; ELEVENLABS_LLM overrides when
-// an account needs a different one without a deploy.
+// The LLM and the TTS model come from the company, falling back to the
+// reference agent's (lib/agent-defaults.js). ELEVENLABS_LLM and
+// ELEVENLABS_TTS_MODEL are no longer read: an environment value used to
+// override every company -- even one that had chosen its own model -- and a
+// stale one would hold every agent off the reference without a trace.
+//
+// eleven_v4 replaced turbo v2.5 as the default once it had been heard on real
+// Saudi calls on the reference agent; that is what turbo was being held for.
 function resolveLlm(model) {
-  const override = (process.env.ELEVENLABS_LLM || '').trim();
-  return override || model || 'gpt-4.1';
+  return model || AGENT_DEFAULTS.model;
 }
-
-// The TTS model. Held at turbo v2.5 ON PURPOSE. The expressive line
-// (eleven_v3, eleven_v3_conversational, eleven_v4) does list Arabic support,
-// but two things make it a change that must be heard before it ships: nobody
-// here has listened to a real Saudi call on it, and it drops `tts.speed`,
-// which every company's pacing is tuned with. Env-tunable so one deployment
-// can try it without a code change — and so switching back is instant.
-const TTS_MODEL = (process.env.ELEVENLABS_TTS_MODEL || '').trim() || 'eleven_turbo_v2_5';
 
 // The agent's wall clock. Left unset, `prompt.timezone` reads back null and the
 // model has NO idea what "tomorrow at four" refers to — it cannot resolve a
@@ -525,9 +522,12 @@ function buildAgentConfig({
   // stability, speed, turn_timeout and silence_end_call_timeout are all
   // overwritten, while asr.keywords, asr.user_input_audio_format and
   // prompt.knowledge_base survive because we never name them.
-  ttsModel = null, expressiveMode = false,
+  ttsModel = null, expressiveMode = AGENT_DEFAULTS.expressiveMode,
   toolIds = [], transferNumber = null,
-  maxDurationSeconds = 600, idleTimeoutSeconds = 15, silenceTimeoutSeconds = 30,
+  maxDurationSeconds = 600,
+  idleTimeoutSeconds = AGENT_DEFAULTS.turnTimeoutSeconds,
+  silenceTimeoutSeconds = AGENT_DEFAULTS.silenceEndCallSeconds,
+  interruptibleGreeting = AGENT_DEFAULTS.interruptibleGreeting,
 }) {
   // System tools go in `built_in_tools`, keyed by name. NOT the `tools` array,
   // which this used to send: the provider refuses a payload carrying both that
@@ -565,10 +565,9 @@ function buildAgentConfig({
       agent: {
         first_message: firstMessage,
         language     : langCode(language),
-        // A caller's "ألو" must not cut the greeting off half-way. The greeting
-        // is one short sentence, so holding it to the end costs nothing and
-        // stops the call opening on a truncated company name.
-        disable_first_message_interruptions: true,
+        // The reference agent lets the caller talk over the greeting, so a
+        // customer who answers early is heard instead of talked over.
+        disable_first_message_interruptions: !interruptibleGreeting,
         prompt: {
           prompt     : prompt,
           llm        : resolveLlm(model),
@@ -580,7 +579,7 @@ function buildAgentConfig({
         },
       },
       tts: {
-        model_id        : ttsModel || TTS_MODEL,
+        model_id        : ttsModel || AGENT_DEFAULTS.ttsModel,
         voice_id        : voiceId,
         stability,
         similarity_boost: similarityBoost,
@@ -592,9 +591,8 @@ function buildAgentConfig({
       },
       asr: { quality: 'high' },
       turn: {
-        // The previous provider's idle prompt after 15s of silence has no
-        // equivalent here; turn_timeout is the closest knob. The hard stop
-        // after 30s of total silence is preserved exactly.
+        // Defaults are the reference agent's: re-prompt after 6s, and never
+        // hang up on silence (-1) -- the agent ends calls with end_call.
         turn_timeout            : idleTimeoutSeconds,
         silence_end_call_timeout: silenceTimeoutSeconds,
       },
@@ -835,12 +833,35 @@ async function upsertAgentTolerant(cfg, existingId, log) {
  * (server.js composeSystemPrompt) so the voice channel and every test channel
  * run on byte-identical text.
  */
-async function syncAgent(company, opts) {
+// What syncAgent hands buildAgentConfig, kept apart from the network so the
+// hand-off itself can be tested. An option not named here never reaches the
+// provider: ttsModel, expressive mode and turn pacing were dropped exactly
+// that way -- the pipeline passed them, this list did not, and every publish
+// silently reset them -- until 2026-10-13.
+function agentBase(company, opts, toolIds = []) {
   const {
-    prompt, promptInbound, firstMessage, firstMessageInbound,
+    prompt, firstMessage,
     model, temperature, maxTokens,
     voiceId, stability, similarityBoost, voiceSpeed,
-    transferNumber, wantsKbTool, webhookTools, publicBaseUrl, log,
+    ttsModel, expressiveMode, idleTimeoutSeconds, silenceTimeoutSeconds, interruptibleGreeting,
+    transferNumber,
+  } = opts;
+  return {
+    // Deterministic, tenant-scoped name. It is also the recovery key when a
+    // stored agent id goes missing, so it must stay stable per company.
+    name: `smart-assistant:${company.id}`,
+    prompt, firstMessage, language: company.language,
+    model, temperature, maxTokens,
+    voiceId, stability, similarityBoost, voiceSpeed,
+    ttsModel, expressiveMode, idleTimeoutSeconds, silenceTimeoutSeconds, interruptibleGreeting,
+    toolIds, transferNumber,
+  };
+}
+
+async function syncAgent(company, opts) {
+  const {
+    promptInbound, firstMessage, firstMessageInbound,
+    wantsKbTool, webhookTools, publicBaseUrl, log,
     hooks = {},
   } = opts;
 
@@ -876,15 +897,7 @@ async function syncAgent(company, opts) {
     await hooks.onToolSynced?.(id, entry.featureKey);
   }
 
-  const base = {
-    // Deterministic, tenant-scoped name. It is also the recovery key when a
-    // stored agent id goes missing, so it must stay stable per company.
-    name: `smart-assistant:${company.id}`,
-    prompt, firstMessage, language: company.language,
-    model, temperature, maxTokens,
-    voiceId, stability, similarityBoost, voiceSpeed,
-    toolIds, transferNumber,
-  };
+  const base = agentBase(company, opts, toolIds);
 
   const agentId = await upsertAgentTolerant(buildAgentConfig(base), company.agentId, log);
   await hooks.onAgentSynced?.(agentId);
@@ -1066,11 +1079,40 @@ async function bindPhoneNumber(company) {
 }
 
 // ─── Outbound ─────────────────────────────────────────────────────
+// The request body, built apart from sending it so its shape can be checked
+// without a network.
+function outboundCallBody({ company, toNumber, variables = {}, firstMessage = null, voiceId = null }) {
+  const clientData = {};
+  // company_id travels as a dynamic variable for observability only. The
+  // webhook path never trusts it — see resolveCompanyForEvent.
+  const dynamic = { ...variables, company_id: company.id };
+  clientData.dynamic_variables = dynamic;
+  const override = {};
+  if (firstMessage) {
+    // Requires platform_settings.overrides.…first_message = true, which
+    // buildAgentConfig sets on every sync.
+    override.agent = { first_message: firstMessage };
+  }
+  if (voiceId) {
+    // Same requirement for overrides.tts.voice_id, also set on every sync. It
+    // lets a test call speak with a voice the company has not published.
+    override.tts = { voice_id: voiceId };
+  }
+  if (Object.keys(override).length) clientData.conversation_config_override = override;
+
+  return {
+    agent_id             : company.agentId,
+    agent_phone_number_id: company.phoneNumberId,
+    to_number            : toNumber,
+    conversation_initiation_client_data: clientData,
+  };
+}
+
 /**
  * Place a call through the company's OWN imported number, so the customer sees
  * the company's real DID and the leg routes back through their 3CX trunk.
  */
-async function startOutboundCall({ company, toNumber, variables = {}, firstMessage = null }) {
+async function startOutboundCall({ company, toNumber, variables = {}, firstMessage = null, voiceId = null }) {
   if (!company.agentId) {
     const err = new Error('company has no agent'); err.code = 'NOT_PUBLISHED'; throw err;
   }
@@ -1081,23 +1123,8 @@ async function startOutboundCall({ company, toNumber, variables = {}, firstMessa
     const err = new Error('invalid destination number'); err.code = 'BAD_NUMBER'; throw err;
   }
 
-  const clientData = {};
-  // company_id travels as a dynamic variable for observability only. The
-  // webhook path never trusts it — see resolveCompanyForEvent.
-  const dynamic = { ...variables, company_id: company.id };
-  clientData.dynamic_variables = dynamic;
-  if (firstMessage) {
-    // Requires platform_settings.overrides.…first_message = true, which
-    // buildAgentConfig sets on every sync.
-    clientData.conversation_config_override = { agent: { first_message: firstMessage } };
-  }
-
-  const r = await post('/v1/convai/sip-trunk/outbound-call', {
-    agent_id             : company.agentId,
-    agent_phone_number_id: company.phoneNumberId,
-    to_number            : toNumber,
-    conversation_initiation_client_data: clientData,
-  });
+  const r = await post('/v1/convai/sip-trunk/outbound-call',
+    outboundCallBody({ company, toNumber, variables, firstMessage, voiceId }));
 
   const d = r.data || {};
   if (d.success === false) {
@@ -1175,7 +1202,7 @@ module.exports = {
   getAgent, getWorkspaceSettings,
   // exported for tests
   buildAgentConfig, buildKbToolConfig, buildFeatureToolConfig, buildTrunkConfig,
-  upsertTool, deleteTool, mapEndedReason,
+  agentBase, outboundCallBody, upsertTool, deleteTool, mapEndedReason,
   normalizeConversation, extractStructuredData, errText, DATA_COLLECTION,
   usdFromCredits, webhookSecret,
 };

@@ -30,7 +30,7 @@ export default {
         // public site already uses so the two never drift apart.
         //
         // 300 (#C5A677) is the only bronze that stays legible on a dark
-        // ground, which is why the sidebar is tinted with it.
+        // ground; on the white chrome the official 600 is used as-is.
         brand: {
           50  : '#FAF6F0',
           100 : '#F1E8DA',

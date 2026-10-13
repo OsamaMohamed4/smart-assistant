@@ -902,7 +902,7 @@ function PromptPreviewModal({ open, onClose, companyId, instructionPrompt }) {
 
   return (
     <Modal open={open} onClose={onClose} size="lg" title="معاينة التعليمات النهائية"
-      description="هذا بالضبط ما يصل إلى المساعد على ElevenLabs — السيناريو + قاعدة المعرفة + قاعدة الإنهاء.">
+      description="هذا بالضبط ما يصل إلى المساعد الصوتي — السيناريو + قاعدة المعرفة + قاعدة الإنهاء.">
       {busy && <div className="text-center py-8 text-ink-400 text-[13px]">جارٍ التحميل…</div>}
       {data?.error && <div className="bg-rose-50 text-rose-700 rounded-xl p-3 text-[13px]">{data.error}</div>}
       {data?.prompt && (
@@ -1263,11 +1263,30 @@ function InboundPromptCard({ scenario, update }) {
   );
 }
 
+// Readable names for the LLMs the server allows. An id missing here is shown
+// as itself rather than hidden.
+const MODEL_LABELS = {
+  'gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite',
+  'gemini-3.1-flash-lite': 'Gemini 3.1 Flash Lite',
+  'gpt-4.1'     : 'GPT-4.1',
+  'gpt-4o'      : 'GPT-4o',
+  'gpt-4.1-mini': 'GPT-4.1 mini',
+  'gpt-4o-mini' : 'GPT-4o mini',
+};
+
 // Company-level voice + model tuning. Saved to the company (not the scenario);
 // applied on the next نشر. All values are clamped server-side.
+//
+// The form opens on the platform defaults with the company's own choices over
+// them, and saves ONLY what was changed here. Saving the whole form used to
+// write every pre-filled default into the company -- gpt-4.1 included -- which
+// then outranked the platform defaults on every later publish.
 function VoiceSettingsCard({ companyId }) {
   const { push } = useToast();
   const [s, setS]       = useState(null);
+  const [opened, setOpened] = useState(null);
+  const [defaults, setDefaults] = useState({});
+  const [models, setModels] = useState([]);
   const [saving, setSaving] = useState(false);
   // The phone-number binding is superadmin-only server-side (it decides which
   // real phone line belongs to which tenant). Hide it for everyone else rather
@@ -1278,16 +1297,19 @@ function VoiceSettingsCard({ companyId }) {
   // client saving an unrelated slider would trip the superadmin guard.
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [phoneNumberIdSaved, setPhoneNumberIdSaved] = useState('');
+  const [voices, setVoices] = useState([]);
 
   useEffect(() => {
     api.me().then((r) => setIsSuper(r?.user?.role === 'superadmin')).catch(() => {});
-    api.getCompany(companyId)
-      .then((c) => {
-        setS({
-          model: 'gpt-4.1', temperature: 0.3, maxTokens: 400,
-          stability: 0.8,
-          ...(c.settings || {}),
-        });
+    api.listVoices().then(setVoices).catch(() => {});
+    Promise.all([api.agentDefaults().catch(() => ({})), api.getCompany(companyId)])
+      .then(([d, c]) => {
+        const { models: allowed = [], ...base } = d || {};
+        const initial = { ...base, ...(c.settings || {}) };
+        setDefaults(base);
+        setModels(allowed);
+        setS(initial);
+        setOpened(initial);
         setPhoneNumberId(c.phoneNumberId || '');
         setPhoneNumberIdSaved(c.phoneNumberId || '');
       })
@@ -1297,11 +1319,19 @@ function VoiceSettingsCard({ companyId }) {
   const save = async () => {
     setSaving(true);
     try {
-      const payload = { ...s };
+      const payload = {};
+      for (const [k, v] of Object.entries(s)) {
+        if (opened?.[k] !== v) payload[k] = v;
+      }
       if (isSuper && phoneNumberId !== phoneNumberIdSaved) {
         payload.elevenlabsPhoneNumberId = phoneNumberId.trim();
       }
+      if (!Object.keys(payload).length) {
+        push('لا يوجد تغيير للحفظ', 'info');
+        return;
+      }
       await api.updateCompanySettings(companyId, payload);
+      setOpened(s);
       setPhoneNumberIdSaved(phoneNumberId);
       push('تم حفظ الإعدادات — تظهر بعد النشر', 'success');
     } catch (e) { push(e.message, 'error'); }
@@ -1309,7 +1339,12 @@ function VoiceSettingsCard({ companyId }) {
   };
 
   if (!s) return null;
+  const modelOptions = models.length ? models : [s.model].filter(Boolean);
   const num = (k) => (e) => setS((x) => ({ ...x, [k]: Number(e.target.value) }));
+  // A company that never picked a voice speaks with the default, so the
+  // default is what the list shows for it rather than an empty choice.
+  const shownVoiceId = s.voiceId || voices.find((v) => v.isDefault)?.id || '';
+  const offList = voices.length > 0 && s.voiceId && !voices.some((v) => v.id === s.voiceId);
 
   return (
     <Card>
@@ -1336,23 +1371,39 @@ function VoiceSettingsCard({ companyId }) {
             </p>
           </div>
         )}
+        <div className="sm:col-span-2">
+          <Label>صوت الوكيل</Label>
+          <select value={shownVoiceId} onChange={(e) => setS((x) => ({ ...x, voiceId: e.target.value }))}
+            className="w-full h-10 px-3 bg-white border border-ink-200 rounded-xl text-[13px] focus-ring">
+            {voices.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.label} — {v.description}{v.isDefault ? ' (الافتراضي)' : ''}
+              </option>
+            ))}
+            {/* A voice enabled through EXTRA_VOICE_IDS is valid but has no
+                catalogue entry; show its id rather than a wrong name. */}
+            {offList && <option value={s.voiceId}>{s.voiceId}</option>}
+          </select>
+          <p className="text-[10.5px] text-ink-400 mt-1">يُطبَّق بعد النشر — تأكد أن اسم الوكيل في السيناريو يناسب الصوت.</p>
+        </div>
         <div>
           <Label>الموديل</Label>
-          <select value={s.model} onChange={(e) => setS((x) => ({ ...x, model: e.target.value }))}
+          <select value={s.model || ''} onChange={(e) => setS((x) => ({ ...x, model: e.target.value }))}
             className="w-full h-10 px-3 bg-white border border-ink-200 rounded-xl text-[13px] focus-ring">
-            <option value="gpt-4.1">gpt-4.1 (أعلى جودة — موصى به)</option>
-            <option value="gpt-4o">gpt-4o (جودة عالية)</option>
-            <option value="gpt-4.1-mini">gpt-4.1-mini (أسرع/أرخص)</option>
-            <option value="gpt-4o-mini">gpt-4o-mini (الأسرع)</option>
+            {modelOptions.map((m) => (
+              <option key={m} value={m}>
+                {MODEL_LABELS[m] || m}{m === defaults.model ? ' (الافتراضي)' : ''}
+              </option>
+            ))}
           </select>
         </div>
-        <RangeField label="ثبات الصوت (stability)" value={s.stability ?? 0.8} min={0} max={1} step={0.05} onChange={num('stability')} />
-        <RangeField label="حرارة الردود (temperature)" value={s.temperature ?? 0.6} min={0} max={1} step={0.05} onChange={num('temperature')} />
+        <RangeField label="ثبات الصوت (stability)" value={s.stability ?? 0.55} min={0} max={1} step={0.05} onChange={num('stability')} />
+        <RangeField label="حرارة الردود (temperature)" value={s.temperature ?? 0.2} min={0} max={1} step={0.05} onChange={num('temperature')} />
         {/* Replaces the old "streaming latency 0-4" slider, which was a knob on
             the previous provider's TTS bridge and has no equivalent here.
             Speaking pace is the real, supported control. */}
-        <RangeField label="سرعة الكلام (speed)" value={s.voiceSpeed ?? 1.2} min={0.7} max={1.2} step={0.05} onChange={num('voiceSpeed')} />
-        <RangeField label="أقصى طول للرد (tokens)" value={s.maxTokens ?? 200} min={50} max={500} step={10} onChange={num('maxTokens')} />
+        <RangeField label="سرعة الكلام (speed)" value={s.voiceSpeed ?? 1} min={0.7} max={1.2} step={0.05} onChange={num('voiceSpeed')} />
+        <RangeField label="أقصى طول للرد (tokens)" value={s.maxTokens ?? 120} min={50} max={500} step={10} onChange={num('maxTokens')} />
         <div>
           <Label>رقم التحويل لموظف بشري</Label>
           <Input

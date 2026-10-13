@@ -447,6 +447,33 @@ test('per-call overrides are ENABLED, or personalised outbound greetings do noth
   assert.equal(o.tts.voice_id, true);
 });
 
+const CALLER = { id: 'co-a', agentId: 'agent_A', phoneNumberId: 'phnum_A' };
+
+test('an ordinary outbound call overrides the greeting and nothing about the voice', () => {
+  const b = el.outboundCallBody({
+    company: CALLER, toNumber: '+966500000000', variables: { customer_name: 'خالد' }, firstMessage: 'هلا',
+  });
+  const d = b.conversation_initiation_client_data;
+  assert.deepEqual(d.conversation_config_override, { agent: { first_message: 'هلا' } });
+  assert.equal(d.dynamic_variables.customer_name, 'خالد');
+  assert.equal(d.dynamic_variables.company_id, 'co-a');
+  assert.equal(b.agent_id, 'agent_A');
+  assert.equal(b.agent_phone_number_id, 'phnum_A');
+});
+
+test('a Playground voice travels as tts.voice_id, a field publishing permits', () => {
+  const b = el.outboundCallBody({ company: CALLER, toNumber: '+966500000000', voiceId: 'voice_2' });
+  const o = b.conversation_initiation_client_data.conversation_config_override;
+  assert.deepEqual(o, { tts: { voice_id: 'voice_2' } }, 'no greeting given, so none is overridden');
+  // The provider refuses the whole call if the agent does not allow the field.
+  assert.equal(cfgFor().platform_settings.overrides.conversation_config_override.tts.voice_id, true);
+});
+
+test('with neither a greeting nor a voice, no override object is sent', () => {
+  const b = el.outboundCallBody({ company: CALLER, toNumber: '+966500000000' });
+  assert.equal(b.conversation_initiation_client_data.conversation_config_override, undefined);
+});
+
 test('the agent is given a wall clock, or it cannot resolve "tomorrow at four"', () => {
   // prompt.timezone defaults to null, and null is not a soft failure for
   // appointment booking — the model has no reference point for any relative
@@ -467,10 +494,12 @@ test('the agent is given a wall clock, or it cannot resolve "tomorrow at four"',
   }
 });
 
-test('the greeting cannot be interrupted', () => {
-  // A caller's "ألو" lands on top of the greeting otherwise, and the company
-  // name gets cut in half on the very first thing the customer hears.
-  assert.equal(cfgFor().conversation_config.agent.disable_first_message_interruptions, true);
+test('the caller may talk over the greeting, as on the reference agent', () => {
+  // The reference agent (lib/agent-defaults.js) was tuned on real calls with
+  // interruptions allowed, so a customer who answers early is heard.
+  assert.equal(cfgFor().conversation_config.agent.disable_first_message_interruptions, false);
+  assert.equal(cfgFor({ interruptibleGreeting: false })
+    .conversation_config.agent.disable_first_message_interruptions, true);
 });
 
 test('prompt-injection screening is on', () => {
@@ -483,11 +512,11 @@ test('prompt-injection screening is on', () => {
   assert.equal(g.version, '1', 'the provider rejects a guardrails block with no version');
 });
 
-test('the TTS model stays on turbo v2.5 unless an operator opts out', () => {
-  // The expressive v3/v4 line supports Arabic but has never been heard on a
-  // real Saudi call here, and it drops tts.speed — which every company's pacing
-  // is tuned with. This test is the thing that makes flipping it deliberate.
-  assert.equal(cfgFor().conversation_config.tts.model_id, 'eleven_turbo_v2_5');
+test('the TTS model defaults to the reference agent\'s, eleven_v4', () => {
+  // Turbo v2.5 was held as the default until the expressive line had been
+  // heard on real Saudi calls. It has, on the reference agent, and the
+  // operator made that agent the default for everyone (2026-10-13).
+  assert.equal(cfgFor().conversation_config.tts.model_id, 'eleven_v4');
   assert.equal(cfgFor().conversation_config.tts.speed, 1.2, 'speed is still ours to set');
 });
 
@@ -532,30 +561,79 @@ test('a company can carry its own TTS model through publish', () => {
   // dashboard is lost on the next publish unless the company owns it.
   // Confirmed on the live API (2026-10-07): eleven_v3_conversational reverted
   // to eleven_turbo_v2_5 after a publish that did not carry it.
-  assert.equal(cfgFor().conversation_config.tts.model_id, 'eleven_turbo_v2_5',
-    'unchanged for every company that has not set one');
+  assert.equal(cfgFor().conversation_config.tts.model_id, 'eleven_v4',
+    'the reference model for every company that has not set one');
   assert.equal(
     cfgFor({ ttsModel: 'eleven_v3_conversational' }).conversation_config.tts.model_id,
     'eleven_v3_conversational');
 });
 
-test('expressive mode is carried, and off unless asked for', () => {
-  assert.equal(cfgFor().conversation_config.tts.expressive_mode, false);
-  assert.equal(cfgFor({ expressiveMode: true }).conversation_config.tts.expressive_mode, true);
+test('expressive mode is carried, and on unless a company turns it off', () => {
+  assert.equal(cfgFor().conversation_config.tts.expressive_mode, true);
+  assert.equal(cfgFor({ expressiveMode: false }).conversation_config.tts.expressive_mode, false);
 });
 
 test('turn pacing is carried, and -1 survives as "never end on silence"', () => {
-  // These were always parameters and were never supplied by the pipeline, so
-  // every agent got 15/30 regardless of its company. -1 is the provider's
-  // "do not end the call on silence"; a naive clamp to a positive minimum
-  // would turn an intentionally disabled timeout into a 5-second hang-up.
+  // The defaults are the reference agent's: 6s, and never hang up on silence.
+  // -1 is the provider's "do not end the call on silence"; a naive clamp to a
+  // positive minimum would turn it into a 5-second hang-up.
   const d = cfgFor().conversation_config.turn;
-  assert.equal(d.turn_timeout, 15);
-  assert.equal(d.silence_end_call_timeout, 30);
+  assert.equal(d.turn_timeout, 6);
+  assert.equal(d.silence_end_call_timeout, -1);
 
-  const t = cfgFor({ idleTimeoutSeconds: 6, silenceTimeoutSeconds: -1 }).conversation_config.turn;
-  assert.equal(t.turn_timeout, 6);
-  assert.equal(t.silence_end_call_timeout, -1);
+  const t = cfgFor({ idleTimeoutSeconds: 15, silenceTimeoutSeconds: 30 }).conversation_config.turn;
+  assert.equal(t.turn_timeout, 15);
+  assert.equal(t.silence_end_call_timeout, 30);
+});
+
+test('every voice setting the pipeline resolves actually reaches the agent', () => {
+  // THE BUG THIS GUARDS: syncAgent named only voice/stability/similarity/
+  // speed when building the agent, so ttsModel, expressive mode and turn
+  // pacing were dropped on the way -- every publish reset them to defaults,
+  // while the pipeline and buildAgentConfig each looked correct on their own.
+  const { resolveVoiceTuning } = require('../lib/agent-defaults');
+  const tuning = resolveVoiceTuning({
+    ttsModel: 'eleven_v3_conversational', expressiveMode: false,
+    turnTimeoutSeconds: 9, silenceEndCallSeconds: 45, voiceSpeed: 1.1,
+  });
+  const base = el.agentBase({ id: 'co-a', language: 'ar-SA' }, {
+    prompt: 'تعليمات', firstMessage: 'حياك الله', model: 'gemini-3.5-flash-lite',
+    temperature: 0.2, maxTokens: 120, voiceId: 'voice_1', ...tuning,
+  });
+  const cc = el.buildAgentConfig(base).conversation_config;
+  assert.equal(cc.tts.model_id, 'eleven_v3_conversational');
+  assert.equal(cc.tts.expressive_mode, false);
+  assert.equal(cc.tts.speed, 1.1);
+  assert.equal(cc.turn.turn_timeout, 9);
+  assert.equal(cc.turn.silence_end_call_timeout, 45);
+  assert.equal(cc.agent.prompt.llm, 'gemini-3.5-flash-lite');
+  assert.equal(cc.agent.disable_first_message_interruptions, false);
+});
+
+test('a company that chose nothing is published exactly as the reference agent', () => {
+  const { resolveVoiceTuning, resolveAgentModel } = require('../lib/agent-defaults');
+  const base = el.agentBase({ id: 'co-a', language: 'ar-SA' }, {
+    prompt: 'تعليمات', firstMessage: 'حياك الله', voiceId: 'voice_1',
+    ...resolveAgentModel({}), ...resolveVoiceTuning({}),
+  });
+  const cc = el.buildAgentConfig(base).conversation_config;
+  // The live "Wakan - Nasser" agent, as read from the API on 2026-10-13.
+  assert.deepEqual({
+    llm: cc.agent.prompt.llm, temperature: cc.agent.prompt.temperature, max_tokens: cc.agent.prompt.max_tokens,
+    model_id: cc.tts.model_id, expressive_mode: cc.tts.expressive_mode,
+    stability: cc.tts.stability, similarity_boost: cc.tts.similarity_boost, speed: cc.tts.speed,
+    turn_timeout: cc.turn.turn_timeout, silence_end_call_timeout: cc.turn.silence_end_call_timeout,
+    disable_first_message_interruptions: cc.agent.disable_first_message_interruptions,
+  }, {
+    llm: 'gemini-3.5-flash-lite', temperature: 0.2, max_tokens: 120,
+    model_id: 'eleven_v4', expressive_mode: true,
+    stability: 0.55, similarity_boost: 0.75, speed: 1,
+    turn_timeout: 6, silence_end_call_timeout: -1,
+    disable_first_message_interruptions: false,
+  });
+  // What the reference does NOT get to change: Saudi time, injection screening.
+  assert.equal(cc.agent.prompt.timezone, 'Asia/Riyadh');
+  assert.equal(el.buildAgentConfig(base).platform_settings.guardrails.prompt_injection.is_enabled, true);
 });
 
 test('the fields that survive a publish are still NOT sent', () => {

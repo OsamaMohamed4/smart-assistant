@@ -17,6 +17,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { CampaignsPage } from './pages/CampaignsPage';
 import { AuditPage } from './pages/AuditPage';
 import { RequestsPage } from './pages/RequestsPage';
+import { UsagePage } from './pages/UsagePage';
 import { ToastProvider } from './components/ui/Toast';
 import { api, setUnauthenticatedHandler } from './lib/api';
 
@@ -150,11 +151,12 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
   // 'profile' (company facts) is visible everywhere the knowledge base is: it
   // is the company's own content, and a workspace owner edits their own.
   // 'requests' is open to clients too: the leads are theirs to work.
+  // 'usage' too: a client sees their own consumption, the server pins it.
   const allowedTabs = isWorkspace
-    ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'sessions', 'requests', 'campaigns'])
+    ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'sessions', 'requests', 'campaigns', 'usage'])
     : isSuper
-      ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'clients', 'sessions', 'requests', 'campaigns', 'audit'])
-      : new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'sessions', 'requests', 'campaigns']);
+      ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'clients', 'sessions', 'requests', 'campaigns', 'usage', 'audit'])
+      : new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'sessions', 'requests', 'campaigns', 'usage']);
   const activeTab = allowedTabs.has(tab) ? tab : 'dashboard';
 
   return (
@@ -169,12 +171,12 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         onClose={() => setNavOpen(false)}
       />
       <div className="flex-1 min-w-0 flex flex-col">
-        <header className="lg:hidden sticky top-0 z-30 flex items-center gap-2 h-14 px-3 bg-ink-950 text-white border-b border-ink-800/60">
-          <button onClick={() => setNavOpen(true)} aria-label="فتح القائمة" className="w-11 h-11 rounded-lg flex items-center justify-center text-ink-200 hover:bg-white/10 active:bg-white/[0.15] transition-colors">
+        <header className="lg:hidden sticky top-0 z-30 flex items-center gap-2 h-14 px-3 bg-white text-ink-900 border-b border-ink-100">
+          <button onClick={() => setNavOpen(true)} aria-label="فتح القائمة" className="w-11 h-11 rounded-lg flex items-center justify-center text-ink-600 hover:bg-ink-50 active:bg-ink-100 transition-colors">
             <Menu className="w-5 h-5" />
           </button>
           <div className="flex items-center gap-2 flex-1 min-w-0">
-            <MasarMark className="h-5 shrink-0 text-[#C5A677]" title="مسار" />
+            <MasarMark className="h-5 shrink-0 text-brand-600" title="مسار" />
             <span className="text-[14px] font-semibold truncate">مسار</span>
           </div>
         </header>
@@ -184,7 +186,7 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         {activeTab === 'knowledge'  && <KnowledgeBasesPage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'profile'    && <BusinessProfilePage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'capabilities' && <CapabilitiesPage pinnedCompanyId={pinnedCompanyId} />}
-        {activeTab === 'playground' && <PlaygroundPage pinnedCompanyId={pinnedCompanyId} />}
+        {activeTab === 'playground' && <PlaygroundPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'companies' && (isSuper || isWorkspace) && (
           <CompaniesPage pinnedCompanyId={pinnedCompanyId} user={user} />
         )}
@@ -192,6 +194,7 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         {activeTab === 'sessions'  && <SessionsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'requests'  && <RequestsPage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'campaigns' && <CampaignsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
+        {activeTab === 'usage'     && <UsagePage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'audit'     && isSuper && !isWorkspace && <AuditPage />}
         </main>
       </div>

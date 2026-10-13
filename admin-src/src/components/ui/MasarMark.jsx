@@ -2,10 +2,10 @@
 // path the public site uses, so the two never drift apart.
 //
 // Filled with currentColor rather than a baked-in brand value: one CSS colour
-// recolours it, and no separate reversed artwork is needed for the dark
-// sidebar. The viewBox starts at a non-zero origin because that is where the
-// glyph sits in the source file; normalising it would require re-cutting the
-// path, and a wrong offset puts the artwork off-screen entirely.
+// recolours it, so a dark ground needs no separate reversed artwork. The
+// viewBox starts at a non-zero origin because that is where the glyph sits in
+// the source file; normalising it would require re-cutting the path, and a
+// wrong offset puts the artwork off-screen entirely.
 export function MasarMark({ className = '', title }) {
   return (
     <svg

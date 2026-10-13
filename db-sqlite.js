@@ -703,6 +703,34 @@ if (!db.prepare('SELECT 1 FROM schema_migrations WHERE id = 39').get()) {
   })();
 }
 
+// Migration 40: ناصر becomes {{agent_name}} in every scenario, at the
+// operator's request (templateAgentName, lib/voices.js), so the name follows
+// the company's voice. Each scenario's text as it was goes into its history
+// first, so السجل can bring it back. Postgres: lib/migrations-pg.js.
+if (!db.prepare('SELECT 1 FROM schema_migrations WHERE id = 40').get()) {
+  const { templateAgentName } = require('./lib/voices');
+  const FIELDS = ['first_message', 'first_message_inbound', 'instruction_prompt', 'instruction_prompt_inbound'];
+  const snapshot = db.prepare(`
+    INSERT INTO scenario_versions
+      (scenario_id, company_id, name, first_message, first_message_inbound, instruction_prompt, edited_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  const update = db.prepare(`
+    UPDATE scenarios SET first_message = ?, first_message_inbound = ?, instruction_prompt = ?,
+                         instruction_prompt_inbound = ?, updated_at = datetime('now')
+     WHERE id = ?`);
+  db.transaction(() => {
+    for (const s of db.prepare(`SELECT id, company_id, name, ${FIELDS.join(', ')} FROM scenarios`).all()) {
+      const next = FIELDS.map((k) => templateAgentName(s[k]));
+      if (!next.some((f) => f.count)) continue;
+      snapshot.run(s.id, s.company_id, s.name, s.first_message, s.first_message_inbound || '',
+        s.instruction_prompt, 'النظام: ناصر ← {{agent_name}}');
+      update.run(...next.map((f) => f.text), s.id);
+    }
+    db.prepare('INSERT INTO schema_migrations (id, name) VALUES (40, ?)')
+      .run('replace_nasser_with_agent_name');
+  })();
+}
+
 // ─── Tenant-safety: one company per phone number ──────────────────
 // A DID and an imported provider number each identify exactly ONE tenant.
 // Inbound calls are attributed by those values (services/voice resolves a call

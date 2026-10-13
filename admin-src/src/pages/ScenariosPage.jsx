@@ -957,9 +957,10 @@ function ScenarioTab({ scenario, update }) {
             <p className="text-[12px] text-ink-500 mt-1 max-w-2xl">
               ما يقوله الوكيل عندما نتصل نحن بالعميل. اسمه معروف، فاستخدم {'{'}{'{'} customer_name {'}'}{'}'}.
             </p>
+            <NameHint />
           </div>
           <button
-            onClick={() => update({ firstMessage: scenario.firstMessage ? '' : 'مرحباً {{customer_name}}، معك {{agent_name}} من شركتنا.' })}
+            onClick={() => update({ firstMessage: scenario.firstMessage ? '' : 'مرحباً {{customer_name}}، معك {{agent_name}} من {{company_name}}، كيف أقدر أساعدك اليوم؟' })}
             className="text-[11.5px] text-ink-500 hover:text-ink-800"
           >
             {scenario.firstMessage ? 'إفراغ' : 'مثال'}
@@ -969,7 +970,7 @@ function ScenarioTab({ scenario, update }) {
           value={scenario.firstMessage}
           onChange={(e) => update({ firstMessage: e.target.value })}
           rows={3}
-          placeholder="مرحباً {{customer_name}}، معك {{agent_name}} من..."
+          placeholder="مرحباً {{customer_name}}، معك {{agent_name}} من {{company_name}}..."
         />
       </Card>
 
@@ -981,9 +982,10 @@ function ScenarioTab({ scenario, update }) {
             <p className="text-[12px] text-ink-500 mt-1 max-w-2xl">
               ما يقوله الوكيل عندما يتصل العميل بنا. اسمه غير معروف، فلا تستخدم {'{'}{'{'} customer_name {'}'}{'}'}؛ ابدأ بتحية عامة.
             </p>
+            <NameHint />
           </div>
           <button
-            onClick={() => update({ firstMessageInbound: scenario.firstMessageInbound ? '' : 'حياك الله، معك {{agent_name}} من شركتنا، كيف يقدر أساعدك؟' })}
+            onClick={() => update({ firstMessageInbound: scenario.firstMessageInbound ? '' : 'حياك الله في {{company_name}}، معك {{agent_name}}، كيف أقدر أساعدك اليوم؟' })}
             className="text-[11.5px] text-ink-500 hover:text-ink-800"
           >
             {scenario.firstMessageInbound ? 'إفراغ' : 'مثال'}
@@ -993,7 +995,7 @@ function ScenarioTab({ scenario, update }) {
           value={scenario.firstMessageInbound || ''}
           onChange={(e) => update({ firstMessageInbound: e.target.value })}
           rows={3}
-          placeholder="حياك الله، معك {{agent_name}} من..."
+          placeholder="حياك الله في {{company_name}}، معك {{agent_name}}..."
         />
       </Card>
 
@@ -1263,6 +1265,20 @@ function InboundPromptCard({ scenario, update }) {
   );
 }
 
+// The two names the platform fills in, so a greeting never hard-codes them:
+// a written name would stay put when the company's voice changes between a
+// man's and a woman's, and a copied scenario would carry another company's
+// name into this one's calls.
+function NameHint() {
+  const code = 'px-1 rounded bg-ink-100 text-ink-700 font-mono text-[11px]';
+  return (
+    <p className="text-[11.5px] text-ink-500 mt-1 max-w-2xl leading-relaxed">
+      اكتب <span dir="ltr" className={code}>{'{{agent_name}}'}</span> مكان اسم الوكيل — يتغيّر تلقائياً مع صوت الشركة (منى أو جداوي) —
+      و<span dir="ltr" className={code}>{'{{company_name}}'}</span> مكان اسم الشركة.
+    </p>
+  );
+}
+
 // Readable names for the LLMs the server allows. An id missing here is shown
 // as itself rather than hidden.
 const MODEL_LABELS = {
@@ -1359,7 +1375,7 @@ function VoiceSettingsCard({ companyId }) {
             any more. Superadmin-only — it binds a tenant to a real phone line. */}
         {isSuper && (
           <div className="sm:col-span-2">
-            <Label>معرّف رقم ElevenLabs (رقم 3CX المستورد)</Label>
+            <Label>معرّف الرقم المستورد (رقم 3CX)</Label>
             <Input
               value={phoneNumberId}
               onChange={(e) => setPhoneNumberId(e.target.value)}
@@ -1367,7 +1383,7 @@ function VoiceSettingsCard({ companyId }) {
               dir="ltr"
             />
             <p className="mt-1 text-[11px] text-ink-500 leading-relaxed">
-              رقم الشركة نفسه على 3CX بعد استيراده إلى ElevenLabs. يُستخدم للمكالمات الواردة والصادرة معاً.
+              رقم الشركة نفسه على 3CX بعد استيراده للمنصة. يُستخدم للمكالمات الواردة والصادرة معاً.
             </p>
           </div>
         )}

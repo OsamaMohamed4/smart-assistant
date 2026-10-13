@@ -106,11 +106,10 @@ export function CompanyCard({ company, onEdit, onSync, onBindPhone, onImportPhon
       <div className="px-5 py-3 border-t border-ink-100 bg-ink-50/40 flex items-center justify-between gap-2">
         <div className="text-[11.5px] text-ink-500 flex items-center gap-1.5 truncate">
           <Bot className="w-3 h-3 shrink-0" />
-          {/* The agent id is the voice provider's own identifier: useful to
-              the operator, meaningless to a client and a pointer to the
-              vendor behind the product. */}
-          <span className={cn('truncate', canManage && synced && 'font-mono')}>
-            {synced ? (canManage ? c.agentId.slice(0, 8) + '…' : 'المساعد منشور') : 'لم يُنشر بعد'}
+          {/* Not the agent id: that is the voice provider's own identifier,
+              and no screen names the vendor behind the product. */}
+          <span className="truncate">
+            {synced ? 'المساعد منشور' : 'لم يُنشر بعد'}
           </span>
         </div>
         <Button variant="brand" size="sm" onClick={() => onSync(c)} loading={syncing} className="gap-1.5">

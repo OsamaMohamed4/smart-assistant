@@ -860,7 +860,9 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
   const activeScenario = await sql.getActiveScenarioForCompany.get(c.id);
   // Same unresolved-{{agent_name}} trap as the publish path: an override sent
   // with a global still in it makes the provider refuse the call outright.
-  const firstMessage = fillGlobals(activeScenario?.first_message || null, c);
+  // A test of the other voice introduces that voice, not the company's own.
+  const firstMessage = fillGlobals(activeScenario?.first_message || null, c,
+    { voiceId: voiceOverride || undefined });
 
   try {
     const { callId, callRef, status } = await voice.startOutboundCall({
@@ -1733,10 +1735,10 @@ app.post('/api/companies/:id/sync-voice', requireCompanyAccess, handlePublishCom
 app.post('/api/companies/:id/bind-phone', requireCompanyAdmin, async (req, res) => {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
-  if (!c.agentId) return res.status(400).json({ error: 'انشر الشركة على ElevenLabs أولاً.', code: 'NOT_PUBLISHED' });
+  if (!c.agentId) return res.status(400).json({ error: 'انشر الشركة أولاً.', code: 'NOT_PUBLISHED' });
   if (!c.phoneNumberId) {
     return res.status(400).json({
-      error: 'اضبط معرّف رقم ElevenLabs لهذه الشركة أولاً (حتى لا يُربط رقم شركة أخرى).',
+      error: 'استورد رقم الشركة أولاً (حتى لا يُربط رقم شركة أخرى).',
       code : 'NO_PHONE_NUMBER_ID',
     });
   }
@@ -2327,7 +2329,7 @@ function detectVariables(prevConfig, ...texts) {
   const out  = [];
   const re   = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
   const GLOBAL = new Set([
-    'agent_name', 'agent_gender', 'date', 'time', 'user_phone_number',
+    'agent_name', 'agent_gender', 'company_name', 'date', 'time', 'user_phone_number',
   ]);
   for (const text of texts) {
     if (!text) continue;
@@ -2662,14 +2664,17 @@ const SCENARIO_GEN_SYSTEM = `أنت مهندس سيناريوهات لمنصة V
 1. اسم واضح ومهني للسيناريو بالإنجليزية (مثل "Telecom Customer Service")
 2. رسالتين افتتاحيتين بالعربية بصيغتين منفصلتين:
    (a) first_message — للمكالمات الصادرة (outbound). نعرف اسم العميل، استخدم {{customer_name}}:
-       "مرحباً {{customer_name}}، معك {{agent_name}} من <اسم الشركة الحقيقي>، كيف يقدر أساعدك اليوم؟"
+       "مرحباً {{customer_name}}، معك {{agent_name}} من {{company_name}}، كيف أقدر أساعدك اليوم؟"
    (b) first_message_inbound — للمكالمات الواردة (inbound). ما نعرف اسم العميل، استخدم تحية عامة:
-       "حياك الله في <اسم الشركة الحقيقي>، معك {{agent_name}}، كيف يقدر أساعدك اليوم؟"
-   - {{agent_name}} في الاتنين = اسم بشري للوكيل (هيتعبّى تلقائياً باسم الصوت المختار).
-   - اسم الشركة اكتبه صريح كما هو (مثلاً: "وكن العقارية") — مش متغير.
+       "حياك الله في {{company_name}}، معك {{agent_name}}، كيف أقدر أساعدك اليوم؟"
+   - {{agent_name}} = اسم الوكيل، يتعبّى تلقائياً من صوت الشركة. لا تكتب اسم وكيل صريح أبداً:
+     الصوت ممكن يكون رجالي أو نسائي، والاسم المكتوب ما يتغيّر معه.
+   - {{company_name}} = اسم الشركة، يتعبّى تلقائياً. استخدمه بدل كتابة اسم الشركة.
    - متخليش الـ agent يقول "أنا [اسم الشركة]" — هو شخص يعمل في الشركة، مش الشركة نفسها.
 3. instruction prompt تفصيلي بالعربية يحتوي على الأقسام التالية بالترتيب:
-   - AGENT IDENTITY & PURPOSE — مين هو، ويشتغل عند مين، وإيش هدفه من المكالمة
+   - AGENT IDENTITY & PURPOSE — مين هو، ويشتغل عند مين، وإيش هدفه من المكالمة.
+     اكتب الهوية هكذا: "أنت {{agent_name}} من {{company_name}}، وتتكلم بصيغة {{agent_gender}}."
+     بدون أي اسم وكيل أو اسم شركة مكتوب صريح.
    - TONE & STYLE (Saudi Najdi Arabic dialect, lahjet اللهجة السعودية)
      لازم يتضمن قاعدة الاختصار: الوكيل على تلفون مش في شات. جمل قصيرة،
      جملة أو جملتين في الرد الواحد، بدون مقدمات ولا تلخيص لكلام العميل.

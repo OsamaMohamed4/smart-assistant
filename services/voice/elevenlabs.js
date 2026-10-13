@@ -1006,10 +1006,10 @@ async function importPhoneNumber(company, sip = {}) {
         { ...trunk, ...agentField });
       return { phoneNumberId: raced.phone_number_id, phoneNumber, reused: true };
     }
+    // Shown on the operator's screen, which never names the voice vendor.
     const err = new Error(
-      `${phoneNumber} is already registered to a DIFFERENT ElevenLabs workspace. `
-      + 'A number can only be imported once across the whole platform — release it there first, '
-      + 'or contact ElevenLabs support.');
+      `الرقم ${phoneNumber} مسجّل بالفعل في حساب آخر لدى مزوّد الصوت. `
+      + 'الرقم يُستورد مرة واحدة فقط — احذفه من الحساب الآخر أولاً.');
     err.code = 'PHONE_NUMBER_TAKEN';
     throw err;
   }
@@ -1062,7 +1062,7 @@ async function findPhoneNumber(phoneNumber) {
 async function bindPhoneNumber(company) {
   const phoneNumberId = company.phoneNumberId;
   if (!phoneNumberId) {
-    const err = new Error('company has no ElevenLabs phone number id — import the 3CX number first');
+    const err = new Error('company has no imported phone number id — import the 3CX number first');
     err.code = 'NO_PHONE_NUMBER_ID';
     throw err;
   }

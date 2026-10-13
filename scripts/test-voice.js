@@ -534,9 +534,35 @@ test('{{agent_name}} is resolved before a first message reaches the provider', (
   const { fillGlobals } = require('../companies');
   const company = { id: 'co-a', name: 'وكن العقارية' };
 
-  const filled = fillGlobals('حياك الله في وكن، معك {{agent_name}}، كيف أقدر أساعدك؟', company);
-  assert.ok(!filled.includes('{{agent_name}}'), 'the provider rejects the call if this survives');
-  assert.ok(filled.includes('وكن العقارية'), 'resolved to the company name');
+  const filled = fillGlobals('حياك الله في {{company_name}}، معك {{agent_name}}، كيف أقدر أساعدك؟', company);
+  assert.ok(!filled.includes('{{'), 'the provider rejects the call if a global survives');
+  assert.equal(filled, 'حياك الله في وكن العقارية، معك جداوي، كيف أقدر أساعدك؟',
+    'the agent is named after its voice, the company after itself');
+});
+
+test('the agent\'s name and gender follow the company\'s voice', () => {
+  // One greeting serves either voice. It used to resolve {{agent_name}} to the
+  // company's own name, so agents introduced themselves as "معك MASAR".
+  const { fillGlobals } = require('../companies');
+  const t = 'معك {{agent_name}}، تكلّم بصيغة {{agent_gender}}';
+  const mona = { id: 'co-a', name: 'س', settings: { voiceId: 'o0oG1TnHDWDdKbAeBgCO' } };
+  assert.equal(fillGlobals(t, mona), 'معك منى، تكلّم بصيغة المؤنث');
+  assert.equal(fillGlobals(t, { id: 'co-b', name: 'س' }), 'معك جداوي، تكلّم بصيغة المذكر', 'no voice chosen: the default');
+  // A test call on the other voice introduces that voice.
+  assert.equal(fillGlobals(t, mona, { voiceId: 'yXEnnEln9armDCyhkXcA' }), 'معك جداوي، تكلّم بصيغة المذكر');
+  // A voice with no catalogue entry has no name of its own.
+  assert.equal(fillGlobals('{{agent_name}}', { id: 'co-c', name: 'س', settings: { voiceId: 'extra123' } }), 'المساعد');
+});
+
+test('ناصر becomes {{agent_name}} only where it is the whole word', () => {
+  const { templateAgentName } = require('../lib/voices');
+  assert.deepEqual(templateAgentName('أنت "ناصر" من الشركة'), { text: 'أنت "{{agent_name}}" من الشركة', count: 1 });
+  assert.deepEqual(templateAgentName('معك ناصر، كيف أقدر أساعدك؟ أنا ناصر'),
+    { text: 'معك {{agent_name}}، كيف أقدر أساعدك؟ أنا {{agent_name}}', count: 2 });
+  for (const keep of ['حي الناصرية', 'ناصري', 'والناصر', 'مناصرة']) {
+    assert.deepEqual(templateAgentName(keep), { text: keep, count: 0 }, keep);
+  }
+  assert.deepEqual(templateAgentName(null), { text: null, count: 0 });
 });
 
 test('per-call placeholders SURVIVE that resolution', () => {
@@ -1022,7 +1048,8 @@ test('a number held by ANOTHER workspace fails with an actionable message', asyn
       ),
       (e) => {
         assert.equal(e.code, 'PHONE_NUMBER_TAKEN');
-        assert.match(e.message, /different elevenlabs workspace/i);
+        assert.match(e.message, /مسجّل بالفعل في حساب آخر/);
+        assert.doesNotMatch(e.message, /elevenlabs/i, 'the operator\'s screen never names the vendor');
         return true;
       },
     );

@@ -186,7 +186,7 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         {activeTab === 'knowledge'  && <KnowledgeBasesPage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'profile'    && <BusinessProfilePage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'capabilities' && <CapabilitiesPage pinnedCompanyId={pinnedCompanyId} />}
-        {activeTab === 'playground' && <PlaygroundPage user={user} pinnedCompanyId={pinnedCompanyId} />}
+        {activeTab === 'playground' && <PlaygroundPage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'companies' && (isSuper || isWorkspace) && (
           <CompaniesPage pinnedCompanyId={pinnedCompanyId} user={user} />
         )}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Sparkles, CheckCircle2, AlertTriangle, User as UserIcon, Volume2,
   Phone, Settings2, MessageSquare, Mic, Send, Loader2, RotateCcw,
-  ArrowUpRight, Hash,
+  Hash,
 } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { Badge } from '../components/ui/Badge';
@@ -27,11 +27,13 @@ import { cn, relTime } from '../lib/utils';
 //           knowledge base, minus the audio. Useful for iterating on wording.
 //
 // What you test here is what callers get on the phone for real.
-const GLOBAL_VARS = new Set(['agent_name', 'date', 'time']);
+//
+// Filled by the platform, never asked for here: the agent's name and gender
+// come from the voice, the company's name from the company.
+const GLOBAL_VARS = new Set(['agent_name', 'agent_gender', 'company_name', 'date', 'time']);
 
-export function PlaygroundPage({ user, pinnedCompanyId }) {
+export function PlaygroundPage({ pinnedCompanyId }) {
   const { push } = useToast();
-  const isSuper = user?.role === 'superadmin';
   const [companies, setCompanies] = useState([]);
   const [companyId, setCompanyId] = useState(pinnedCompanyId || null);
   const [voices, setVoices]       = useState([]);
@@ -102,6 +104,8 @@ export function PlaygroundPage({ user, pinnedCompanyId }) {
     [voices, voiceId],
   );
   const agentName = selectedVoice?.label || selectedVoice?.name || 'المساعد';
+  // Same words the server fills {{agent_gender}} with (companies.js).
+  const agentGender = selectedVoice?.gender === 'female' ? 'المؤنث' : 'المذكر';
 
   const userVars = useMemo(() => {
     if (!scenario?.variables) return [];
@@ -109,8 +113,8 @@ export function PlaygroundPage({ user, pinnedCompanyId }) {
   }, [scenario]);
   const missingRequired = userVars.some((v) => v.required && !vars[v.name]?.trim());
   const runtimeVars     = useMemo(
-    () => ({ ...vars, agent_name: agentName }),
-    [vars, agentName],
+    () => ({ ...vars, agent_name: agentName, agent_gender: agentGender }),
+    [vars, agentName, agentGender],
   );
 
   const published = !!activeCompany?.agentId;
@@ -374,17 +378,6 @@ export function PlaygroundPage({ user, pinnedCompanyId }) {
                 <p className="mt-2 text-[11.5px] text-ink-500 leading-relaxed line-clamp-3">
                   «{scenario.firstMessage}»
                 </p>
-              )}
-              {/* A deep link into the voice provider's console: an operator
-                  tool, and it would name the vendor to a client. */}
-              {isSuper && activeCompany?.agentId && (
-                <a
-                  href={`https://elevenlabs.io/app/agents/${activeCompany.agentId}`}
-                  target="_blank" rel="noreferrer"
-                  className="mt-2 inline-flex items-center gap-1 text-[11px] text-brand-700 hover:text-brand-900"
-                >
-                  افتح في ElevenLabs <ArrowUpRight className="w-3 h-3" />
-                </a>
               )}
             </div>
           )}

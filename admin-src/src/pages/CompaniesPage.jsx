@@ -146,9 +146,9 @@ export function CompaniesPage({ onPickCompany, pinnedCompanyId, user }) {
         {!isWorkspace && totals && (
           <div className="grid grid-cols-4 gap-4 mb-6">
             <HeroStat label="إجمالي الشركات" value={fmtNumber(totals.companies)} hint="مفعّلة في النظام" accent="brand" />
-            <HeroStat label="منشورة على ElevenLabs" value={fmtNumber(totals.synced)} hint={`${totals.companies - totals.synced} غير منشورة`} accent="emerald" />
+            <HeroStat label="منشورة" value={fmtNumber(totals.synced)} hint={`${totals.companies - totals.synced} غير منشورة`} accent="emerald" />
             <HeroStat label="جلسات الشات" value={fmtNumber(totals.chats)} hint="منذ بدء التشغيل" accent="sky" />
-            <HeroStat label="المكالمات" value={fmtNumber(totals.calls)} hint="عبر 3CX + ElevenLabs" accent="violet" />
+            <HeroStat label="المكالمات" value={fmtNumber(totals.calls)} hint="واردة وصادرة" accent="violet" />
           </div>
         )}
 

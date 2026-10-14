@@ -9,7 +9,7 @@ import {
 import { TopBar } from '../components/layout/TopBar';
 import { useToast } from '../components/ui/Toast';
 import { api } from '../lib/api';
-import { cn, fmtNumber } from '../lib/utils';
+import { cn, fmtNumber, fmtDuration as fmtMinSec } from '../lib/utils';
 
 const PERIODS = [
   { id: 'today',   label: 'اليوم' },
@@ -53,6 +53,9 @@ export function DashboardPage({ user, pinnedCompanyId }) {
 
   const totals = data?.current  || { calls: 0, avgDur: 0, success: 0, chats: 0 };
   const prev   = data?.previous || { calls: 0, avgDur: 0, success: 0, chats: 0 };
+  // Each period is compared with the one of equal length before it, so the
+  // caption has to follow the period rather than always say "yesterday".
+  const compareSub = COMPARE_LABEL[period] || COMPARE_LABEL.today;
 
   // Compose chart data into per-hour rows. We translate the keys for the
   // Recharts tooltip so the demo reads cleanly in Arabic.
@@ -113,7 +116,7 @@ export function DashboardPage({ user, pinnedCompanyId }) {
             icon={Phone}
             label="إجمالي المكالمات"
             value={fmtNumber(totals.calls)}
-            sub="اليوم مقابل أمس"
+            sub={compareSub}
             delta={pct(totals.calls, prev.calls)}
             accent="brand"
             loading={loading}
@@ -122,7 +125,7 @@ export function DashboardPage({ user, pinnedCompanyId }) {
             icon={Clock}
             label="متوسط المدة"
             value={fmtDuration(totals.avgDur)}
-            sub="اليوم مقابل أمس"
+            sub={compareSub}
             delta={pct(totals.avgDur, prev.avgDur)}
             accent="sky"
             loading={loading}
@@ -131,7 +134,7 @@ export function DashboardPage({ user, pinnedCompanyId }) {
             icon={CheckCircle2}
             label="نسبة النجاح"
             value={`${Math.round(totals.success * 100)}%`}
-            sub="اليوم مقابل أمس"
+            sub={compareSub}
             delta={pct(totals.success, prev.success)}
             accent="emerald"
             loading={loading}
@@ -145,17 +148,16 @@ export function DashboardPage({ user, pinnedCompanyId }) {
             <MiniStat
               icon={ArrowDownLeft}
               label="مكالمات واردة"
-              value={fmtNumber(totals.calls)}
-              hint="مكالمات من العملاء"
+              value={fmtNumber(totals.inbound?.calls || 0)}
+              hint={`المدة ${fmtMinSec(Math.round(totals.inbound?.seconds || 0))}`}
               accent="emerald"
             />
             <MiniStat
               icon={ArrowUpRight}
               label="مكالمات صادرة"
-              value="0"
-              hint="حملات outbound — قريباً"
+              value={fmtNumber(totals.outbound?.calls || 0)}
+              hint={`المدة ${fmtMinSec(Math.round(totals.outbound?.seconds || 0))}`}
               accent="amber"
-              dimmed
             />
             <MiniStat
               icon={Sparkles}
@@ -196,7 +198,7 @@ export function DashboardPage({ user, pinnedCompanyId }) {
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Line type="monotone" dataKey="واردة"  stroke="#10b981" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
                   <Line type="monotone" dataKey="صادرة"  stroke="#f59e0b" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
-                  <Line type="monotone" dataKey="شات"   stroke="#5b5bd6" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
+                  <Line type="monotone" dataKey="شات"   stroke="#765C36" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
                 </LineChart>
               </ResponsiveContainer>
             )}
@@ -304,6 +306,15 @@ function ChartEmpty() {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────
+
+// 'month' and 'quarter' are rolling 30/90-day windows (server periodRange),
+// so the caption says so rather than naming a calendar month.
+const COMPARE_LABEL = {
+  today  : 'مقارنة بأمس',
+  week   : 'مقارنة بالأيام السبعة السابقة',
+  month  : 'مقارنة بالثلاثين يوماً السابقة',
+  quarter: 'مقارنة بالتسعين يوماً السابقة',
+};
 
 function pct(curr, previous) {
   if (!previous && !curr)      return 0;

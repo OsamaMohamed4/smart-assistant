@@ -38,7 +38,7 @@ const { startCampaignWorker, getWorkerHealth: getCampaignWorkerHealth } = requir
 const { startRetentionWorker } = require('./services/retention');
 const { dailyCap, checkAndBumpUsage } = require('./services/usage');
 const { audit } = require('./lib/audit');
-const { requireAuth, requireCompanyAccess, requireCompanyAdmin, canChatWithCompany, startSessionCleanup } = require('./lib/auth');
+const { requireAuth, requireCompanyAccess, requireCompanyAdmin, canChatWithCompany, startSessionCleanup, sessionFromCookie } = require('./lib/auth');
 const { logger } = require('./lib/logger');
 const { initMonitoring, captureError } = require('./lib/monitoring');
 const { startBackupScheduler, runBackup, getBackupStatus } = require('./lib/backup');
@@ -155,7 +155,29 @@ app.use(express.json({
   limit: '2mb',
   verify: (req, _res, buf) => { req.rawBody = buf; },
 }));
-app.use('/admin', express.static(path.join(__dirname, 'public', 'admin')));
+// The admin shell is not advertised and is not served to the public. Anyone
+// without a signed-in superadmin session gets 404 — not 401 — so the path
+// gives away nothing about whether it exists. /login is the front door, and
+// it forwards a superadmin here once they are actually signed in.
+//
+// Only the HTML is gated. /admin/assets/* stays open because the SAME bundle
+// is what /login and every client workspace at /c/<id> load; gating it would
+// take the client portal down with it. The assets are compiled JS and CSS and
+// carry no tenant data — every byte of that comes from the API, which does
+// its own authentication on every request.
+async function adminShellOnly(req, res, next) {
+  try {
+    const s = await sessionFromCookie(req);
+    if (s?.user?.role === 'superadmin') return next();
+  } catch (e) {
+    req.log?.warn?.('admin shell gate: session lookup failed', { err: e.message });
+  }
+  return res.status(404).send('Not found');
+}
+app.get(['/admin', '/admin/', '/admin/index.html'], adminShellOnly, (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin', 'index.html'));
+});
+app.use('/admin', express.static(path.join(__dirname, 'public', 'admin'), { index: false }));
 
 // Attach a per-request id + child logger. Echoed back as `X-Request-Id` so
 // clients can correlate. Honors an incoming X-Request-Id if the upstream
@@ -232,6 +254,13 @@ startSessionCleanup();
 
 // Customer page: SPA handles routing inside the same React build.
 app.get('/c/:companyId', async (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin', 'index.html'));
+});
+
+// The public front door, linked from the marketing site. Deliberately open:
+// it is a sign-in form and nothing more. Where the visitor goes afterwards is
+// decided from the session the server issues, never from the URL.
+app.get('/login', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin', 'index.html'));
 });
 
@@ -545,10 +574,11 @@ async function askGPT(company, message, history, vars) {
     { role: 'user', content: message },
   ];
   const t0 = Date.now();
-  // Same model the live voice agent runs on — see resolveAgentModel().
+  // Same model the live voice agent runs on — see resolveAgentModel() — unless
+  // that is a provider-hosted Gemini model, which OpenAI cannot serve.
   const m = resolveAgentModel(company);
   const completion = await openai.chat.completions.create({
-    model: m.model, messages, max_tokens: m.maxTokens, temperature: m.temperature,
+    model: textChannelModel(m.model), messages, max_tokens: m.maxTokens, temperature: m.temperature,
   });
   return { reply: completion.choices[0].message.content, ms: Date.now() - t0, usage: completion.usage };
 }
@@ -576,16 +606,17 @@ const KB_PRIORITY_RE = /[0-9٠-٩]|ريال|سعر|أسعار|السعر|ضما�
 //   - eval judge           (services/evals.js — grading must stay independent
 //                           of the model under test, or it grades itself)
 //   - transcript summarize (summarize.js — post-call batch work)
-const ALLOWED_MODELS = ['gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4o-mini'];
-const clampNum = (v, lo, hi, dflt) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt);
+// The catalogue and the defaults live in lib/agent-defaults.js: the reference
+// agent's settings (Gemini flash lite, one short sentence per turn) unless
+// the company chose otherwise. The text channel cannot run the provider's
+// Gemini models itself, so it runs textChannelModel() instead -- see there.
+const {
+  AGENT_MODELS: ALLOWED_MODELS, AGENT_DEFAULTS,
+  resolveAgentModel: resolveModelSettings, resolveVoiceTuning, textChannelModel,
+} = require('./lib/agent-defaults');
 
 function resolveAgentModel(company) {
-  const s = company?.settings || {};
-  return {
-    model      : ALLOWED_MODELS.includes(s.model) ? s.model : 'gpt-4.1',
-    temperature: clampNum(s.temperature, 0, 1, 0.3),
-    maxTokens  : clampNum(s.maxTokens, 50, 800, 400),
-  };
+  return resolveModelSettings(company?.settings);
 }
 async function composeSystemPrompt(company, instructionPrompt) {
   let systemContent = fillGlobals(instructionPrompt || '', company);
@@ -636,6 +667,12 @@ function getOrMakeSessionId(req) {
 // dashboard, which is no longer the front door.
 app.use('/site', express.static(path.join(__dirname, 'site'), { index: false }));
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'site', 'index.html')));
+// Clean URLs for the two legal pages. They are linked from the footer of every
+// public page and referenced from the policies themselves, so the path has to
+// stay stable and readable rather than carrying a .html suffix.
+app.get('/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'site', 'privacy.html')));
+app.get('/terms', (_req, res) => res.sendFile(path.join(__dirname, 'site', 'terms.html')));
+app.get('/contact', (_req, res) => res.sendFile(path.join(__dirname, 'site', 'contact.html')));
 
 // Health check that actually checks. 503 only on hard DB failure (so a
 // platform health-gate restarts us); soft issues (webhook backlog) are
@@ -735,47 +772,34 @@ app.post('/chat', chatLimiter, requireAuth, async (req, res) => {
   }
 });
 
-// Playground voice catalog. Whitelist — only these IDs can be requested from
-// /chat-voice, so a tampered client can't bill an arbitrary ElevenLabs voice.
-// Arabic male voices on the account.
-// Global default voice for every agent. Code is the source of truth (not the
-// Railway env var) so a stale ELEVENLABS_VOICE_ID can't silently override it.
-// Per-company overrides still win via settings.voiceId (set in the admin UI).
-const DEFAULT_VOICE_ID = 'MI88rOZjXbH22N8KHXUo'; // Ali علي — الصوت الافتراضي (مختبَر وجيد)
+// The voice catalogue, the default voice and the allow-list live in
+// lib/voices.js, so the company loader and publishing read the same list.
+// A company's own choice (settings.voiceId) wins over the default.
+const { VOICES, DEFAULT_VOICE_ID, isAllowedVoiceId } = require('./lib/voices');
 
-// Voice pacing default applied at every publish (env-tunable, no deploy):
-// speed 1.2 (faster speech), per the operator's request. Clamped to the valid
-// ElevenLabs range.
+// Speaking pace, stability and the rest default to the reference agent's (see
+// lib/agent-defaults.js). VOICE_SPEED_DEFAULT is no longer read: a stale value
+// left in the environment would quietly hold every agent off the reference.
 //
-// The companion `optimizeStreamingLatency` knob is gone: it was a property of
-// the previous provider's TTS bridge, and the Agents TTS config has no such
-// field. Sending it would be rejected, so it is removed rather than renamed.
-const VOICE_SPEED_DEFAULT   = clampRange(process.env.VOICE_SPEED_DEFAULT, 0.7, 1.2, 1.2);
-function clampRange(v, lo, hi, dflt) {
-  return Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt;
-}
-
-const PLAYGROUND_VOICES = [
-  { id: 'MI88rOZjXbH22N8KHXUo', name: 'Ali', label: 'علي', description: 'صوت هادئ وواضح', gender: 'male', accent: 'arabic' },
-  { id: 'cFUFIbKkO2iZFwS8cRnY', name: 'Nasser', label: 'ناصر', description: 'صوت سعودي طبيعي', gender: 'male', accent: 'saudi' },
+// Voice models a company may select. Confirmed against GET /v1/models — each
+// one reports Arabic support. The expressive line is what expressiveMode acts
+// on; on the rest the flag is stored and ignored.
+const ALLOWED_TTS_MODELS = [
+  'eleven_turbo_v2_5', 'eleven_flash_v2_5', 'eleven_multilingual_v2',
+  'eleven_v3', 'eleven_v3_conversational', 'eleven_v4', 'eleven_v4_turbo',
 ];
-const PLAYGROUND_VOICE_IDS = new Set(PLAYGROUND_VOICES.map((v) => v.id));
 
-// Voices a company may select in settings. The Playground catalog plus any
-// ids added via EXTRA_VOICE_IDS (comma-separated) so a new ElevenLabs voice
-// can be enabled from Railway without a code change.
-const EXTRA_VOICE_IDS = new Set(
-  String(process.env.EXTRA_VOICE_IDS || '')
-    .split(',').map((s) => s.trim()).filter(Boolean),
-);
-function isAllowedVoiceId(id) {
-  const v = String(id || '').trim();
-  if (!v) return false;
-  return PLAYGROUND_VOICE_IDS.has(v) || EXTRA_VOICE_IDS.has(v);
-}
+// What a company that has chosen nothing is published with, so the settings
+// screen shows real values instead of guessing its own. The voice is listed
+// with the voices (isDefault), not here.
+app.get('/api/agent-defaults', requireAuth, (_req, res) => {
+  res.json({ ...AGENT_DEFAULTS, models: ALLOWED_MODELS });
+});
 
+// The default is flagged so a screen can show which voice a company that never
+// chose one is actually speaking with.
 app.get('/api/voices', requireAuth, async (_req, res) => {
-  res.json(PLAYGROUND_VOICES);
+  res.json(VOICES.map((v) => ({ ...v, isDefault: v.id === DEFAULT_VOICE_ID })));
 });
 
 // Outbound call: the provider rings the customer's phone THROUGH this
@@ -785,17 +809,30 @@ app.get('/api/voices', requireAuth, async (_req, res) => {
 app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, res) => {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'company not found' });
+  // Both messages reach a client's screen, so neither names the voice vendor.
   if (!c.agentId) {
-    return res.status(409).json({ error: 'انشر الشركة على ElevenLabs أولاً.', code: 'NOT_PUBLISHED' });
+    return res.status(409).json({ error: 'انشر الشركة أولاً.', code: 'NOT_PUBLISHED' });
   }
   // Each company dials from its OWN number. There is deliberately NO
   // platform-wide fallback: with multiple tenants, falling back would place
   // one company's calls on another company's line.
   if (!c.phoneNumberId) {
     return res.status(503).json({
-      error: 'رقم الشركة غير مستورد إلى ElevenLabs بعد — استورد رقم 3CX الخاص بها أولاً.',
+      error: 'رقم الشركة غير مربوط بالمساعد بعد — استورد رقم 3CX الخاص بها أولاً.',
       code : 'NO_PHONE_NUMBER_ID',
     });
+  }
+  // The Playground can try a catalogue voice on a real call before it becomes
+  // the company's voice. The id comes from the browser, so it must be on the
+  // list. The override is sent only when it differs from the company's own
+  // voice, which leaves an ordinary test call exactly the production path.
+  let voiceOverride = null;
+  if (req.body?.voiceId) {
+    const v = String(req.body.voiceId).trim();
+    if (!isAllowedVoiceId(v)) {
+      return res.status(400).json({ error: 'معرّف الصوت غير معروف. اختر صوتاً من القائمة المتاحة.' });
+    }
+    if (v !== (c.settings?.voiceId || DEFAULT_VOICE_ID)) voiceOverride = v;
   }
   if (!(await checkAndBumpUsage(c.id, 'outbound_calls', dailyCap(c, 'dailyOutboundCap', 'DAILY_OUTBOUND_CAP', 200)))) {
     return res.status(429).json({ error: 'تم بلوغ الحد اليومي للمكالمات الصادرة لهذه الشركة.' });
@@ -821,11 +858,15 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
   // dynamic variables above. This override only takes effect because the sync
   // enables first_message in platform_settings.overrides.
   const activeScenario = await sql.getActiveScenarioForCompany.get(c.id);
-  const firstMessage = activeScenario?.first_message || null;
+  // Same unresolved-{{agent_name}} trap as the publish path: an override sent
+  // with a global still in it makes the provider refuse the call outright.
+  // A test of the other voice introduces that voice, not the company's own.
+  const firstMessage = fillGlobals(activeScenario?.first_message || null, c,
+    { voiceId: voiceOverride || undefined });
 
   try {
     const { callId, callRef, status } = await voice.startOutboundCall({
-      company: c, toNumber: phoneNumber, variables: vars, firstMessage,
+      company: c, toNumber: phoneNumber, variables: vars, firstMessage, voiceId: voiceOverride,
     });
     // Pre-register the call so it appears in Conversations immediately, even
     // before the post-call webhook arrives. That webhook's upsert fills in
@@ -842,7 +883,7 @@ app.post('/api/companies/:id/outbound-call', requireCompanyAccess, async (req, r
     } catch (e) {
       req.log.error('outbound-call stub insert failed', { err: e.message });
     }
-    audit(req, 'playground.outbound', `calls/${callId}`, { phoneNumber, companyId: c.id });
+    audit(req, 'playground.outbound', `calls/${callId}`, { phoneNumber, companyId: c.id, voiceOverride: voiceOverride || undefined });
     res.json({ callId, status });
   } catch (e) {
     const detail = voice.errText(e);
@@ -1083,6 +1124,15 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, validate({ params
   }
   if (ALLOWED_MODELS.includes(b.model)) clean.model = b.model;
   for (const k of ['temperature', 'maxTokens', 'stability', 'similarityBoost', 'voiceSpeed']) {
+    if (b[k] !== undefined && Number.isFinite(Number(b[k]))) clean[k] = Number(b[k]);
+  }
+  // Voice-engine settings that publishing overwrites, so the company must own
+  // them or they are lost on the next publish. Allow-listed rather than free
+  // text: an unknown model id surfaces only at publish time, as an opaque
+  // provider error, long after the operator left this screen.
+  if (ALLOWED_TTS_MODELS.includes(b.ttsModel)) clean.ttsModel = b.ttsModel;
+  if (typeof b.expressiveMode === 'boolean') clean.expressiveMode = b.expressiveMode;
+  for (const k of ['turnTimeoutSeconds', 'silenceEndCallSeconds']) {
     if (b[k] !== undefined && Number.isFinite(Number(b[k]))) clean[k] = Number(b[k]);
   }
   // Spending caps are the platform's cost circuit-breaker (services/usage.js
@@ -1382,7 +1432,6 @@ async function handlePublishCompany(req, res) {
       resolveAgentModel,
       isAllowedVoiceId,
       defaultVoiceId  : DEFAULT_VOICE_ID,
-      voiceSpeedDefault: VOICE_SPEED_DEFAULT,
       publicBaseUrl   : PUBLIC_BASE_URL,
     },
   });
@@ -1487,7 +1536,18 @@ app.patch('/api/companies/:id/features/:key', requireCompanyAccess, async (req, 
   if (!c) return res.status(404).json({ error: 'not found' });
 
   const enabled = req.body?.enabled === true;
-  const r = await setFeature(c.id, req.params.key, enabled, req.body?.config ?? null);
+  // A request that does not mention config keeps the stored one. The toggle in
+  // the UI sends only `enabled`, and this used to write `config: null` on every
+  // flip — so switching a capability off and on again silently erased its
+  // settings, such as a company's own confirmation message.
+  let config = req.body?.config;
+  if (config === undefined) {
+    try {
+      const row = await sql.getCompanyFeature.get(c.id, req.params.key);
+      config = row?.config ? JSON.parse(row.config) : null;
+    } catch { config = null; }
+  }
+  const r = await setFeature(c.id, req.params.key, enabled, config ?? null);
   if (!r.ok) return res.status(r.code === 'UNKNOWN_FEATURE' ? 404 : 400).json(r);
 
   invalidateCache(c.id);
@@ -1503,6 +1563,76 @@ app.patch('/api/companies/:id/features/:key', requireCompanyAccess, async (req, 
     needsPublish: enabled,
     effectiveImmediately: !enabled,
   });
+});
+
+// ─── Customer requests ───────────────────────────────────────────
+// What the agent filed, for the sales team to work through. Visible to the
+// company's own client users as well as the superadmin: these are their
+// leads, not platform internals.
+const { REQUEST_TYPES, FIELDS: REQUEST_FIELDS, STATUSES: REQUEST_STATUSES } = require('./lib/request-types');
+
+app.get('/api/companies/:id/requests', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+
+  const rows = await sql.listCustomerRequests.all(c.id);
+  const status = String(req.query.status || '').trim();
+  const type   = String(req.query.type || '').trim();
+  const out = (rows || [])
+    .filter((r) => (!status || r.status === status) && (!type || r.request_type === type))
+    .map((r) => {
+      let fields = {};
+      try { fields = r.fields ? JSON.parse(r.fields) : {}; } catch {}
+      return {
+        id            : r.id,
+        conversationId: r.conversation_id,
+        type          : r.request_type,
+        typeLabel     : REQUEST_TYPES[r.request_type]?.labelAr || r.request_type,
+        status        : r.status,
+        statusLabel   : REQUEST_STATUSES[r.status] || r.status,
+        customerName  : r.customer_name,
+        // From the call, never from the model. Null until the call's record
+        // lands for an inbound call, and always null for a browser test.
+        customerPhone : decryptField(r.caller_number) || null,
+        // Labelled in the client's own words, in the order their sheet lists.
+        fields: (REQUEST_TYPES[r.request_type]?.fields || Object.keys(fields))
+          .filter((k) => fields[k])
+          .map((k) => ({ key: k, label: REQUEST_FIELDS[k]?.labelAr || k, value: fields[k] })),
+        staffNotes: r.staff_notes || '',
+        createdAt : r.created_at,
+        updatedAt : r.updated_at,
+      };
+    });
+
+  res.json({
+    requests: out,
+    statuses: REQUEST_STATUSES,
+    types: Object.fromEntries(Object.entries(REQUEST_TYPES).map(([k, v]) => [k, v.labelAr])),
+  });
+});
+
+app.patch('/api/companies/:id/requests/:requestId', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+
+  const id = Number(req.params.requestId);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid id' });
+  // Scoped by company in the query itself: an id from another tenant answers
+  // 404, exactly like an id that does not exist.
+  const row = await sql.getCustomerRequest.get(id, c.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+
+  const status = req.body?.status !== undefined ? String(req.body.status) : row.status;
+  if (!REQUEST_STATUSES[status]) {
+    return res.status(400).json({ error: 'حالة غير معروفة', allowed: Object.keys(REQUEST_STATUSES) });
+  }
+  const notes = req.body?.staffNotes !== undefined
+    ? String(req.body.staffNotes).slice(0, 2000)
+    : (row.staff_notes || '');
+
+  await sql.updateCustomerRequestStatus.run({ id, company_id: c.id, status, staff_notes: notes });
+  audit(req, 'request.update', `companies/${c.id}/requests/${id}`, { status });
+  res.json({ ok: true, id, status, statusLabel: REQUEST_STATUSES[status] });
 });
 
 // Render a DRAFT profile without saving it, so the editor can show a live
@@ -1549,7 +1679,6 @@ app.get('/api/companies/:id/publish-preview', requireCompanyAccess, async (req, 
   const factsBlock = renderFactsBlock(c, c.businessProfile);
 
   const s = c.settings || {};
-  const clamp = (v, lo, hi, dflt) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt);
   const { model, temperature, maxTokens } = resolveAgentModel(c);
   const kbChunkCount = Number((await sql.countCompanyChunks.get(c.id))?.n || 0);
 
@@ -1564,9 +1693,9 @@ app.get('/api/companies/:id/publish-preview', requireCompanyAccess, async (req, 
     language    : c.language,
     model, temperature, maxTokens,
     voiceId        : s.voiceId || DEFAULT_VOICE_ID,
-    stability      : clamp(s.stability, 0, 1, 0.8),
-    similarityBoost: clamp(s.similarityBoost, 0, 1, 0.8),
-    voiceSpeed     : clamp(s.voiceSpeed, 0.7, 1.2, VOICE_SPEED_DEFAULT),
+    // Resolved by the same function the pipeline uses, so the preview cannot
+    // show one pacing while publishing sends another.
+    ...resolveVoiceTuning(s),
     // Tool ids are resolved at publish time; showing the stored one keeps the
     // preview honest about what is currently attached.
     toolIds        : c.kbToolId ? [c.kbToolId] : [],
@@ -1606,10 +1735,10 @@ app.post('/api/companies/:id/sync-voice', requireCompanyAccess, handlePublishCom
 app.post('/api/companies/:id/bind-phone', requireCompanyAdmin, async (req, res) => {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
-  if (!c.agentId) return res.status(400).json({ error: 'انشر الشركة على ElevenLabs أولاً.', code: 'NOT_PUBLISHED' });
+  if (!c.agentId) return res.status(400).json({ error: 'انشر الشركة أولاً.', code: 'NOT_PUBLISHED' });
   if (!c.phoneNumberId) {
     return res.status(400).json({
-      error: 'اضبط معرّف رقم ElevenLabs لهذه الشركة أولاً (حتى لا يُربط رقم شركة أخرى).',
+      error: 'استورد رقم الشركة أولاً (حتى لا يُربط رقم شركة أخرى).',
       code : 'NO_PHONE_NUMBER_ID',
     });
   }
@@ -1804,6 +1933,8 @@ function shiftedPrev({ from, to }) {
 }
 function isoUtc(d) { return d.toISOString().replace('T', ' ').slice(0, 19); }
 
+const { currentSaudiMonth, saudiMonthRange, buildUsageReport } = require('./lib/usage-report');
+
 app.get('/api/dashboard', async (req, res) => {
   const period   = String(req.query.period || 'today');
   const fromStr  = req.query.from || null;
@@ -1838,7 +1969,14 @@ app.get('/api/dashboard', async (req, res) => {
     const total    = okRow?.total || 0;
     const success  = total ? ok / total : 0;
     const chats    = (await sql.countChatSessionsInRange.get(a))?.n || 0;
-    return { calls, avgDur, success, chats };
+    // Inbound and outbound apart, from the same query the usage page reads.
+    // Its upper bound is exclusive, so it gets the instant after range.to.
+    const usageRows = await sql.usageByCompanyInRange.all({
+      from: a.from, to: isoUtc(new Date(range.to.getTime() + 1)), company_id,
+    });
+    const { totals: usage } = buildUsageReport(usageRows,
+      usageRows.map((r) => ({ id: r.company_id, name: '' })));
+    return { calls, avgDur, success, chats, inbound: usage.inbound, outbound: usage.outbound };
   };
   const current  = await stat(cur);
   const previous = await stat(prev);
@@ -1878,6 +2016,41 @@ app.get('/api/dashboard', async (req, res) => {
     scenarios,
     chart,
   });
+});
+
+// ─── Usage: consumption per company for one Saudi month ──────────────
+// Inbound and outbound apart, for every company the viewer may see -- zeros
+// included, so a quiet month still lists the client. Clients are pinned to
+// their own company. Provider credits are platform cost, not the client's
+// business, so they leave the server only for a superadmin.
+//
+// WhatsApp is deliberately absent: no WhatsApp channel is connected to the
+// platform yet, so there are no messages to count, and a zero would read as
+// "connected, and nothing was sent".
+app.get('/api/usage', async (req, res) => {
+  const month = String(req.query.month || currentSaudiMonth());
+  const range = saudiMonthRange(month);
+  if (!range) return res.status(400).json({ error: 'صيغة الشهر غير صحيحة — المطلوب YYYY-MM' });
+
+  const isSuper = req.user.role === 'superadmin';
+  let companyId = req.query.companyId ? String(req.query.companyId) : null;
+  if (companyId && !COMPANY_ID_RE.test(companyId)) {
+    return res.status(400).json({ error: 'invalid companyId' });
+  }
+  if (!isSuper) {
+    if (!req.user.companyId) return res.status(403).json({ error: 'no company associated' });
+    if (companyId && companyId !== req.user.companyId) return res.status(403).json({ error: 'forbidden' });
+    companyId = req.user.companyId;
+  }
+
+  const companies = companyId
+    ? [await sql.getCompanyIdName.get(companyId)].filter(Boolean)
+    : await sql.listCompanyIdNames.all();
+  const rows = await sql.usageByCompanyInRange.all({ from: range.from, to: range.to, company_id: companyId });
+  const report = buildUsageReport(rows, companies, { includeCredits: isSuper });
+  report.rows.sort((x, y) => (y.inbound.seconds + y.outbound.seconds) - (x.inbound.seconds + x.outbound.seconds)
+    || String(x.companyName).localeCompare(String(y.companyName), 'ar'));
+  res.json({ month, ...report });
 });
 
 // ─── Conversations (chats + calls unified for the dashboard table) ──────
@@ -2156,7 +2329,7 @@ function detectVariables(prevConfig, ...texts) {
   const out  = [];
   const re   = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
   const GLOBAL = new Set([
-    'agent_name', 'agent_gender', 'date', 'time', 'user_phone_number',
+    'agent_name', 'agent_gender', 'company_name', 'date', 'time', 'user_phone_number',
   ]);
   for (const text of texts) {
     if (!text) continue;
@@ -2416,12 +2589,15 @@ app.post('/api/companies/:id/scenarios/test-draft', chatLimiter, requireCompanyA
     const t0 = Date.now();
     // The whole point of the draft tester is to preview what will ship, so it
     // must run the company's OWN model/temperature — not a cheaper stand-in.
+    // A Gemini model runs at the provider only; the reply names the model that
+    // actually answered, so a stand-in is never mistaken for the real thing.
     const m = resolveAgentModel(c);
+    const ran = textChannelModel(m.model);
     const completion = await openai.chat.completions.create({
-      model: m.model, temperature: m.temperature, max_tokens: m.maxTokens,
+      model: ran, temperature: m.temperature, max_tokens: m.maxTokens,
       messages: [{ role: 'system', content: systemContent }, ...history, { role: 'user', content: message }],
     });
-    res.json({ reply: completion.choices[0].message.content, ms: Date.now() - t0, model: m.model });
+    res.json({ reply: completion.choices[0].message.content, ms: Date.now() - t0, model: ran });
   } catch (e) {
     req.log.error('test-draft error', { err: e.message, companyId: c.id });
     res.status(502).json({ error: 'تعذّر تشغيل الاختبار. حاول مرة ثانية.' });
@@ -2488,20 +2664,45 @@ const SCENARIO_GEN_SYSTEM = `أنت مهندس سيناريوهات لمنصة V
 1. اسم واضح ومهني للسيناريو بالإنجليزية (مثل "Telecom Customer Service")
 2. رسالتين افتتاحيتين بالعربية بصيغتين منفصلتين:
    (a) first_message — للمكالمات الصادرة (outbound). نعرف اسم العميل، استخدم {{customer_name}}:
-       "مرحباً {{customer_name}}، معك {{agent_name}} من <اسم الشركة الحقيقي>، كيف يقدر أساعدك اليوم؟"
+       "مرحباً {{customer_name}}، معك {{agent_name}} من {{company_name}}، كيف أقدر أساعدك اليوم؟"
    (b) first_message_inbound — للمكالمات الواردة (inbound). ما نعرف اسم العميل، استخدم تحية عامة:
-       "حياك الله في <اسم الشركة الحقيقي>، معك {{agent_name}}، كيف يقدر أساعدك اليوم؟"
-   - {{agent_name}} في الاتنين = اسم بشري للوكيل (هيتعبّى تلقائياً باسم الصوت المختار).
-   - اسم الشركة اكتبه صريح كما هو (مثلاً: "وكن العقارية") — مش متغير.
+       "حياك الله في {{company_name}}، معك {{agent_name}}، كيف أقدر أساعدك اليوم؟"
+   - {{agent_name}} = اسم الوكيل، يتعبّى تلقائياً من صوت الشركة. لا تكتب اسم وكيل صريح أبداً:
+     الصوت ممكن يكون رجالي أو نسائي، والاسم المكتوب ما يتغيّر معه.
+   - {{company_name}} = اسم الشركة، يتعبّى تلقائياً. استخدمه بدل كتابة اسم الشركة.
    - متخليش الـ agent يقول "أنا [اسم الشركة]" — هو شخص يعمل في الشركة، مش الشركة نفسها.
-3. instruction prompt تفصيلي بالعربية يحتوي على الأقسام:
-   - AGENT IDENTITY & PURPOSE
+3. instruction prompt تفصيلي بالعربية يحتوي على الأقسام التالية بالترتيب:
+   - AGENT IDENTITY & PURPOSE — مين هو، ويشتغل عند مين، وإيش هدفه من المكالمة.
+     اكتب الهوية هكذا: "أنت {{agent_name}} من {{company_name}}، وتتكلم بصيغة {{agent_gender}}."
+     بدون أي اسم وكيل أو اسم شركة مكتوب صريح.
    - TONE & STYLE (Saudi Najdi Arabic dialect, lahjet اللهجة السعودية)
-   - CONVERSATION FLOW (خطوات الحوار بالترتيب)
-   - INFORMATION TO COLLECT
+     لازم يتضمن قاعدة الاختصار: الوكيل على تلفون مش في شات. جمل قصيرة،
+     جملة أو جملتين في الرد الواحد، بدون مقدمات ولا تلخيص لكلام العميل.
+     الإطالة في الصوت تخلي العميل يقاطع أو يقفل.
+   - CONVERSATION FLOW (خطوات الحوار بالترتيب، مرقّمة)
+   - INFORMATION TO COLLECT — إيش البيانات المطلوبة بالضبط
+   - DATA CAPTURE PROTOCOL — إزاي يتأكد من كل بيانات يجمعها. هذا القسم إجباري
+     وما ينفع يكون عام. لازم يحدد:
+       · بعد كل رقم جوال أو رقم حساب: يعيده على العميل رقماً رقماً بالكلمات
+         (مثال: خمسة، صفر، خمسة…) ويسأل "صح كذا؟" قبل ما يكمل
+       · بعد الاسم: يعيده كما سمعه ويسأل عن التأكيد
+       · إذا ما سمع بوضوح: يطلب الإعادة مرة وحدة بأدب، ما يخمّن أبداً
+     تأكيد البيانات صوتياً هو أكثر مكان تفشل فيه الوكلاء الصوتية، فخلّي
+     التعليمات هنا محددة وقابلة للتنفيذ حرفياً.
+   - KNOWLEDGE BOUNDARIES — قاعدة صريحة ضد اختلاق المعلومات:
+     "جاوب من قاعدة المعرفة والتعليمات فقط. إذا كانت المعلومة غير موجودة في
+     أي منهما، قل بوضوح ومهنية إنك ما تعرف وإنك تحوّل العميل لموظف — ولا
+     تخمّن ولا تخترع سعر ولا موعد ولا توفّر."
+     بدون هذه الجملة، النموذج يخترع إجابات لما ما يلاقي المعلومة.
    - ESCALATION & TRANSFER RULES
    - END CALL CONDITIONS
    - SAFETY & PRIVACY (مش يكشف معلومات داخلية، مش يخترع حقائق)
+
+   قواعد كتابة إجبارية داخل الـ instruction prompt:
+   - بدون تشكيل (حركات) نهائياً — التشكيل يخلي المحرك الصوتي ينطق غلط
+   - الأرقام تُكتب بالكلمات مش بالخانات (مئتين وعشرين، مش ٢٢٠)
+   - بدون كلمات إنجليزية داخل النص المنطوق (عناوين الأقسام بالإنجليزي عادي،
+     لأنها تعليمات للنموذج ومش بتتقال للعميل)
 4. ثلاث معايير نجاح بالعربية، كل معيار جملة واحدة واضحة وقابلة للقياس
 
 أخرج JSON صالح فقط، بدون أي شرح خارج JSON، بهذا الشكل بالظبط:

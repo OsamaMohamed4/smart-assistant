@@ -83,6 +83,11 @@ const sql = {
     `UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = ${NOW} WHERE id = $1`,
   ),
   updatePassword: stmt(`UPDATE users SET password_hash = $1 WHERE id = $2`),
+  // Lift a lockout WITHOUT claiming the user just signed in. clearFailedLogins
+  // also stamps last_login_at, which is correct after a successful login and
+  // wrong after an administrative reset — the client list would show someone
+  // as freshly active when they have not been back at all.
+  unlockUser: stmt(`UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1`),
   getUserPasswordHash: stmt(`SELECT password_hash FROM users WHERE id = $1`),
 
   // ─── sessions ────────────────────────────────────────────
@@ -260,6 +265,46 @@ const sql = {
   deleteCompanyTool: stmt(
     `DELETE FROM company_tools WHERE company_id = $1 AND feature_key = $2`,
     ['company_id', 'feature_key'],
+  ),
+
+  // ─── Customer requests ──────────────────────────────────────────
+  // Every statement is scoped by company_id, the join included: a request must
+  // never surface another tenant's call, even if a conversation id were ever
+  // shared or guessed. RLS polices the table as well; this is the first line.
+  getCustomerRequestByConversation: stmt(
+    `SELECT id, fields FROM customer_requests
+      WHERE company_id = $1 AND conversation_id = $2 AND request_type = $3`,
+  ),
+  insertCustomerRequest: stmt(
+    `INSERT INTO customer_requests (company_id, conversation_id, request_type, customer_name, fields)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id`,
+    ['company_id', 'conversation_id', 'request_type', 'customer_name', 'fields'],
+  ),
+  updateCustomerRequestFields: stmt(
+    `UPDATE customer_requests
+        SET customer_name = $1, fields = $2, updated_at = ${NOW}
+      WHERE id = $3 AND company_id = $4`,
+    ['customer_name', 'fields', 'id', 'company_id'],
+  ),
+  listCustomerRequests: stmt(
+    `SELECT r.id, r.conversation_id, r.request_type, r.status, r.customer_name,
+            r.fields, r.staff_notes, r.created_at, r.updated_at,
+            c.caller_number
+       FROM customer_requests r
+       LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
+      WHERE r.company_id = $1
+      ORDER BY r.created_at DESC, r.id DESC
+      LIMIT 500`,
+  ),
+  getCustomerRequest: stmt(
+    `SELECT id, status, staff_notes FROM customer_requests WHERE id = $1 AND company_id = $2`,
+  ),
+  updateCustomerRequestStatus: stmt(
+    `UPDATE customer_requests
+        SET status = $1, staff_notes = $2, updated_at = ${NOW}
+      WHERE id = $3 AND company_id = $4`,
+    ['status', 'staff_notes', 'id', 'company_id'],
   ),
 
   // ─── Publish pipeline ───────────────────────────────────────────
@@ -698,6 +743,23 @@ const sql = {
       WHERE created_at BETWEEN $1 AND $2
         AND ($3::text IS NULL OR company_id = $3)
       GROUP BY 1, 2`,
+    ['from', 'to', 'company_id'],
+  ),
+  // See db-sqlite.js. Cast so the driver hands back numbers: a bare SUM over
+  // BIGINT is NUMERIC, which node-postgres returns as a string.
+  usageByCompanyInRange: stmt(
+    `SELECT company_id,
+            SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 0 ELSE 1 END)::int AS inbound_calls,
+            SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 0 ELSE COALESCE(duration_sec, 0) END)::int AS inbound_sec,
+            SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 0 ELSE COALESCE(cost_credits, 0) END)::float8 AS inbound_credits,
+            SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 1 ELSE 0 END)::int AS outbound_calls,
+            SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN COALESCE(duration_sec, 0) ELSE 0 END)::int AS outbound_sec,
+            SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN COALESCE(cost_credits, 0) ELSE 0 END)::float8 AS outbound_credits
+       FROM calls
+      WHERE created_at >= $1 AND created_at < $2
+        AND company_id IS NOT NULL
+        AND ($3::text IS NULL OR company_id = $3)
+      GROUP BY company_id`,
     ['from', 'to', 'company_id'],
   ),
   chatsPerHourInRange: stmt(

@@ -7,6 +7,7 @@ const OpenAI = require('openai');
 const { sql } = require('../db');
 const { fillGlobals } = require('../companies');
 const { retrieve, formatChunksForPrompt } = require('../lib/rag');
+const { resolveAgentModel, textChannelModel } = require('../lib/agent-defaults');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30_000, maxRetries: 1 });
 
@@ -67,8 +68,9 @@ async function runEval(company, instructionPrompt, label) {
   const questions = (await sql.listEvalQuestions.all(company.id)).slice(0, MAX_QUESTIONS);
   if (!questions.length) throw Object.assign(new Error('NO_QUESTIONS'), { code: 'NO_QUESTIONS' });
 
-  const model = ['gpt-4.1', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4o-mini'].includes(company.settings?.model)
-    ? company.settings.model : 'gpt-4.1';
+  // The agent's own model when OpenAI can run it; a Gemini agent is answered
+  // on the text stand-in (lib/agent-defaults.js).
+  const model = textChannelModel(resolveAgentModel(company.settings).model);
 
   const results = [];
   // Bounded concurrency without deps.

@@ -44,6 +44,42 @@ function Toggle({ checked, disabled, onChange }) {
   );
 }
 
+// The company's own closing line for a filed request — their promise, in their
+// words. Empty means the agent says only that the request was recorded: no
+// service-level commitment is invented on the company's behalf.
+function ConfirmationEditor({ initial, onSave, busy }) {
+  const [value, setValue] = useState(initial);
+  useEffect(() => { setValue(initial); }, [initial]);
+  const dirty = value.trim() !== (initial || '').trim();
+  return (
+    <div className="mt-3 space-y-1.5">
+      <label className="block text-[12px] font-medium text-ink-700">
+        رسالة التأكيد بعد تسجيل الطلب
+      </label>
+      <div className="flex gap-2">
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          maxLength={300}
+          placeholder="مثال: تم رفع طلبك وسيتم التواصل معك خلال 72 ساعة عمل"
+          className="flex-1 h-9 px-3 bg-white border border-ink-200 rounded-lg text-[13px] focus-ring"
+        />
+        <button
+          type="button"
+          disabled={!dirty || busy}
+          onClick={() => onSave(value.trim())}
+          className="h-9 px-3.5 rounded-lg bg-ink-900 text-white text-[12.5px] disabled:opacity-40"
+        >
+          حفظ
+        </button>
+      </div>
+      <p className="text-[11.5px] text-ink-500">
+        يقولها الوكيل للعميل بأسلوبه بعد تسجيل الطلب. اتركها فارغة إن لم يكن هناك وعد زمني محدد.
+      </p>
+    </div>
+  );
+}
+
 function StateBadge({ f }) {
   if (f.status !== 'implemented') {
     return <span className="text-[11px] px-2 py-0.5 rounded-full bg-ink-100 text-ink-500">غير متاح بعد</span>;
@@ -101,6 +137,22 @@ export function CapabilitiesPage({ pinnedCompanyId }) {
     }
   };
 
+  // Saves a capability's configuration without touching its on/off state.
+  // Takes effect on the next call — the tool endpoint reads it live — so no
+  // publish is needed.
+  const onSaveConfig = async (f, config) => {
+    setBusyKey(f.key);
+    try {
+      await api.setFeature(companyId, f.key, f.enabled, config);
+      load(companyId);
+      push('تم الحفظ — يسري على المكالمات القادمة فوراً', 'success');
+    } catch (e) {
+      push(e.message, 'error');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
   const activeCompany = companies.find((c) => c.id === companyId);
   const isWorkspace   = !!pinnedCompanyId;
   const implemented   = features.filter((f) => f.status === 'implemented');
@@ -119,6 +171,13 @@ export function CapabilitiesPage({ pinnedCompanyId }) {
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" strokeWidth={2} />
             {f.reason}
           </p>
+        )}
+        {f.key === 'request_creation' && f.enabled && (
+          <ConfirmationEditor
+            initial={f.config?.confirmationMessage || ''}
+            onSave={(msg) => onSaveConfig(f, { ...(f.config || {}), confirmationMessage: msg })}
+            busy={busyKey === f.key}
+          />
         )}
       </div>
       <div className="pt-1">

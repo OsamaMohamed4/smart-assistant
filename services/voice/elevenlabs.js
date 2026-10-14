@@ -23,6 +23,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const { logger } = require('../../lib/logger');
 const { sql } = require('../../db');
+const { AGENT_DEFAULTS } = require('../../lib/agent-defaults');
 const {
   toStamp, durationBetween, isE164, flattenTranscript,
 } = require('./provider');
@@ -467,13 +468,23 @@ async function resolveCompanyForEvent(ev, log) {
 }
 
 // ─── Agent configuration ──────────────────────────────────────────
-// The agent's LLM. Our own catalogue (lib/… resolveAgentModel) speaks OpenAI
-// model names, which this provider also accepts; ELEVENLABS_LLM overrides when
-// an account needs a different one without a deploy.
+// The LLM and the TTS model come from the company, falling back to the
+// reference agent's (lib/agent-defaults.js). ELEVENLABS_LLM and
+// ELEVENLABS_TTS_MODEL are no longer read: an environment value used to
+// override every company -- even one that had chosen its own model -- and a
+// stale one would hold every agent off the reference without a trace.
+//
+// eleven_v4 replaced turbo v2.5 as the default once it had been heard on real
+// Saudi calls on the reference agent; that is what turbo was being held for.
 function resolveLlm(model) {
-  const override = (process.env.ELEVENLABS_LLM || '').trim();
-  return override || model || 'gpt-4.1';
+  return model || AGENT_DEFAULTS.model;
 }
+
+// The agent's wall clock. Left unset, `prompt.timezone` reads back null and the
+// model has NO idea what "tomorrow at four" refers to — it cannot resolve a
+// relative time at all, which is the first thing the appointment-booking flow
+// asks of it. Saudi default; env-tunable for a tenant outside the Kingdom.
+const AGENT_TIMEZONE = (process.env.ELEVENLABS_AGENT_TIMEZONE || '').trim() || 'Asia/Riyadh';
 
 // Post-call extraction. These identifiers and Arabic descriptions are carried
 // over VERBATIM from the previous provider's analysis schema, because
@@ -503,16 +514,38 @@ function buildAgentConfig({
   name, prompt, firstMessage, language,
   model, temperature, maxTokens,
   voiceId, stability, similarityBoost, voiceSpeed,
+  // Per-company overrides for fields that used to be fixed. Publishing
+  // REPLACES whatever the provider's dashboard holds for every field we send,
+  // so a value an operator tuned by hand there is lost on the next publish
+  // unless the company carries it. Verified field by field against the live
+  // API (2026-10-07): llm, max_tokens, model_id, expressive_mode, voice_id,
+  // stability, speed, turn_timeout and silence_end_call_timeout are all
+  // overwritten, while asr.keywords, asr.user_input_audio_format and
+  // prompt.knowledge_base survive because we never name them.
+  ttsModel = null, expressiveMode = AGENT_DEFAULTS.expressiveMode,
   toolIds = [], transferNumber = null,
-  maxDurationSeconds = 600, idleTimeoutSeconds = 15, silenceTimeoutSeconds = 30,
+  maxDurationSeconds = 600,
+  idleTimeoutSeconds = AGENT_DEFAULTS.turnTimeoutSeconds,
+  silenceTimeoutSeconds = AGENT_DEFAULTS.silenceEndCallSeconds,
+  interruptibleGreeting = AGENT_DEFAULTS.interruptibleGreeting,
 }) {
-  // System tools are declared inline; the knowledge-base tool is a workspace
-  // tool referenced by id (that is the only form the tools API supports).
-  const tools = [
-    { type: 'system', name: 'end_call', description: '', params: { system_tool_type: 'end_call' } },
-  ];
+  // System tools go in `built_in_tools`, keyed by name. NOT the `tools` array,
+  // which this used to send: the provider refuses a payload carrying both that
+  // array and `tool_ids` —
+  //
+  //   400 both_tools_and_tool_ids_provided
+  //   "Cannot specify both tools and tool IDs - please provide only one"
+  //
+  // and `tool_ids` is the only way to attach a workspace tool. So every
+  // company with a knowledge-base document failed to publish outright, which
+  // is why no agent in the workspace had ever had a tool attached. The two
+  // shapes were measured side by side against the live API (2026-10-12):
+  // tools+tool_ids 400, built_in_tools+tool_ids 200 with both present.
+  const builtInTools = {
+    end_call: { type: 'system', name: 'end_call', description: '', params: { system_tool_type: 'end_call' } },
+  };
   if (transferNumber) {
-    tools.push({
+    builtInTools.transfer_to_number = {
       type: 'system',
       name: 'transfer_to_number',
       description: 'تحويل المكالمة إلى موظف بشري عند الحاجة.',
@@ -523,7 +556,7 @@ function buildAgentConfig({
           condition: 'عندما يطلب العميل التحدث مع موظف بشري أو عندما لا تستطيع مساعدته.',
         }],
       },
-    });
+    };
   }
 
   return {
@@ -532,27 +565,34 @@ function buildAgentConfig({
       agent: {
         first_message: firstMessage,
         language     : langCode(language),
+        // The reference agent lets the caller talk over the greeting, so a
+        // customer who answers early is heard instead of talked over.
+        disable_first_message_interruptions: !interruptibleGreeting,
         prompt: {
           prompt     : prompt,
           llm        : resolveLlm(model),
           temperature,
           max_tokens : maxTokens,
-          tools,
+          timezone   : AGENT_TIMEZONE,
+          built_in_tools: builtInTools,
           ...(toolIds.length ? { tool_ids: toolIds } : {}),
         },
       },
       tts: {
-        model_id        : 'eleven_turbo_v2_5',
+        model_id        : ttsModel || AGENT_DEFAULTS.ttsModel,
         voice_id        : voiceId,
         stability,
         similarity_boost: similarityBoost,
         speed           : voiceSpeed,
+        // Only the expressive model line reacts to this; the others store it
+        // and ignore it, so sending it unconditionally keeps publish
+        // authoritative without branching on the model name.
+        expressive_mode : !!expressiveMode,
       },
       asr: { quality: 'high' },
       turn: {
-        // The previous provider's idle prompt after 15s of silence has no
-        // equivalent here; turn_timeout is the closest knob. The hard stop
-        // after 30s of total silence is preserved exactly.
+        // Defaults are the reference agent's: re-prompt after 6s, and never
+        // hang up on silence (-1) -- the agent ends calls with end_call.
         turn_timeout            : idleTimeoutSeconds,
         silence_end_call_timeout: silenceTimeoutSeconds,
       },
@@ -576,11 +616,48 @@ function buildAgentConfig({
         enable_conversation_initiation_client_data_from_webhook: true,
       },
       data_collection: DATA_COLLECTION,
+      // Prompt-injection screening. This agent is reachable by anyone who can
+      // dial the company's published number, and it carries tools that read
+      // tenant data, so a caller reciting instructions at it is a real attack
+      // surface rather than a theoretical one. Off by default on the provider
+      // side. The other guardrail families (content moderation, synthetic-voice
+      // detection) are left at their defaults deliberately: they need
+      // per-tenant thresholds nobody has set, and a false positive there drops
+      // a real customer's call.
+      guardrails: {
+        version: '1',
+        prompt_injection: { is_enabled: true },
+      },
     },
   };
 }
 
 // ─── Workspace tools ──────────────────────────────────────────────
+/**
+ * The two body fields the PROVIDER fills on every tool call, bound to its own
+ * system variables so the model can neither see nor set them.
+ *
+ * `dynamic_variable` and nothing else. This used to send
+ * { description: 'internal', constant_value: '{{system__agent_id}}' }, which
+ * the provider now rejects outright when the tool is created —
+ *
+ *   422 "Can only set one of: description, dynamic_variable,
+ *        is_system_provided, constant_value, or is_omitted"
+ *
+ * — so no webhook tool, the knowledge-base one included, could be registered
+ * at all. Measured against the live API (2026-10-12): the old pair 422,
+ * constant_value alone 200, dynamic_variable alone 200. dynamic_variable is
+ * chosen because it is an explicit binding to the variable, where a
+ * constant_value holding "{{...}}" is a literal string whose substitution is
+ * the provider's to decide.
+ */
+function providerFilledIds() {
+  return {
+    agent_id       : { type: 'string', dynamic_variable: 'system__agent_id' },
+    conversation_id: { type: 'string', dynamic_variable: 'system__conversation_id' },
+  };
+}
+
 /**
  * Build a webhook tool from a registry feature declaration.
  *
@@ -613,16 +690,7 @@ function buildFeatureToolConfig({ feature, companyId, publicBaseUrl }) {
           ...(feature.bodyProperties || {}),
           // Filled by the provider, not the model. The handler checks agent_id
           // maps to the same company as the header — defence in depth.
-          agent_id: {
-            type: 'string',
-            description: 'internal',
-            constant_value: '{{system__agent_id}}',
-          },
-          conversation_id: {
-            type: 'string',
-            description: 'internal',
-            constant_value: '{{system__conversation_id}}',
-          },
+          ...providerFilledIds(),
         },
         required: feature.bodyRequired || [],
       },
@@ -654,16 +722,7 @@ function buildKbToolConfig({ companyId, publicBaseUrl }) {
           query: { type: 'string', description: 'نص السؤال أو الكلمات المفتاحية للبحث' },
           // Filled by the provider, not the model. The handler checks it maps
           // to the same company as the header — defence in depth.
-          agent_id: {
-            type: 'string',
-            description: 'internal',
-            constant_value: '{{system__agent_id}}',
-          },
-          conversation_id: {
-            type: 'string',
-            description: 'internal',
-            constant_value: '{{system__conversation_id}}',
-          },
+          ...providerFilledIds(),
         },
         required: ['query'],
       },
@@ -757,15 +816,13 @@ async function upsertAgentTolerant(cfg, existingId, log) {
   try {
     return await upsertAgent(cfg, existingId, log);
   } catch (e) {
-    const hasTransfer = (cfg.conversation_config?.agent?.prompt?.tools || [])
-      .some((t) => t?.name === 'transfer_to_number');
+    const hasTransfer = !!cfg.conversation_config?.agent?.prompt?.built_in_tools?.transfer_to_number;
     if (!hasTransfer || e?.response?.status !== 422) throw e;
     log?.error?.('voice: agent rejected the transfer_to_number tool — syncing WITHOUT human transfer', {
       err: errText(e),
     });
     const stripped = JSON.parse(JSON.stringify(cfg));
-    stripped.conversation_config.agent.prompt.tools =
-      stripped.conversation_config.agent.prompt.tools.filter((t) => t?.name !== 'transfer_to_number');
+    delete stripped.conversation_config.agent.prompt.built_in_tools.transfer_to_number;
     return upsertAgent(stripped, existingId, log);
   }
 }
@@ -776,12 +833,35 @@ async function upsertAgentTolerant(cfg, existingId, log) {
  * (server.js composeSystemPrompt) so the voice channel and every test channel
  * run on byte-identical text.
  */
-async function syncAgent(company, opts) {
+// What syncAgent hands buildAgentConfig, kept apart from the network so the
+// hand-off itself can be tested. An option not named here never reaches the
+// provider: ttsModel, expressive mode and turn pacing were dropped exactly
+// that way -- the pipeline passed them, this list did not, and every publish
+// silently reset them -- until 2026-10-13.
+function agentBase(company, opts, toolIds = []) {
   const {
-    prompt, promptInbound, firstMessage, firstMessageInbound,
+    prompt, firstMessage,
     model, temperature, maxTokens,
     voiceId, stability, similarityBoost, voiceSpeed,
-    transferNumber, wantsKbTool, webhookTools, publicBaseUrl, log,
+    ttsModel, expressiveMode, idleTimeoutSeconds, silenceTimeoutSeconds, interruptibleGreeting,
+    transferNumber,
+  } = opts;
+  return {
+    // Deterministic, tenant-scoped name. It is also the recovery key when a
+    // stored agent id goes missing, so it must stay stable per company.
+    name: `smart-assistant:${company.id}`,
+    prompt, firstMessage, language: company.language,
+    model, temperature, maxTokens,
+    voiceId, stability, similarityBoost, voiceSpeed,
+    ttsModel, expressiveMode, idleTimeoutSeconds, silenceTimeoutSeconds, interruptibleGreeting,
+    toolIds, transferNumber,
+  };
+}
+
+async function syncAgent(company, opts) {
+  const {
+    promptInbound, firstMessage, firstMessageInbound,
+    wantsKbTool, webhookTools, publicBaseUrl, log,
     hooks = {},
   } = opts;
 
@@ -817,15 +897,7 @@ async function syncAgent(company, opts) {
     await hooks.onToolSynced?.(id, entry.featureKey);
   }
 
-  const base = {
-    // Deterministic, tenant-scoped name. It is also the recovery key when a
-    // stored agent id goes missing, so it must stay stable per company.
-    name: `smart-assistant:${company.id}`,
-    prompt, firstMessage, language: company.language,
-    model, temperature, maxTokens,
-    voiceId, stability, similarityBoost, voiceSpeed,
-    toolIds, transferNumber,
-  };
+  const base = agentBase(company, opts, toolIds);
 
   const agentId = await upsertAgentTolerant(buildAgentConfig(base), company.agentId, log);
   await hooks.onAgentSynced?.(agentId);
@@ -934,10 +1006,10 @@ async function importPhoneNumber(company, sip = {}) {
         { ...trunk, ...agentField });
       return { phoneNumberId: raced.phone_number_id, phoneNumber, reused: true };
     }
+    // Shown on the operator's screen, which never names the voice vendor.
     const err = new Error(
-      `${phoneNumber} is already registered to a DIFFERENT ElevenLabs workspace. `
-      + 'A number can only be imported once across the whole platform — release it there first, '
-      + 'or contact ElevenLabs support.');
+      `الرقم ${phoneNumber} مسجّل بالفعل في حساب آخر لدى مزوّد الصوت. `
+      + 'الرقم يُستورد مرة واحدة فقط — احذفه من الحساب الآخر أولاً.');
     err.code = 'PHONE_NUMBER_TAKEN';
     throw err;
   }
@@ -990,7 +1062,7 @@ async function findPhoneNumber(phoneNumber) {
 async function bindPhoneNumber(company) {
   const phoneNumberId = company.phoneNumberId;
   if (!phoneNumberId) {
-    const err = new Error('company has no ElevenLabs phone number id — import the 3CX number first');
+    const err = new Error('company has no imported phone number id — import the 3CX number first');
     err.code = 'NO_PHONE_NUMBER_ID';
     throw err;
   }
@@ -1007,11 +1079,40 @@ async function bindPhoneNumber(company) {
 }
 
 // ─── Outbound ─────────────────────────────────────────────────────
+// The request body, built apart from sending it so its shape can be checked
+// without a network.
+function outboundCallBody({ company, toNumber, variables = {}, firstMessage = null, voiceId = null }) {
+  const clientData = {};
+  // company_id travels as a dynamic variable for observability only. The
+  // webhook path never trusts it — see resolveCompanyForEvent.
+  const dynamic = { ...variables, company_id: company.id };
+  clientData.dynamic_variables = dynamic;
+  const override = {};
+  if (firstMessage) {
+    // Requires platform_settings.overrides.…first_message = true, which
+    // buildAgentConfig sets on every sync.
+    override.agent = { first_message: firstMessage };
+  }
+  if (voiceId) {
+    // Same requirement for overrides.tts.voice_id, also set on every sync. It
+    // lets a test call speak with a voice the company has not published.
+    override.tts = { voice_id: voiceId };
+  }
+  if (Object.keys(override).length) clientData.conversation_config_override = override;
+
+  return {
+    agent_id             : company.agentId,
+    agent_phone_number_id: company.phoneNumberId,
+    to_number            : toNumber,
+    conversation_initiation_client_data: clientData,
+  };
+}
+
 /**
  * Place a call through the company's OWN imported number, so the customer sees
  * the company's real DID and the leg routes back through their 3CX trunk.
  */
-async function startOutboundCall({ company, toNumber, variables = {}, firstMessage = null }) {
+async function startOutboundCall({ company, toNumber, variables = {}, firstMessage = null, voiceId = null }) {
   if (!company.agentId) {
     const err = new Error('company has no agent'); err.code = 'NOT_PUBLISHED'; throw err;
   }
@@ -1022,23 +1123,8 @@ async function startOutboundCall({ company, toNumber, variables = {}, firstMessa
     const err = new Error('invalid destination number'); err.code = 'BAD_NUMBER'; throw err;
   }
 
-  const clientData = {};
-  // company_id travels as a dynamic variable for observability only. The
-  // webhook path never trusts it — see resolveCompanyForEvent.
-  const dynamic = { ...variables, company_id: company.id };
-  clientData.dynamic_variables = dynamic;
-  if (firstMessage) {
-    // Requires platform_settings.overrides.…first_message = true, which
-    // buildAgentConfig sets on every sync.
-    clientData.conversation_config_override = { agent: { first_message: firstMessage } };
-  }
-
-  const r = await post('/v1/convai/sip-trunk/outbound-call', {
-    agent_id             : company.agentId,
-    agent_phone_number_id: company.phoneNumberId,
-    to_number            : toNumber,
-    conversation_initiation_client_data: clientData,
-  });
+  const r = await post('/v1/convai/sip-trunk/outbound-call',
+    outboundCallBody({ company, toNumber, variables, firstMessage, voiceId }));
 
   const d = r.data || {};
   if (d.success === false) {
@@ -1116,7 +1202,7 @@ module.exports = {
   getAgent, getWorkspaceSettings,
   // exported for tests
   buildAgentConfig, buildKbToolConfig, buildFeatureToolConfig, buildTrunkConfig,
-  upsertTool, deleteTool, mapEndedReason,
+  agentBase, outboundCallBody, upsertTool, deleteTool, mapEndedReason,
   normalizeConversation, extractStructuredData, errText, DATA_COLLECTION,
   usdFromCredits, webhookSecret,
 };

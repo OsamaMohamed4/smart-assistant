@@ -140,12 +140,66 @@ after(async () => {
 });
 
 // ══ Registry shape ════════════════════════════════════════════════
-test('only knowledge_base and call_transfer are implemented in this phase', () => {
-  assert.deepEqual(registry.enableableKeys().sort(), ['call_transfer', 'knowledge_base']);
+test('exactly the capabilities with client answers are implemented', () => {
+  // request_creation ships because the client's requirements sheet answers it:
+  // the request types and their fields (q10), the caller number taken directly
+  // (q11), confirmation before filing (q31), stored for staff review (q37).
+  //
+  // Everything else stays locked until its questions are answered:
+  //   appointment_booking  every calendar question was "مب الان"
+  //   ticket_creation      the fields of a maintenance report or complaint (q28)
+  //   send_message         WhatsApp waits on the provider connection (q19-23)
+  //   system/data/update   the integration is "حتى يتم الربط" (q33-35)
+  // Moving one of these to implemented has to be a deliberate edit here.
+  assert.deepEqual(registry.enableableKeys().sort(), ['call_transfer', 'knowledge_base', 'request_creation']);
   for (const k of ['appointment_booking', 'ticket_creation', 'send_message', 'workflow_action',
-    'system_integration', 'data_exchange', 'request_creation', 'customer_update']) {
+    'system_integration', 'data_exchange', 'customer_update']) {
     assert.equal(registry.getFeature(k)?.status, 'planned', `${k} must stay planned`);
   }
+});
+
+test('request_creation is opt-in, never on by default', () => {
+  // It files records on a company's behalf. It must be switched on by someone
+  // who decided they want it, not appear on every agent because it shipped.
+  assert.equal(registry.getFeature('request_creation').defaultEnabled, false);
+});
+
+test('the request tool never asks the model for a phone number', () => {
+  // Question 11: take the caller's number directly. It is joined from the call
+  // record, which the provider fills from the line — so the schema must not
+  // offer the model a field to supply a different one.
+  const props = registry.getFeature('request_creation').bodyProperties;
+  for (const key of Object.keys(props)) {
+    assert.doesNotMatch(key, /phone|mobile|number|jawal/i, `${key} would let the model supply a number`);
+  }
+  assert.ok(props.customer_confirmed, 'confirmation before filing (question 31)');
+  assert.deepEqual(registry.getFeature('request_creation').bodyRequired.sort(),
+    ['customer_confirmed', 'request_type']);
+});
+
+test('the request schema is generated from the request types, not hand-copied', () => {
+  const { REQUEST_TYPES } = require('../lib/request-types');
+  const props = registry.getFeature('request_creation').bodyProperties;
+  assert.deepEqual(props.request_type.enum.sort(), Object.keys(REQUEST_TYPES).sort());
+  for (const t of Object.values(REQUEST_TYPES)) {
+    for (const f of t.fields) assert.ok(props[f], `${f} is collected but not offered to the model`);
+  }
+});
+
+test('pickFields keeps only the fields the type defines, bounded', () => {
+  const { pickFields, FIELD_MAX } = require('../lib/request-types');
+  const out = pickFields('leasing_commercial', {
+    customer_name: '  محمد  ', business_activity: 'مقهى',
+    // Not a field of this type, and not a field at all: both must be dropped.
+    purchase_reason: 'استثمار', invented_field: 'x',
+    unit_area: 'a'.repeat(FIELD_MAX + 50),
+  });
+  assert.equal(out.customer_name, 'محمد');
+  assert.equal(out.business_activity, 'مقهى');
+  assert.equal(out.purchase_reason, undefined, 'belongs to the interest type only');
+  assert.equal(out.invented_field, undefined, 'unknown keys never widen the record');
+  assert.equal(out.unit_area.length, FIELD_MAX);
+  assert.equal(pickFields('ticket', {}), null, 'an undefined type yields nothing');
 });
 
 test('the knowledge-base endpoint path is UNCHANGED', () => {

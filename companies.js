@@ -1,6 +1,7 @@
 const { sql } = require('./db');
 const { MASTER_PROMPT } = require('./lib/master-prompt');
 const { parseBusinessProfile } = require('./lib/business-profile');
+const { resolveVoiceId, VOICES, DEFAULT_VOICE_ID } = require('./lib/voices');
 
 const cache = new Map();
 
@@ -37,8 +38,8 @@ async function buildSystemPromptWithRAG(company, userQuery, vars) {
     throw new NoActiveScenarioError(company.id);
   }
   // Runtime vars first (per-call values like agent_name from selected voice),
-  // then globals as fallback (date/time, and agent_name ← company.name if
-  // the caller didn't supply one). Scenario is the SOLE source of truth — no
+  // then globals as fallback (date/time, company_name, and agent_name from
+  // the company's voice if the caller didn't supply one). Scenario is the SOLE source of truth — no
   // MASTER prefix — so the text channel matches the voice channel.
   let filled = fillRuntimeVars(scenario.instruction_prompt, vars);
   filled = fillGlobals(filled, company);
@@ -72,11 +73,30 @@ function localNow(date = new Date()) {
   return new Date(date.getTime() + TZ_OFFSET_HOURS * 3600 * 1000);
 }
 
-function fillGlobals(text, company) {
+// The agent's spoken name and grammatical gender come from its VOICE, so one
+// scenario serves either voice: "معك {{agent_name}}" says منى in Mona's voice
+// and جداوي in Jeddawi's. It used to be the company's name, which made every
+// agent introduce itself as its own company ("معك MASAR"). A voice outside the
+// catalogue (EXTRA_VOICE_IDS) has no name of its own and speaks as المساعد.
+function agentIdentity(company, voiceId) {
+  const id = resolveVoiceId(voiceId || company?.settings?.voiceId) || DEFAULT_VOICE_ID;
+  const voice = VOICES.find((v) => v.id === id);
+  return {
+    agent_name  : voice?.label || 'المساعد',
+    // Worded to complete "تكلّم بصيغة {{agent_gender}}", the way a prompt
+    // tells a female voice to speak of itself in the feminine.
+    agent_gender: voice?.gender === 'female' ? 'المؤنث' : 'المذكر',
+  };
+}
+
+// `voiceId` names a voice other than the company's own -- the Playground's
+// test call -- so its greeting introduces the voice the caller actually hears.
+function fillGlobals(text, company, { voiceId } = {}) {
   if (!text) return text;
   const now = localNow();
   const map = {
-    agent_name : company.name || 'المساعد',
+    ...agentIdentity(company, voiceId),
+    company_name: company?.name || '',
     // toISOString() always prints UTC, so we read the shifted instant back out
     // of it — the offset is already baked in by localNow().
     date       : now.toISOString().slice(0, 10),
@@ -102,6 +122,11 @@ function toCompany(row) {
   if (!row) return null;
   let settings = {};
   try { if (row.settings) settings = JSON.parse(row.settings) || {}; } catch {}
+  // A voice retired from the catalogue reads as its replacement everywhere --
+  // the settings screen, publishing, the Playground -- so the company neither
+  // fails to publish nor shows a voice it can no longer pick. The stored value
+  // is rewritten the next time its settings are saved.
+  if (settings.voiceId) settings.voiceId = resolveVoiceId(settings.voiceId);
   return {
     id            : row.id,
     userId        : row.user_id || null,
@@ -161,4 +186,6 @@ module.exports = {
   loadCompany, listCompanies, listCompaniesFull, invalidateCache,
   buildSystemPromptWithRAG, fillGlobals, fillRuntimeVars,
   NoActiveScenarioError, localNow, TZ_OFFSET_HOURS,
+  // exported for tests
+  toCompany,
 };

@@ -10,22 +10,34 @@ import { BusinessProfilePage } from './pages/BusinessProfilePage';
 import { CapabilitiesPage } from './pages/CapabilitiesPage';
 import { WorkspaceGate } from './pages/WorkspaceGate';
 import { AuthPage } from './pages/AuthPage';
+import { LoginPage } from './pages/LoginPage';
+import { MasarMark } from './components/ui/MasarMark';
 import { ClientsPage } from './pages/ClientsPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { CampaignsPage } from './pages/CampaignsPage';
 import { AuditPage } from './pages/AuditPage';
+import { RequestsPage } from './pages/RequestsPage';
+import { UsagePage } from './pages/UsagePage';
 import { ToastProvider } from './components/ui/Toast';
 import { api, setUnauthenticatedHandler } from './lib/api';
 
-// Two front doors share the same SPA:
+// Three front doors share the same SPA:
+//   /login      → the public way in, linked from the marketing site
 //   /admin      → osama (superadmin) sees every company aggregated
 //   /c/<id>     → that company's workspace owner sees their company only
+//
 // The /c/<id> URL is the "branded" workspace link we share with each client;
 // it gates on login the same way /admin does, then renders the exact same
 // dashboard + sessions + playground UI but pinned to the URL's companyId.
+//
+// /login exists because a visitor arriving from the public site has no way to
+// know their company id, and /admin is not something to advertise. It signs
+// them in and sends them to whichever of the two they belong to.
 function getRoute() {
-  const m = window.location.pathname.match(/^\/c\/([a-z0-9-]+)/i);
+  const path = window.location.pathname;
+  const m = path.match(/^\/c\/([a-z0-9-]+)/i);
   if (m) return { kind: 'workspace', companyId: m[1].toLowerCase() };
+  if (/^\/login\/?$/i.test(path)) return { kind: 'login' };
   return { kind: 'admin' };
 }
 
@@ -57,6 +69,24 @@ export default function App() {
       <div className="min-h-screen flex items-center justify-center bg-ink-50" dir="rtl">
         <div className="text-ink-400 text-sm">جارٍ التحميل…</div>
       </div>
+    );
+  }
+
+  // /login — the public front door. Already-signed-in visitors are forwarded
+  // rather than shown a form they do not need.
+  if (route.kind === 'login') {
+    if (user?.role === 'client' && user.companyId) {
+      window.location.replace(`/c/${encodeURIComponent(user.companyId)}`);
+      return null;
+    }
+    if (user?.role === 'superadmin') {
+      window.location.replace('/admin/');
+      return null;
+    }
+    return (
+      <ToastProvider>
+        <LoginPage />
+      </ToastProvider>
     );
   }
 
@@ -120,11 +150,13 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
   // needs to edit their own company details and republish their agent.
   // 'profile' (company facts) is visible everywhere the knowledge base is: it
   // is the company's own content, and a workspace owner edits their own.
+  // 'requests' is open to clients too: the leads are theirs to work.
+  // 'usage' too: a client sees their own consumption, the server pins it.
   const allowedTabs = isWorkspace
-    ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'sessions', 'campaigns'])
+    ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'sessions', 'requests', 'campaigns', 'usage'])
     : isSuper
-      ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'clients', 'sessions', 'campaigns', 'audit'])
-      : new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'sessions', 'campaigns']);
+      ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'clients', 'sessions', 'requests', 'campaigns', 'usage', 'audit'])
+      : new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'sessions', 'requests', 'campaigns', 'usage']);
   const activeTab = allowedTabs.has(tab) ? tab : 'dashboard';
 
   return (
@@ -139,15 +171,13 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         onClose={() => setNavOpen(false)}
       />
       <div className="flex-1 min-w-0 flex flex-col">
-        <header className="lg:hidden sticky top-0 z-30 flex items-center gap-2 h-14 px-3 bg-ink-950 text-white border-b border-ink-800/60">
-          <button onClick={() => setNavOpen(true)} aria-label="فتح القائمة" className="w-11 h-11 rounded-lg flex items-center justify-center text-ink-200 hover:bg-white/10 active:bg-white/[0.15] transition-colors">
+        <header className="lg:hidden sticky top-0 z-30 flex items-center gap-2 h-14 px-3 bg-white text-ink-900 border-b border-ink-100">
+          <button onClick={() => setNavOpen(true)} aria-label="فتح القائمة" className="w-11 h-11 rounded-lg flex items-center justify-center text-ink-600 hover:bg-ink-50 active:bg-ink-100 transition-colors">
             <Menu className="w-5 h-5" />
           </button>
           <div className="flex items-center gap-2 flex-1 min-w-0">
-            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-brand-400 to-brand-700 flex items-center justify-center shrink-0">
-              <svg viewBox="0 0 24 24" className="w-4 h-4 text-white" fill="currentColor"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 1 0 6 0V4a3 3 0 0 0-3-3Zm7 11v-2a1 1 0 1 0-2 0v2a5 5 0 0 1-10 0v-2a1 1 0 1 0-2 0v2a7 7 0 0 0 6 6.92V21H8a1 1 0 1 0 0 2h8a1 1 0 1 0 0-2h-3v-2.08A7 7 0 0 0 19 12Z" /></svg>
-            </div>
-            <span className="text-[14px] font-semibold truncate">Smart Assistant</span>
+            <MasarMark className="h-5 shrink-0 text-brand-600" title="مسار" />
+            <span className="text-[14px] font-semibold truncate">مسار</span>
           </div>
         </header>
         <main className="flex-1 min-w-0">
@@ -162,7 +192,9 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         )}
         {activeTab === 'clients'   && isSuper && !isWorkspace && <ClientsPage />}
         {activeTab === 'sessions'  && <SessionsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
+        {activeTab === 'requests'  && <RequestsPage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'campaigns' && <CampaignsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
+        {activeTab === 'usage'     && <UsagePage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'audit'     && isSuper && !isWorkspace && <AuditPage />}
         </main>
       </div>

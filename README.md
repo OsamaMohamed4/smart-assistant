@@ -167,9 +167,7 @@ Boot **refuses to start** in production if a required secret is missing
 | Var | Default | Purpose |
 |---|---|---|
 | `EXTRA_VOICE_IDS` | — | Comma-separated ElevenLabs voice ids to allow beyond the built-in catalog |
-| `VOICE_SPEED_DEFAULT` | `1.2` | Speaking pace (0.7–1.2) applied at publish |
 | `ELEVENLABS_TOOL_SECRET` | falls back to the webhook secret | Signs the per-company token on the in-call KB tool |
-| `ELEVENLABS_LLM` | `gpt-4.1` | Agent model override, without a deploy |
 | `PUBLIC_BASE_URL` | Railway domain | Where the provider calls back for the KB tool + initiation webhook |
 | `SIP_TRUNK_ADDRESS` / `_USERNAME` / `_PASSWORD` | — | Defaults for `scripts/elevenlabs-provision.js` |
 | `EMBED_MODEL` | `text-embedding-3-large` | Changing this requires `node scripts/reembed.js` |

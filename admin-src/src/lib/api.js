@@ -50,6 +50,14 @@ export const api = {
     return request(`/api/dashboard?${params.toString()}`);
   },
 
+  // consumption per company for one Saudi month (YYYY-MM), inbound/outbound apart
+  usage             : ({ month, companyId } = {}) => {
+    const params = new URLSearchParams();
+    if (month)     params.set('month', month);
+    if (companyId) params.set('companyId', companyId);
+    return request(`/api/usage?${params.toString()}`);
+  },
+
   // conversations (chats + calls, unified)
   conversations     : ({
     period = 'all', type = 'all', status = 'all', outcome = 'all',
@@ -77,11 +85,23 @@ export const api = {
   // Point the company's own number at its own agent (which agent answers when
   // someone dials the company's 3CX line).
   bindPhone         : (id) => request(`/api/companies/${id}/bind-phone`, { method: 'POST', body: '{}' }),
+  // What a company that has chosen nothing is published with (the reference
+  // agent's settings), plus the LLMs a company may pick.
+  agentDefaults     : () => request('/api/agent-defaults'),
+  // Register the company's EXISTING 3CX number with the voice provider. No
+  // number is ever purchased: this hands the provider the DID the company
+  // already owns plus the address of their own PBX, so the provider knows how
+  // to reach it. Superadmin-only server-side — it writes the tenant↔phone-line
+  // binding and accepts SIP credentials.
+  importPhone       : (id, body) => request(`/api/companies/${id}/import-phone`, { method: 'POST', body: JSON.stringify(body) }),
 
   // API keys (public Agent API)
   listApiKeys       : (id) => request(`/api/companies/${id}/api-keys`),
   createApiKey      : (id, name) => request(`/api/companies/${id}/api-keys`, { method: 'POST', body: JSON.stringify({ name }) }),
   revokeApiKey      : (id, keyId) => request(`/api/companies/${id}/api-keys/${keyId}`, { method: 'DELETE' }),
+  // Issue a client a new password. Returns it once; the server keeps only the
+  // hash, so a closed dialog means it is gone for good.
+  resetClientPassword: (id, userId) => request(`/api/companies/${id}/clients/${userId}/reset-password`, { method: 'POST', body: '{}' }),
 
   // Campaigns (outbound dialer)
   listCampaigns     : (id) => request(`/api/companies/${id}/campaigns`),
@@ -132,7 +152,7 @@ export const api = {
   // chat (playground)
   chat              : (body) => request('/chat', { method: 'POST', body: JSON.stringify(body) }),
 
-  // playground voice catalog (3 Saudi voices)
+  // voice catalogue (منى، جداوي); the platform default carries isDefault
   listVoices        : () => request('/api/voices'),
 
   // currently-active scenario for a company (null if none) — used by playground
@@ -225,8 +245,22 @@ export const api = {
 
   // Capabilities: what this company's agent is allowed to do.
   listFeatures      : (companyId) => request(`/api/companies/${companyId}/features`),
-  setFeature        : (companyId, key, enabled) =>
+  // `config` is optional; omitted, the server keeps whatever is stored.
+  setFeature        : (companyId, key, enabled, config) =>
     request(`/api/companies/${companyId}/features/${key}`, {
-      method: 'PATCH', body: JSON.stringify({ enabled }),
+      method: 'PATCH',
+      body: JSON.stringify(config === undefined ? { enabled } : { enabled, config }),
+    }),
+  // Requests the agent filed, for the sales team to follow up.
+  listRequests      : (companyId, { status, type } = {}) => {
+    const q = new URLSearchParams();
+    if (status) q.set('status', status);
+    if (type) q.set('type', type);
+    const qs = q.toString();
+    return request(`/api/companies/${companyId}/requests${qs ? `?${qs}` : ''}`);
+  },
+  updateRequest     : (companyId, requestId, body) =>
+    request(`/api/companies/${companyId}/requests/${requestId}`, {
+      method: 'PATCH', body: JSON.stringify(body),
     }),
 };

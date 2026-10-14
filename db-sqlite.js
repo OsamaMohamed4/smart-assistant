@@ -664,6 +664,73 @@ runMigration(37, 'adopt_existing_kb_tools', `
    WHERE elevenlabs_kb_tool_id IS NOT NULL AND elevenlabs_kb_tool_id <> '';
 `);
 
+// Migration 38: requests an agent files during a call. Mirrors the Postgres
+// DDL — see db-pg-schema.js for why the customer's number lives on the call
+// rather than here, and why the triple is unique.
+runMigration(38, 'create_customer_requests', `
+  CREATE TABLE IF NOT EXISTS customer_requests (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id      TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    conversation_id TEXT,
+    request_type    TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'new',
+    customer_name   TEXT,
+    fields          TEXT,
+    staff_notes     TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_requests_conversation
+    ON customer_requests(company_id, conversation_id, request_type);
+  CREATE INDEX IF NOT EXISTS idx_customer_requests_company
+    ON customer_requests(company_id, created_at);
+`);
+
+// Migration 39: the reference agent became every company's default. Tuning
+// stored before then would outrank it on every publish, so it is removed once;
+// voice, transfer number, webhook and caps stay. JSON is edited in JS, not SQL,
+// so both drivers share stripTuning -- see lib/migrations-pg.js for Postgres.
+if (!db.prepare('SELECT 1 FROM schema_migrations WHERE id = 39').get()) {
+  const { stripTuning } = require('./lib/agent-defaults');
+  const update = db.prepare('UPDATE companies SET settings = ? WHERE id = ?');
+  db.transaction(() => {
+    for (const r of db.prepare('SELECT id, settings FROM companies').all()) {
+      const { settings, removed } = stripTuning(r.settings);
+      if (removed) update.run(settings, r.id);
+    }
+    db.prepare('INSERT INTO schema_migrations (id, name) VALUES (39, ?)')
+      .run('reset_agent_tuning_to_reference');
+  })();
+}
+
+// Migration 40: ناصر becomes {{agent_name}} in every scenario, at the
+// operator's request (templateAgentName, lib/voices.js), so the name follows
+// the company's voice. Each scenario's text as it was goes into its history
+// first, so السجل can bring it back. Postgres: lib/migrations-pg.js.
+if (!db.prepare('SELECT 1 FROM schema_migrations WHERE id = 40').get()) {
+  const { templateAgentName } = require('./lib/voices');
+  const FIELDS = ['first_message', 'first_message_inbound', 'instruction_prompt', 'instruction_prompt_inbound'];
+  const snapshot = db.prepare(`
+    INSERT INTO scenario_versions
+      (scenario_id, company_id, name, first_message, first_message_inbound, instruction_prompt, edited_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  const update = db.prepare(`
+    UPDATE scenarios SET first_message = ?, first_message_inbound = ?, instruction_prompt = ?,
+                         instruction_prompt_inbound = ?, updated_at = datetime('now')
+     WHERE id = ?`);
+  db.transaction(() => {
+    for (const s of db.prepare(`SELECT id, company_id, name, ${FIELDS.join(', ')} FROM scenarios`).all()) {
+      const next = FIELDS.map((k) => templateAgentName(s[k]));
+      if (!next.some((f) => f.count)) continue;
+      snapshot.run(s.id, s.company_id, s.name, s.first_message, s.first_message_inbound || '',
+        s.instruction_prompt, 'النظام: ناصر ← {{agent_name}}');
+      update.run(...next.map((f) => f.text), s.id);
+    }
+    db.prepare('INSERT INTO schema_migrations (id, name) VALUES (40, ?)')
+      .run('replace_nasser_with_agent_name');
+  })();
+}
+
 // ─── Tenant-safety: one company per phone number ──────────────────
 // A DID and an imported provider number each identify exactly ONE tenant.
 // Inbound calls are attributed by those values (services/voice resolves a call
@@ -740,6 +807,13 @@ const sql = {
     UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = datetime('now') WHERE id = ?
   `),
   updatePassword     : db.prepare('UPDATE users SET password_hash = ? WHERE id = ?'),
+  // Lift a lockout WITHOUT claiming the user just signed in. clearFailedLogins
+  // also stamps last_login_at, which is correct after a successful login and
+  // wrong after an administrative reset — the client list would show someone
+  // as freshly active when they have not been back at all.
+  unlockUser         : db.prepare(
+    'UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?'
+  ),
 
   // sessions
   insertSession      : db.prepare(`
@@ -870,6 +944,42 @@ const sql = {
   deleteCompanyTool  : db.prepare(
     'DELETE FROM company_tools WHERE company_id = @company_id AND feature_key = @feature_key'
   ),
+
+  // ─── Customer requests ──────────────────────────────────────────
+  // Every statement here is scoped by company_id in its WHERE clause, the
+  // join included: a request must never surface another tenant's call, even
+  // if a conversation id were ever shared or guessed.
+  getCustomerRequestByConversation: db.prepare(`
+    SELECT id, fields FROM customer_requests
+     WHERE company_id = ? AND conversation_id = ? AND request_type = ?
+  `),
+  insertCustomerRequest: db.prepare(`
+    INSERT INTO customer_requests (company_id, conversation_id, request_type, customer_name, fields)
+    VALUES (@company_id, @conversation_id, @request_type, @customer_name, @fields)
+  `),
+  updateCustomerRequestFields: db.prepare(`
+    UPDATE customer_requests
+       SET customer_name = @customer_name, fields = @fields, updated_at = datetime('now')
+     WHERE id = @id AND company_id = @company_id
+  `),
+  listCustomerRequests: db.prepare(`
+    SELECT r.id, r.conversation_id, r.request_type, r.status, r.customer_name,
+           r.fields, r.staff_notes, r.created_at, r.updated_at,
+           c.caller_number
+      FROM customer_requests r
+      LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
+     WHERE r.company_id = ?
+     ORDER BY r.created_at DESC, r.id DESC
+     LIMIT 500
+  `),
+  getCustomerRequest: db.prepare(
+    'SELECT id, status, staff_notes FROM customer_requests WHERE id = ? AND company_id = ?'
+  ),
+  updateCustomerRequestStatus: db.prepare(`
+    UPDATE customer_requests
+       SET status = @status, staff_notes = @staff_notes, updated_at = datetime('now')
+     WHERE id = @id AND company_id = @company_id
+  `),
 
   // ─── Publish pipeline ───────────────────────────────────────────
   // A run is opened BEFORE any provider call so a process that dies mid-publish
@@ -1418,6 +1528,26 @@ const sql = {
      WHERE created_at BETWEEN @from AND @to
        AND (@company_id IS NULL OR company_id = @company_id)
      GROUP BY hour, COALESCE(direction, 'inbound')
+  `),
+  // Per-company consumption, inbound and outbound apart. A row with no
+  // direction is inbound, as everywhere else; a call that never connected
+  // counts as a call with zero seconds. Calls not yet tied to a company are
+  // left out: there is no one to attribute them to. `to` is EXCLUSIVE (the
+  // start of the next period): created_at can carry fractional seconds, which
+  // an inclusive "23:59:59" bound would silently drop.
+  usageByCompanyInRange: db.prepare(`
+    SELECT company_id,
+           SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 0 ELSE 1 END) AS inbound_calls,
+           SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 0 ELSE COALESCE(duration_sec, 0) END) AS inbound_sec,
+           SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 0 ELSE COALESCE(cost_credits, 0) END) AS inbound_credits,
+           SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN 1 ELSE 0 END) AS outbound_calls,
+           SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN COALESCE(duration_sec, 0) ELSE 0 END) AS outbound_sec,
+           SUM(CASE WHEN COALESCE(direction, 'inbound') = 'outbound' THEN COALESCE(cost_credits, 0) ELSE 0 END) AS outbound_credits
+      FROM calls
+     WHERE created_at >= @from AND created_at < @to
+       AND company_id IS NOT NULL
+       AND (@company_id IS NULL OR company_id = @company_id)
+     GROUP BY company_id
   `),
   chatsPerHourInRange : db.prepare(`
     SELECT substr(created_at, 12, 2) AS hour, COUNT(*) AS n

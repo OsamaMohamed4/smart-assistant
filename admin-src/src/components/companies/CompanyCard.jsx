@@ -1,4 +1,4 @@
-import { Phone, Mic, Bot, BookOpen, MessageSquare, PhoneCall, MoreHorizontal, Rocket, Trash2, Pencil, Key } from 'lucide-react';
+import { Phone, PhoneIncoming, Mic, Bot, BookOpen, MessageSquare, PhoneCall, MoreHorizontal, Rocket, Trash2, Pencil, Key } from 'lucide-react';
 import { Avatar } from '../ui/Avatar';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
@@ -8,7 +8,7 @@ import { useState, useRef, useEffect } from 'react';
 // `canManage = false` hides destructive / platform-only actions (delete,
 // bind-phone). Clients see only edit + sync because that's all the backend
 // would let them do anyway — keeping the UI honest.
-export function CompanyCard({ company, onEdit, onSync, onBindPhone, onDelete, onApiKeys, syncing, binding, canManage = true }) {
+export function CompanyCard({ company, onEdit, onSync, onBindPhone, onImportPhone, onDelete, onApiKeys, syncing, binding, canManage = true }) {
   const c = company;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
@@ -60,6 +60,11 @@ export function CompanyCard({ company, onEdit, onSync, onBindPhone, onDelete, on
                       <Pencil className="w-3.5 h-3.5 text-ink-500" strokeWidth={2} /> تعديل
                     </button>
                     {canManage && (
+                      <button onClick={() => { setMenuOpen(false); onImportPhone(c); }} className="w-full px-3 py-2 text-right text-[13px] flex items-center gap-2.5 hover:bg-ink-50 text-ink-800">
+                        <PhoneIncoming className="w-3.5 h-3.5 text-ink-500" strokeWidth={2} /> استيراد الرقم
+                      </button>
+                    )}
+                    {canManage && (
                       <button onClick={() => { setMenuOpen(false); onBindPhone(c); }} className="w-full px-3 py-2 text-right text-[13px] flex items-center gap-2.5 hover:bg-ink-50 text-ink-800">
                         <Phone className="w-3.5 h-3.5 text-ink-500" strokeWidth={2} /> اربط الرقم
                       </button>
@@ -82,7 +87,7 @@ export function CompanyCard({ company, onEdit, onSync, onBindPhone, onDelete, on
 
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
               {synced
-                ? <Badge tone="success" dot>منشور على ElevenLabs</Badge>
+                ? <Badge tone="success" dot>منشور</Badge>
                 : <Badge tone="warning" dot>غير منشور</Badge>}
               {hasPhone && <Badge tone="brand" dot><Phone className="w-2.5 h-2.5 -mr-0.5" />{c.phoneNumber}</Badge>}
               {c.hasKB && <Badge tone="info"><BookOpen className="w-2.5 h-2.5 -mr-0.5" />KB</Badge>}
@@ -101,8 +106,10 @@ export function CompanyCard({ company, onEdit, onSync, onBindPhone, onDelete, on
       <div className="px-5 py-3 border-t border-ink-100 bg-ink-50/40 flex items-center justify-between gap-2">
         <div className="text-[11.5px] text-ink-500 flex items-center gap-1.5 truncate">
           <Bot className="w-3 h-3 shrink-0" />
-          <span className="truncate font-mono">
-            {synced ? c.agentId.slice(0, 8) + '…' : 'لم يُنشر بعد'}
+          {/* Not the agent id: that is the voice provider's own identifier,
+              and no screen names the vendor behind the product. */}
+          <span className="truncate">
+            {synced ? 'المساعد منشور' : 'لم يُنشر بعد'}
           </span>
         </div>
         <Button variant="brand" size="sm" onClick={() => onSync(c)} loading={syncing} className="gap-1.5">

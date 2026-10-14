@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Sparkles, CheckCircle2, AlertTriangle, User as UserIcon, Volume2,
   Phone, Settings2, MessageSquare, Mic, Send, Loader2, RotateCcw,
-  ArrowUpRight, Hash,
+  Hash,
 } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { Badge } from '../components/ui/Badge';
@@ -27,7 +27,10 @@ import { cn, relTime } from '../lib/utils';
 //           knowledge base, minus the audio. Useful for iterating on wording.
 //
 // What you test here is what callers get on the phone for real.
-const GLOBAL_VARS = new Set(['agent_name', 'date', 'time']);
+//
+// Filled by the platform, never asked for here: the agent's name and gender
+// come from the voice, the company's name from the company.
+const GLOBAL_VARS = new Set(['agent_name', 'agent_gender', 'company_name', 'date', 'time']);
 
 export function PlaygroundPage({ pinnedCompanyId }) {
   const { push } = useToast();
@@ -55,10 +58,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
 
   // ─── Bootstrap ──────────────────────────────────────────
   useEffect(() => {
-    api.listVoices().then((v) => {
-      setVoices(v);
-      if (v[0]) setVoiceId(v[0].id);
-    }).catch((e) => push(e.message, 'error'));
+    api.listVoices().then(setVoices).catch((e) => push(e.message, 'error'));
 
     api.listCompanies().then((cs) => {
       const scoped = pinnedCompanyId ? cs.filter((c) => c.id === pinnedCompanyId) : cs;
@@ -93,11 +93,19 @@ export function PlaygroundPage({ pinnedCompanyId }) {
   }, [messages, chatBusy]);
 
   const activeCompany = companies.find((c) => c.id === companyId);
+  // The voice the company's published agent speaks with. The list opens on it,
+  // so an untouched test call is the production call; picking the other voice
+  // tries it on that one call only.
+  const companyVoiceId = activeCompany?.settings?.voiceId
+    || voices.find((v) => v.isDefault)?.id || voices[0]?.id || null;
+  useEffect(() => { setVoiceId(companyVoiceId); }, [companyVoiceId]);
   const selectedVoice = useMemo(
     () => voices.find((v) => v.id === voiceId) || null,
     [voices, voiceId],
   );
   const agentName = selectedVoice?.label || selectedVoice?.name || 'المساعد';
+  // Same words the server fills {{agent_gender}} with (companies.js).
+  const agentGender = selectedVoice?.gender === 'female' ? 'المؤنث' : 'المذكر';
 
   const userVars = useMemo(() => {
     if (!scenario?.variables) return [];
@@ -105,8 +113,8 @@ export function PlaygroundPage({ pinnedCompanyId }) {
   }, [scenario]);
   const missingRequired = userVars.some((v) => v.required && !vars[v.name]?.trim());
   const runtimeVars     = useMemo(
-    () => ({ ...vars, agent_name: agentName }),
-    [vars, agentName],
+    () => ({ ...vars, agent_name: agentName, agent_gender: agentGender }),
+    [vars, agentName, agentGender],
   );
 
   const published = !!activeCompany?.agentId;
@@ -123,6 +131,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
       await api.outboundCall(companyId, {
         phoneNumber   : phone.trim(),
         variableValues: runtimeVars,
+        voiceId,
       });
       push(`جارٍ الاتصال بـ ${phone.trim()}`, 'success');
     } catch (e) {
@@ -321,7 +330,7 @@ export function PlaygroundPage({ pinnedCompanyId }) {
             <span className="text-[12px] font-semibold text-ink-900 uppercase tracking-wider">صوت الـ Agent</span>
           </div>
           <p className="text-[11px] text-ink-500 mb-3 leading-relaxed">
-            اسم الصوت الذي تختاره يُستخدم كاسم الوكيل في المحادثة.
+            مكالمة التجربة تتكلم بالصوت الذي تختاره، واسمه يُستخدم كاسم الوكيل. صوت الشركة نفسه يتغيّر من «إعدادات الصوت والموديل» ثم النشر.
           </p>
           <div className="space-y-2">
             {voices.map((v) => {
@@ -337,13 +346,18 @@ export function PlaygroundPage({ pinnedCompanyId }) {
                   <div className="flex items-center gap-3">
                     <div className={cn(
                       'w-9 h-9 rounded-xl flex items-center justify-center shrink-0',
-                      active ? 'bg-gradient-to-br from-brand-400 to-accent-violet text-white' : 'bg-ink-100 text-ink-600',
+                      active ? 'bg-gradient-to-br from-brand-400 to-brand-700 text-white' : 'bg-ink-100 text-ink-600',
                     )}>
                       <span className="text-[14px] font-bold">{v.label?.[0] || v.name?.[0]}</span>
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-[13.5px] font-semibold text-ink-900 truncate">{v.label || v.name}</span>
+                        <span className="text-[13.5px] font-semibold text-ink-900 truncate">
+                          {v.label || v.name}
+                          {v.id === companyVoiceId && (
+                            <span className="mr-1.5 text-[10.5px] font-medium text-ink-500">· صوت الشركة</span>
+                          )}
+                        </span>
                         {active && <CheckCircle2 className="w-3.5 h-3.5 text-brand-600 shrink-0" />}
                       </div>
                       <div className="text-[11px] text-ink-500 mt-0.5 truncate">{v.description}</div>
@@ -365,15 +379,6 @@ export function PlaygroundPage({ pinnedCompanyId }) {
                   «{scenario.firstMessage}»
                 </p>
               )}
-              {activeCompany?.agentId && (
-                <a
-                  href={`https://elevenlabs.io/app/agents/${activeCompany.agentId}`}
-                  target="_blank" rel="noreferrer"
-                  className="mt-2 inline-flex items-center gap-1 text-[11px] text-brand-700 hover:text-brand-900"
-                >
-                  افتح في ElevenLabs <ArrowUpRight className="w-3 h-3" />
-                </a>
-              )}
             </div>
           )}
         </div>
@@ -388,7 +393,7 @@ function VoiceModePanel({ phone, setPhone, phoneOk, missingRequired, calling, on
   return (
     <div className="flex-1 flex items-center justify-center p-8">
       <div className="w-full max-w-md text-center">
-        <div className="inline-flex w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-400 to-accent-violet items-center justify-center shadow-pop mb-5">
+        <div className="inline-flex w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-400 to-brand-700 items-center justify-center shadow-pop mb-5">
           <Phone className="w-7 h-7 text-white" strokeWidth={2} />
         </div>
         <h2 className="text-[22px] font-bold text-ink-900 tracking-tight">جرّب الوكيل على جوّالك</h2>
@@ -430,7 +435,7 @@ function VoiceModePanel({ phone, setPhone, phoneOk, missingRequired, calling, on
           className={cn(
             'mt-7 w-full h-14 rounded-2xl flex items-center justify-center gap-2.5 font-semibold text-[15px] shadow-pop transition-all',
             canCall
-              ? 'bg-gradient-to-br from-brand-500 to-accent-violet text-white hover:-translate-y-0.5'
+              ? 'bg-gradient-to-br from-brand-500 to-brand-700 text-white hover:-translate-y-0.5'
               : 'bg-ink-200 text-ink-400 cursor-not-allowed',
           )}>
           {calling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Phone className="w-4 h-4" />}

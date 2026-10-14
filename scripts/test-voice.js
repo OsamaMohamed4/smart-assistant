@@ -447,17 +447,272 @@ test('per-call overrides are ENABLED, or personalised outbound greetings do noth
   assert.equal(o.tts.voice_id, true);
 });
 
+const CALLER = { id: 'co-a', agentId: 'agent_A', phoneNumberId: 'phnum_A' };
+
+test('an ordinary outbound call overrides the greeting and nothing about the voice', () => {
+  const b = el.outboundCallBody({
+    company: CALLER, toNumber: '+966500000000', variables: { customer_name: 'خالد' }, firstMessage: 'هلا',
+  });
+  const d = b.conversation_initiation_client_data;
+  assert.deepEqual(d.conversation_config_override, { agent: { first_message: 'هلا' } });
+  assert.equal(d.dynamic_variables.customer_name, 'خالد');
+  assert.equal(d.dynamic_variables.company_id, 'co-a');
+  assert.equal(b.agent_id, 'agent_A');
+  assert.equal(b.agent_phone_number_id, 'phnum_A');
+});
+
+test('a Playground voice travels as tts.voice_id, a field publishing permits', () => {
+  const b = el.outboundCallBody({ company: CALLER, toNumber: '+966500000000', voiceId: 'voice_2' });
+  const o = b.conversation_initiation_client_data.conversation_config_override;
+  assert.deepEqual(o, { tts: { voice_id: 'voice_2' } }, 'no greeting given, so none is overridden');
+  // The provider refuses the whole call if the agent does not allow the field.
+  assert.equal(cfgFor().platform_settings.overrides.conversation_config_override.tts.voice_id, true);
+});
+
+test('with neither a greeting nor a voice, no override object is sent', () => {
+  const b = el.outboundCallBody({ company: CALLER, toNumber: '+966500000000' });
+  assert.equal(b.conversation_initiation_client_data.conversation_config_override, undefined);
+});
+
+test('the agent is given a wall clock, or it cannot resolve "tomorrow at four"', () => {
+  // prompt.timezone defaults to null, and null is not a soft failure for
+  // appointment booking — the model has no reference point for any relative
+  // time the caller says. Verified against the live API (2026-10-03): PATCHing
+  // 'Asia/Riyadh' reads back verbatim.
+  const p = cfgFor().conversation_config.agent.prompt;
+  assert.equal(p.timezone, 'Asia/Riyadh', 'Saudi default');
+
+  const prev = process.env.ELEVENLABS_AGENT_TIMEZONE;
+  try {
+    // The module reads the env at load time, so this asserts the DEFAULT is not
+    // hard-coded past the override rather than re-reading it here.
+    assert.ok(typeof p.timezone === 'string' && p.timezone.includes('/'),
+      'an IANA zone name, not an offset — offsets break across DST');
+  } finally {
+    if (prev === undefined) delete process.env.ELEVENLABS_AGENT_TIMEZONE;
+    else process.env.ELEVENLABS_AGENT_TIMEZONE = prev;
+  }
+});
+
+test('the caller may talk over the greeting, as on the reference agent', () => {
+  // The reference agent (lib/agent-defaults.js) was tuned on real calls with
+  // interruptions allowed, so a customer who answers early is heard.
+  assert.equal(cfgFor().conversation_config.agent.disable_first_message_interruptions, false);
+  assert.equal(cfgFor({ interruptibleGreeting: false })
+    .conversation_config.agent.disable_first_message_interruptions, true);
+});
+
+test('prompt-injection screening is on', () => {
+  // The agent answers a published phone number and holds tools that read
+  // tenant data. Provider default is false. Verified on the live API
+  // (2026-10-03): { version:'1', prompt_injection:{ is_enabled:true } } reads
+  // back enabled.
+  const g = cfgFor().platform_settings.guardrails;
+  assert.equal(g.prompt_injection.is_enabled, true);
+  assert.equal(g.version, '1', 'the provider rejects a guardrails block with no version');
+});
+
+test('the TTS model defaults to the reference agent\'s, eleven_v4', () => {
+  // Turbo v2.5 was held as the default until the expressive line had been
+  // heard on real Saudi calls. It has, on the reference agent, and the
+  // operator made that agent the default for everyone (2026-10-13).
+  assert.equal(cfgFor().conversation_config.tts.model_id, 'eleven_v4');
+  assert.equal(cfgFor().conversation_config.tts.speed, 1.2, 'speed is still ours to set');
+});
+
+test('{{agent_name}} is resolved before a first message reaches the provider', () => {
+  // THE BUG THIS GUARDS, observed live on 2026-10-05: the instruction prompt
+  // went through fillGlobals but the FIRST MESSAGE did not, so {{agent_name}}
+  // arrived at the provider unresolved. The provider then refused to start the
+  // conversation at all —
+  //
+  //   termination_reason: "Missing required dynamic variables in
+  //                        first message: {'agent_name'}"
+  //
+  // — so every call died at second zero while the publish reported success and
+  // the agent looked perfectly configured in the dashboard.
+  const { fillGlobals } = require('../companies');
+  const company = { id: 'co-a', name: 'وكن العقارية' };
+
+  const filled = fillGlobals('حياك الله في {{company_name}}، معك {{agent_name}}، كيف أقدر أساعدك؟', company);
+  assert.ok(!filled.includes('{{'), 'the provider rejects the call if a global survives');
+  assert.equal(filled, 'حياك الله في وكن العقارية، معك جداوي، كيف أقدر أساعدك؟',
+    'the agent is named after its voice, the company after itself');
+});
+
+test('the agent\'s name and gender follow the company\'s voice', () => {
+  // One greeting serves either voice. It used to resolve {{agent_name}} to the
+  // company's own name, so agents introduced themselves as "معك MASAR".
+  const { fillGlobals } = require('../companies');
+  const t = 'معك {{agent_name}}، تكلّم بصيغة {{agent_gender}}';
+  const mona = { id: 'co-a', name: 'س', settings: { voiceId: 'o0oG1TnHDWDdKbAeBgCO' } };
+  assert.equal(fillGlobals(t, mona), 'معك منى، تكلّم بصيغة المؤنث');
+  assert.equal(fillGlobals(t, { id: 'co-b', name: 'س' }), 'معك جداوي، تكلّم بصيغة المذكر', 'no voice chosen: the default');
+  // A test call on the other voice introduces that voice.
+  assert.equal(fillGlobals(t, mona, { voiceId: 'yXEnnEln9armDCyhkXcA' }), 'معك جداوي، تكلّم بصيغة المذكر');
+  // A voice with no catalogue entry has no name of its own.
+  assert.equal(fillGlobals('{{agent_name}}', { id: 'co-c', name: 'س', settings: { voiceId: 'extra123' } }), 'المساعد');
+});
+
+test('ناصر becomes {{agent_name}} only where it is the whole word', () => {
+  const { templateAgentName } = require('../lib/voices');
+  assert.deepEqual(templateAgentName('أنت "ناصر" من الشركة'), { text: 'أنت "{{agent_name}}" من الشركة', count: 1 });
+  assert.deepEqual(templateAgentName('معك ناصر، كيف أقدر أساعدك؟ أنا ناصر'),
+    { text: 'معك {{agent_name}}، كيف أقدر أساعدك؟ أنا {{agent_name}}', count: 2 });
+  for (const keep of ['حي الناصرية', 'ناصري', 'والناصر', 'مناصرة']) {
+    assert.deepEqual(templateAgentName(keep), { text: keep, count: 0 }, keep);
+  }
+  assert.deepEqual(templateAgentName(null), { text: null, count: 0 });
+});
+
+test('per-call placeholders SURVIVE that resolution', () => {
+  // {{customer_name}} is supplied per call from dynamic variables. Resolving it
+  // at publish time would bake one contact's name into every future call, so
+  // fillGlobals must leave anything it does not own exactly as it found it.
+  const { fillGlobals } = require('../companies');
+  const out = fillGlobals('مرحباً {{customer_name}}، معك {{agent_name}}', { id: 'co-a', name: 'وكن' });
+  assert.ok(out.includes('{{customer_name}}'), 'the provider fills this one per call');
+  assert.ok(!out.includes('{{agent_name}}'));
+});
+
+test('fillGlobals tolerates a null first message', () => {
+  // firstMessageInbound is legitimately null for companies with no separate
+  // inbound greeting, and it is now passed through fillGlobals on every publish.
+  const { fillGlobals } = require('../companies');
+  assert.strictEqual(fillGlobals(null, { id: 'co-a', name: 'وكن' }), null);
+});
+
+test('a company can carry its own TTS model through publish', () => {
+  // Publishing REPLACES tts.model_id, so a model chosen in the provider's
+  // dashboard is lost on the next publish unless the company owns it.
+  // Confirmed on the live API (2026-10-07): eleven_v3_conversational reverted
+  // to eleven_turbo_v2_5 after a publish that did not carry it.
+  assert.equal(cfgFor().conversation_config.tts.model_id, 'eleven_v4',
+    'the reference model for every company that has not set one');
+  assert.equal(
+    cfgFor({ ttsModel: 'eleven_v3_conversational' }).conversation_config.tts.model_id,
+    'eleven_v3_conversational');
+});
+
+test('expressive mode is carried, and on unless a company turns it off', () => {
+  assert.equal(cfgFor().conversation_config.tts.expressive_mode, true);
+  assert.equal(cfgFor({ expressiveMode: false }).conversation_config.tts.expressive_mode, false);
+});
+
+test('turn pacing is carried, and -1 survives as "never end on silence"', () => {
+  // The defaults are the reference agent's: 6s, and never hang up on silence.
+  // -1 is the provider's "do not end the call on silence"; a naive clamp to a
+  // positive minimum would turn it into a 5-second hang-up.
+  const d = cfgFor().conversation_config.turn;
+  assert.equal(d.turn_timeout, 6);
+  assert.equal(d.silence_end_call_timeout, -1);
+
+  const t = cfgFor({ idleTimeoutSeconds: 15, silenceTimeoutSeconds: 30 }).conversation_config.turn;
+  assert.equal(t.turn_timeout, 15);
+  assert.equal(t.silence_end_call_timeout, 30);
+});
+
+test('every voice setting the pipeline resolves actually reaches the agent', () => {
+  // THE BUG THIS GUARDS: syncAgent named only voice/stability/similarity/
+  // speed when building the agent, so ttsModel, expressive mode and turn
+  // pacing were dropped on the way -- every publish reset them to defaults,
+  // while the pipeline and buildAgentConfig each looked correct on their own.
+  const { resolveVoiceTuning } = require('../lib/agent-defaults');
+  const tuning = resolveVoiceTuning({
+    ttsModel: 'eleven_v3_conversational', expressiveMode: false,
+    turnTimeoutSeconds: 9, silenceEndCallSeconds: 45, voiceSpeed: 1.1,
+  });
+  const base = el.agentBase({ id: 'co-a', language: 'ar-SA' }, {
+    prompt: 'تعليمات', firstMessage: 'حياك الله', model: 'gemini-3.5-flash-lite',
+    temperature: 0.2, maxTokens: 120, voiceId: 'voice_1', ...tuning,
+  });
+  const cc = el.buildAgentConfig(base).conversation_config;
+  assert.equal(cc.tts.model_id, 'eleven_v3_conversational');
+  assert.equal(cc.tts.expressive_mode, false);
+  assert.equal(cc.tts.speed, 1.1);
+  assert.equal(cc.turn.turn_timeout, 9);
+  assert.equal(cc.turn.silence_end_call_timeout, 45);
+  assert.equal(cc.agent.prompt.llm, 'gemini-3.5-flash-lite');
+  assert.equal(cc.agent.disable_first_message_interruptions, false);
+});
+
+test('a company that chose nothing is published exactly as the reference agent', () => {
+  const { resolveVoiceTuning, resolveAgentModel } = require('../lib/agent-defaults');
+  const base = el.agentBase({ id: 'co-a', language: 'ar-SA' }, {
+    prompt: 'تعليمات', firstMessage: 'حياك الله', voiceId: 'voice_1',
+    ...resolveAgentModel({}), ...resolveVoiceTuning({}),
+  });
+  const cc = el.buildAgentConfig(base).conversation_config;
+  // The live "Wakan - Nasser" agent, as read from the API on 2026-10-13.
+  assert.deepEqual({
+    llm: cc.agent.prompt.llm, temperature: cc.agent.prompt.temperature, max_tokens: cc.agent.prompt.max_tokens,
+    model_id: cc.tts.model_id, expressive_mode: cc.tts.expressive_mode,
+    stability: cc.tts.stability, similarity_boost: cc.tts.similarity_boost, speed: cc.tts.speed,
+    turn_timeout: cc.turn.turn_timeout, silence_end_call_timeout: cc.turn.silence_end_call_timeout,
+    disable_first_message_interruptions: cc.agent.disable_first_message_interruptions,
+  }, {
+    llm: 'gemini-3.5-flash-lite', temperature: 0.2, max_tokens: 120,
+    model_id: 'eleven_v4', expressive_mode: true,
+    stability: 0.55, similarity_boost: 0.75, speed: 1,
+    turn_timeout: 6, silence_end_call_timeout: -1,
+    disable_first_message_interruptions: false,
+  });
+  // What the reference does NOT get to change: Saudi time, injection screening.
+  assert.equal(cc.agent.prompt.timezone, 'Asia/Riyadh');
+  assert.equal(el.buildAgentConfig(base).platform_settings.guardrails.prompt_injection.is_enabled, true);
+});
+
+test('the fields that survive a publish are still NOT sent', () => {
+  // asr.keywords, asr.user_input_audio_format and prompt.knowledge_base are
+  // left alone by the provider precisely because we never name them — proven
+  // against the live API. Naming any of them here would start wiping an
+  // operator's keyword list and detaching uploaded knowledge bases on every
+  // publish, which is the exact failure this whole change exists to prevent.
+  const cc = cfgFor().conversation_config;
+  assert.ok(!('keywords' in cc.asr), 'sending asr.keywords would wipe the company list');
+  assert.ok(!('user_input_audio_format' in cc.asr), 'telephony audio format must not be reset');
+  assert.ok(!('knowledge_base' in cc.agent.prompt), 'naming this detaches uploaded documents');
+});
+
 test('the end_call tool is always attached', () => {
-  const tools = cfgFor().conversation_config.agent.prompt.tools;
-  assert.ok(tools.some((t) => t.params?.system_tool_type === 'end_call'));
+  const bt = cfgFor().conversation_config.agent.prompt.built_in_tools;
+  assert.equal(bt.end_call?.params?.system_tool_type, 'end_call');
 });
 
 test('human transfer is added only when a number is configured', () => {
-  assert.equal(cfgFor().conversation_config.agent.prompt.tools.length, 1);
-  const withTransfer = cfgFor({ transferNumber: '+966500000009' }).conversation_config.agent.prompt.tools;
-  const t = withTransfer.find((x) => x.params?.system_tool_type === 'transfer_to_number');
+  assert.equal(cfgFor().conversation_config.agent.prompt.built_in_tools.transfer_to_number, undefined);
+  const t = cfgFor({ transferNumber: '+966500000009' })
+    .conversation_config.agent.prompt.built_in_tools.transfer_to_number;
   assert.ok(t, 'transfer tool present');
   assert.equal(t.params.transfers[0].transfer_destination.phone_number, '+966500000009');
+});
+
+test('system tools NEVER travel in the `tools` array alongside tool_ids', () => {
+  // THE BUG THIS GUARDS, measured on the live API (2026-10-12): a payload
+  // carrying both prompt.tools and prompt.tool_ids is rejected outright —
+  //
+  //   400 both_tools_and_tool_ids_provided
+  //   "Cannot specify both tools and tool IDs - please provide only one"
+  //
+  // tool_ids is the ONLY way to attach a workspace tool, so every company with
+  // a knowledge-base document failed to publish. Not degraded: the publish
+  // step is required, the error is a 400 rather than the 422 the tolerant
+  // retry handles, so the whole thing aborted. It is also why no agent in the
+  // workspace had ever had a single tool attached.
+  //
+  // built_in_tools + tool_ids is accepted and attaches both. Keeping the old
+  // array out is the entire fix, so the array's absence is what gets asserted.
+  const withTool = cfgFor({ toolIds: ['tool_abc'] }).conversation_config.agent.prompt;
+  assert.ok(!('tools' in withTool),
+    'sending the legacy tools array next to tool_ids is a hard 400 from the provider');
+  assert.deepEqual(withTool.tool_ids, ['tool_abc']);
+  assert.ok(withTool.built_in_tools.end_call, 'system tools still reach the agent');
+
+  // And with no workspace tool, tool_ids is omitted entirely rather than sent
+  // empty — an empty array would detach anything an operator attached by hand.
+  const noTool = cfgFor().conversation_config.agent.prompt;
+  assert.ok(!('tools' in noTool));
+  assert.ok(!('tool_ids' in noTool));
 });
 
 test('language is sent as a bare ISO code, not the stored ar-SA locale', () => {
@@ -477,9 +732,38 @@ test('the KB tool lets the model supply ONLY the query', () => {
   const tool = el.buildKbToolConfig({ companyId: 'co-a', publicBaseUrl: 'https://example.test' });
   const props = tool.api_schema.request_body_schema.properties;
   assert.deepEqual(tool.api_schema.request_body_schema.required, ['query']);
-  assert.equal(props.agent_id.constant_value, '{{system__agent_id}}', 'agent id is filled by the provider');
-  assert.equal(props.conversation_id.constant_value, '{{system__conversation_id}}');
+  assert.equal(props.agent_id.dynamic_variable, 'system__agent_id', 'agent id is filled by the provider');
+  assert.equal(props.conversation_id.dynamic_variable, 'system__conversation_id');
   assert.equal(tool.api_schema.url, 'https://example.test/webhook/elevenlabs/tools/kb');
+});
+
+test('every provider-filled field sets exactly ONE value source', () => {
+  // THE BUG THIS GUARDS, measured on the live API (2026-10-12): a body field
+  // carrying more than one of description / dynamic_variable /
+  // is_system_provided / constant_value / is_omitted is rejected when the tool
+  // is created —
+  //
+  //   422 "Can only set one of: description, dynamic_variable,
+  //        is_system_provided, constant_value, or is_omitted"
+  //
+  // The builders sent description + constant_value on agent_id and
+  // conversation_id, so no webhook tool could be registered at all — the
+  // knowledge-base tool included. Checked across every tool we build, since
+  // they all share the same provider-filled fields.
+  const SOURCES = ['description', 'dynamic_variable', 'is_system_provided', 'constant_value', 'is_omitted'];
+  const { FEATURES } = require('../services/features/registry');
+  const tools = [
+    el.buildKbToolConfig({ companyId: 'co-a', publicBaseUrl: 'https://example.test' }),
+    ...FEATURES.filter((f) => f.kind === 'webhook' && f.endpoint)
+      .map((feature) => el.buildFeatureToolConfig({ feature, companyId: 'co-a', publicBaseUrl: 'https://example.test' })),
+  ];
+  assert.ok(tools.length >= 2, 'at least the KB and request tools are built');
+  for (const tool of tools) {
+    for (const [name, prop] of Object.entries(tool.api_schema.request_body_schema.properties)) {
+      const set = SOURCES.filter((k) => prop[k] !== undefined);
+      assert.equal(set.length, 1, `${tool.name}.${name} sets ${JSON.stringify(set)} — the provider allows exactly one`);
+    }
+  }
 });
 
 test('the KB tool carries a company token the model can neither read nor forge', () => {
@@ -764,7 +1048,8 @@ test('a number held by ANOTHER workspace fails with an actionable message', asyn
       ),
       (e) => {
         assert.equal(e.code, 'PHONE_NUMBER_TAKEN');
-        assert.match(e.message, /different elevenlabs workspace/i);
+        assert.match(e.message, /مسجّل بالفعل في حساب آخر/);
+        assert.doesNotMatch(e.message, /elevenlabs/i, 'the operator\'s screen never names the vendor');
         return true;
       },
     );

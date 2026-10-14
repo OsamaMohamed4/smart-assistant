@@ -18,9 +18,11 @@
 // bookkeeping. Prior state is preserved, the failed step is named, and a retry
 // converges because every step is an upsert.
 const { sql } = require('../../db');
+const { fillGlobals } = require('../../companies');
 const voice = require('../voice');
 const { planCapabilities, loadTools } = require('../features/store');
 const { getFeature } = require('../features/registry');
+const { resolveVoiceTuning } = require('../../lib/agent-defaults');
 
 // A step marked `required: false` may fail without failing the publish — it is
 // reported as `skipped` or `failed` but the company still reaches 'published'.
@@ -102,7 +104,7 @@ function createRecorder() {
 async function publishCompany({ company, deps, actorEmail = null, log = null }) {
   const {
     composeSystemPrompt, shapeScenario, resolveAgentModel,
-    isAllowedVoiceId, defaultVoiceId, voiceSpeedDefault, publicBaseUrl,
+    isAllowedVoiceId, defaultVoiceId, publicBaseUrl,
   } = deps;
 
   const rec = createRecorder();
@@ -181,9 +183,9 @@ async function publishCompany({ company, deps, actorEmail = null, log = null }) 
     });
 
     const s = company.settings || {};
-    const clamp = (v, lo, hi, dflt) =>
-      (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : dflt);
     const { model, temperature, maxTokens } = resolveAgentModel(company);
+    // The company's own voice choices over the reference agent's.
+    const tuning = resolveVoiceTuning(s);
     const configuredTransfer = /^\+[0-9]{8,15}$/.test(String(s.transferPhoneNumber || '').trim())
       ? String(s.transferPhoneNumber).trim()
       : null;
@@ -279,15 +281,26 @@ async function publishCompany({ company, deps, actorEmail = null, log = null }) 
       await voice.syncAgent(company, {
         prompt       : prompts.main,
         promptInbound: prompts.inbound,
-        firstMessage : scenario.firstMessageInbound
-                    || scenario.firstMessage
-                    || `حياك الله في ${company.name}، كيف يقدر أساعدك؟`,
-        firstMessageInbound: scenario.firstMessageInbound || null,
+        // fillGlobals, exactly as composeSystemPrompt applies it to the
+        // instructions. WITHOUT IT a first message carrying {{agent_name}}
+        // reaches the provider unresolved, and the provider then refuses to
+        // start the conversation at all:
+        //
+        //   Missing required dynamic variables in first message: {'agent_name'}
+        //
+        // The call fails at second zero — before the caller hears anything —
+        // while the publish reports success. Observed on a live agent
+        // (2026-10-05). {{customer_name}} and other per-call placeholders are
+        // deliberately left alone: those ARE supplied per call, and resolving
+        // them here would freeze one contact's name into every future call.
+        firstMessage : fillGlobals(
+          scenario.firstMessageInbound
+          || scenario.firstMessage
+          || `حياك الله في ${company.name}، كيف يقدر أساعدك؟`, company),
+        firstMessageInbound: fillGlobals(scenario.firstMessageInbound || null, company),
         model, temperature, maxTokens,
         voiceId        : s.voiceId || defaultVoiceId,
-        stability      : clamp(s.stability, 0, 1, 0.8),
-        similarityBoost: clamp(s.similarityBoost, 0, 1, 0.8),
-        voiceSpeed     : clamp(s.voiceSpeed, 0.7, 1.2, voiceSpeedDefault),
+        ...tuning,
         transferNumber,
         webhookTools,
         publicBaseUrl,

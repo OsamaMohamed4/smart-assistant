@@ -18,7 +18,8 @@ loadCompany(id)
       + KB chunks baked inline, capped at KB_INJECT_CAP, priority-sorted
       + END_CALL_TOOL_RULE
   → voice settings: settings.voiceId ?? DEFAULT_VOICE_ID, clamped
-        stability .8, similarity .8, speed VOICE_SPEED_DEFAULT
+        the rest from resolveVoiceTuning (lib/agent-defaults.js): the
+        company's own choices over the reference agent's settings
   → resolveAgentModel(company) → { model, temperature, maxTokens }
   → transferNumber = settings.transferPhoneNumber if /^\+[0-9]{8,15}$/
   → wantsKbTool = countCompanyChunks > 0

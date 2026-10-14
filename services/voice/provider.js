@@ -68,7 +68,7 @@ const REQUIRED_METHODS = [
   'syncAgent',               // (company, { …, hooks }) -> { agentId, agentIdInbound, toolId }
   'bindPhoneNumber',         // (company) -> { phoneNumberId, phoneNumber, agentId }
   'importPhoneNumber',       // (company, sipConfig) -> { phoneNumberId }
-  'startOutboundCall',       // ({ company, toNumber, variables, firstMessage }) -> { callId, callRef, status }
+  'startOutboundCall',       // ({ company, toNumber, variables, firstMessage, voiceId? }) -> { callId, callRef, status }
   'fetchCall',               // (providerCallId) -> NormalizedCallEvent | null
   'fetchRecording',          // (providerCallId, { range }) -> { stream, headers } | null
   'listRecentCalls',         // (limit) -> NormalizedCallEvent[]

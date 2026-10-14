@@ -21,6 +21,37 @@
 
 const KB_TOOL_DESCRIPTION = 'البحث في قاعدة معرفة الشركة عن معلومة محددة (أسعار، مشاريع، مواصفات، عروض) عندما لا تكون المعلومة متوفرة في تعليماتك. استخدمها قبل أن تقول إن المعلومة غير متوفرة.';
 
+const { REQUEST_TYPES, FIELDS } = require('../../lib/request-types');
+
+/**
+ * The request tool's body, generated from lib/request-types.js so the schema
+ * the model sees can never drift from the fields the server keeps.
+ *
+ * The caller's phone number is deliberately NOT a property. Question 11 says
+ * to take it directly from the call; it is joined from the call record, which
+ * the provider fills from the line itself, so the model can neither be asked
+ * for it nor supply a different one.
+ */
+function requestBodyProperties() {
+  const types = Object.keys(REQUEST_TYPES);
+  const props = {
+    request_type: {
+      type: 'string',
+      enum: types,
+      description: 'نوع الطلب: ' + types.map((t) => `${t} = ${REQUEST_TYPES[t].labelAr}`).join('، '),
+    },
+    customer_confirmed: {
+      type: 'boolean',
+      description: 'true فقط إذا قرأت البيانات على العميل وأكدها صراحة',
+    },
+  };
+  const all = new Set(types.flatMap((t) => REQUEST_TYPES[t].fields));
+  for (const key of all) {
+    props[key] = { type: 'string', description: FIELDS[key].descriptionAr };
+  }
+  return props;
+}
+
 /**
  * @typedef {object} Feature
  * @property {string}  key            stable id, also the company_features row key
@@ -75,12 +106,43 @@ const FEATURES = [
     requires: (ctx) => (ctx.transferNumber ? true : 'لم يُضبط رقم التحويل في الإعدادات'),
   },
 
+  {
+    key: 'request_creation',
+    labelAr: 'استقبال الطلبات',
+    descriptionAr: 'تسجيل طلبات العملاء (اهتمام، تأجير) وإحالتها لفريق المبيعات للمتابعة.',
+    status: 'implemented',
+    kind: 'webhook',
+    endpoint: 'request',
+    toolName: 'submit_customer_request',
+    // The client's answer to question 31: interest and a visit with a sales
+    // representative both need the customer's explicit confirmation. Said
+    // here, in the tool's own description, because that is what the model
+    // reads at the moment it decides whether to call — not in the operator's
+    // scenario, which this system does not write into.
+    toolDescriptionAr:
+      'سجّل طلب العميل (اهتمام بالشراء، أو تأجير سكني، أو تأجير مكتبي/تجاري) ليتابعه فريق المبيعات. '
+      + 'اجمع الحقول المطلوبة لنوع الطلب، ثم اقرأ البيانات على العميل واطلب تأكيده الصريح، '
+      + 'ولا تستدعِ الأداة قبل أن يؤكد. لا تسأل عن رقم الجوال — يُسجَّل تلقائياً من المكالمة.',
+    responseTimeoutSecs: 10,
+    bodyProperties: requestBodyProperties(),
+    bodyRequired: ['request_type', 'customer_confirmed'],
+    // Opt-in. A capability that files records on a company's behalf must be
+    // switched on by someone who decided they want it, never appear on every
+    // agent because the code shipped.
+    defaultEnabled: false,
+    requires: (ctx) => (ctx.publicBaseUrl ? true : 'PUBLIC_BASE_URL غير مضبوط'),
+  },
+
   // ── Declared for the roadmap; the server refuses to enable these. ──
   // Kept as separate capabilities from the company's point of view even where
   // they will later share backend infrastructure — the client's configuration
   // should not expose our internal groupings.
+  //
+  // appointment_booking stays planned: the client's answers describe request
+  // capture, not slot allocation, and every calendar question (lead time,
+  // horizon, buffers, alternatives, holidays, cancellation, rescheduling) was
+  // answered "مب الان".
   { key: 'appointment_booking', labelAr: 'حجز المواعيد',        descriptionAr: 'حجز المواعيد للعملاء أثناء المكالمة.',              status: 'planned', kind: 'webhook' },
-  { key: 'request_creation',    labelAr: 'استقبال الطلبات',      descriptionAr: 'تسجيل طلبات العملاء وإحالتها للفريق المختص.',       status: 'planned', kind: 'webhook' },
   { key: 'ticket_creation',     labelAr: 'فتح البلاغات',         descriptionAr: 'فتح بلاغ أو شكوى وتتبّعها.',                        status: 'planned', kind: 'webhook' },
   { key: 'customer_update',     labelAr: 'تحديث بيانات العملاء', descriptionAr: 'تحديث بيانات العميل في سجلات الشركة.',              status: 'planned', kind: 'webhook' },
   { key: 'send_message',        labelAr: 'إرسال الرسائل',        descriptionAr: 'إرسال رسالة للعميل من قوالب معتمدة.',               status: 'planned', kind: 'webhook' },

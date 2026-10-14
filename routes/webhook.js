@@ -333,6 +333,121 @@ router.post('/elevenlabs/tools/kb', async (req, res) => {
   res.json({ result });
 });
 
+// ─── POST /webhook/elevenlabs/tools/request ──────────────────────
+// The agent files a customer request for the sales team to follow up.
+//
+// Every refusal answers 200 with an instruction rather than an error status.
+// There is a customer on the line: a 4xx makes the model announce a failure,
+// while a sentence telling it what to do lets it recover inside the call —
+// ask for the confirmation it skipped, or pick a real request type.
+const { REQUEST_TYPES, pickFields } = require('../lib/request-types');
+
+/** A provider placeholder that was never filled is not a value. */
+const filled = (v) => {
+  const s = String(v ?? '').trim();
+  return s && !/^\{\{/.test(s) ? s : null;
+};
+
+/**
+ * The company's own closing line for a filed request, e.g. "تم رفع طلبك وسيتم
+ * التواصل معك خلال 72 ساعة عمل". Configured per company, because the promise
+ * belongs to the company; with none set the agent is told only that the
+ * request was recorded, and no service-level commitment is invented for it.
+ */
+async function requestConfirmationMessage(companyId) {
+  try {
+    const row = await sql.getCompanyFeature.get(companyId, 'request_creation');
+    const cfg = row?.config ? JSON.parse(row.config) : null;
+    const msg = String(cfg?.confirmationMessage || '').trim();
+    return msg || null;
+  } catch {
+    return null;
+  }
+}
+
+router.post('/elevenlabs/tools/request', async (req, res) => {
+  const auth = await authorizeToolCall(req, 'request_creation');
+  if (!auth.ok) return res.status(auth.status).json(auth.body);
+  const { companyId } = auth;
+
+  // Same ceiling as the knowledge-base tool, for the same reason: the MODEL
+  // decides how often to call, and a model stuck in a loop would otherwise
+  // file a lead per turn for as long as the call lasts.
+  let company = null;
+  try { company = await require('../companies').loadCompany(companyId); } catch {}
+  const cap = dailyCap(company, 'dailyRequestToolCap', 'DAILY_REQUEST_TOOL_CAP', 500);
+  if (!(await checkAndBumpUsage(companyId, 'request_tool', cap))) {
+    req.log.warn('request tool: daily cap reached', { companyId, cap });
+    return res.json({ result: 'تعذّر تسجيل الطلب حالياً. أخبر العميل أن فريق المبيعات سيتواصل معه.' });
+  }
+
+  const b = req.body || {};
+  const type = String(b.request_type || '').trim();
+  if (!REQUEST_TYPES[type]) {
+    const options = Object.entries(REQUEST_TYPES).map(([k, v]) => `${k} (${v.labelAr})`).join('، ');
+    return res.json({ result: `نوع الطلب غير معروف. اختر واحداً من: ${options}` });
+  }
+
+  // Question 31: the customer confirms before anything is filed. The flag is
+  // the model's own assertion, so it is a nudge rather than proof — but it
+  // makes skipping the confirmation an explicit act instead of an oversight.
+  const confirmed = b.customer_confirmed === true || String(b.customer_confirmed) === 'true';
+  if (!confirmed) {
+    return res.json({
+      result: 'لم يُسجَّل الطلب بعد. اقرأ البيانات على العميل واطلب تأكيده الصريح، ثم أعد المحاولة.',
+    });
+  }
+
+  const fields = pickFields(type, b);
+  const customerName = fields.customer_name || null;
+  // Provider-filled, never model-authored. Null in a browser test, where no
+  // conversation id is substituted — such requests are simply not deduplicated.
+  const conversationId = filled(b.conversation_id);
+
+  try {
+    const existing = conversationId
+      ? await sql.getCustomerRequestByConversation.get(companyId, conversationId, type)
+      : null;
+    let requestId;
+    if (existing) {
+      // Same call, same type: a provider retry or the model correcting an
+      // answer. Merge so a second call that re-sends fewer fields cannot
+      // erase what the first one captured.
+      let prior = {};
+      try { prior = existing.fields ? JSON.parse(existing.fields) : {}; } catch {}
+      const merged = { ...prior, ...fields };
+      await sql.updateCustomerRequestFields.run({
+        id: existing.id, company_id: companyId,
+        customer_name: merged.customer_name || null,
+        fields: JSON.stringify(merged),
+      });
+      requestId = existing.id;
+    } else {
+      const r = await sql.insertCustomerRequest.run({
+        company_id: companyId, conversation_id: conversationId,
+        request_type: type, customer_name: customerName,
+        fields: JSON.stringify(fields),
+      });
+      requestId = r.lastInsertRowid;
+    }
+    req.log.info('request tool: filed', {
+      companyId, requestId, type, updated: !!existing, fieldCount: Object.keys(fields).length,
+    });
+
+    const closing = await requestConfirmationMessage(companyId);
+    return res.json({
+      result: closing
+        ? `تم تسجيل الطلب. أخبر العميل بهذا بأسلوبك: ${closing}`
+        : 'تم تسجيل الطلب بنجاح.',
+    });
+  } catch (e) {
+    req.log.error('request tool: insert failed', { err: e.message, companyId, type });
+    return res.json({
+      result: 'تعذّر تسجيل الطلب تقنياً. اعتذر للعميل وأخبره أن فريق المبيعات سيتواصل معه.',
+    });
+  }
+});
+
 module.exports = {
   router, getRecentWebhookAttempts, searchKb,
   // exported for tests

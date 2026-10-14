@@ -71,6 +71,57 @@ router.post('/', async (req, res) => {
   });
 });
 
+// POST /api/companies/:id/clients/:userId/reset-password
+//
+// Until this existed, a client who forgot their password had to be DELETED and
+// recreated — which threw away their audit trail and their account id along
+// with the password. /api/auth/change-password only helps someone who still
+// knows the old one.
+//
+// Self-service reset by email would be better, and is deliberately not what
+// this is: the platform has no mail transport, and adding one is a separate
+// decision with its own credentials and deliverability concerns. This covers
+// the actual failure — a locked-out client and an operator who can help them
+// in ten seconds.
+router.post('/:userId/reset-password', async (req, res) => {
+  const uid = Number(req.params.userId);
+  if (!uid) return res.status(400).json({ error: 'invalid id' });
+
+  // The user must really be a client of THIS company. Without this check the
+  // :id in the path would be decoration and any company's admin could reset
+  // any account, superadmins included.
+  const u = await sql.getUserById.get(uid);
+  if (!u || u.role !== 'client' || u.company_id !== req.params.id) {
+    return res.status(404).json({ error: 'client not found' });
+  }
+
+  const password = generatePassword();
+  await sql.updatePassword.run(await hashPassword(password), uid);
+  // A reset is also the remedy for a lockout, so lift it. Not
+  // clearFailedLogins: that stamps last_login_at, and nobody has logged in.
+  await sql.unlockUser.run(uid);
+  // Every existing session dies. A reset is what an operator reaches for when
+  // an account may be compromised, and leaving the old cookies working would
+  // make it theatre — the intruder keeps the access, the owner gets a new
+  // password. It also logs the client out everywhere, which is what the new
+  // password implies.
+  await sql.deleteUserSessions.run(uid);
+
+  try {
+    await sql.logAuditEvent.run({
+      actor_id   : req.user?.id || null,
+      actor_email: req.user?.email || null,
+      action     : 'client.reset_password',
+      resource   : `companies/${req.params.id}/clients/${uid}`,
+      metadata   : JSON.stringify({ email: u.email }),   // never the password
+      ip         : req.ip || null,
+      user_agent : (req.get('user-agent') || '').slice(0, 255),
+    });
+  } catch {}
+
+  res.json({ id: uid, email: u.email, password });           // shown once, then lost
+});
+
 // DELETE /api/companies/:id/clients/:userId
 router.delete('/:userId', async (req, res) => {
   const uid = Number(req.params.userId);

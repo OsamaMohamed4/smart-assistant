@@ -44,8 +44,15 @@ end). Nothing here is assumed.
 2. **No `endCallPhrases`.** Vapi's provider-side "hang up when the caller says X" safety
    net doesn't exist. Replaced by the `end_call` system tool + the existing
    `END_CALL_TOOL_RULE` prompt block (which already instructs the model to call the tool).
-3. **No `messagePlan.idleMessages`.** ElevenLabs has `turn.turn_timeout` and
-   `turn.silence_end_call_timeout` but no rotating idle prompts. Closest mapping below.
+3. ~~**No `messagePlan.idleMessages`.**~~ **Corrected 2026-10-03** — it does exist, as
+   `conversation_config.turn.soft_timeout_config`: `{ timeout_seconds, message,
+   additional_soft_timeout_messages[], randomize_fillers, use_llm_generated_message,
+   max_soft_timeouts_per_generation, disable_until_first_user_message }`. Read off a
+   live agent. It ships **disabled** (`timeout_seconds: -1`) and we leave it that way:
+   `message` carries a provider default of `"Hhmmmm...yeah."` in English that cannot be
+   cleared, and whether `use_llm_generated_message` truly suppresses it has not been
+   confirmed on a real call. Speaking English filler into a Saudi call is a worse
+   failure than having no filler, so this stays off until it is heard.
 4. **One agent per phone number.** Same as Vapi. The inbound/outbound split still needs
    two agents when the scenario defines a separate inbound prompt.
 

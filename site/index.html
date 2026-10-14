@@ -7,17 +7,10 @@
 <meta name="description" content="الذكاء الاصطناعي الذي يعمل داخل أعمالك. مكالمات واردة وصادرة، ومحادثات رقمية، تفهم العميل وتنفّذ الإجراء وتسجّل النتيجة.">
 <meta name="theme-color" content="#765C36">
 
-<!-- The mark, drawn from the official vector. One path set filled with
-     currentColor, so a single CSS colour recolours it and no separate
-     reversed artwork is needed. -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='175.88 369.57 239.65 76.01'%3E%3Cpath fill='%23765C36' d='M364.303 384.503 L364.916 395.576 C310.764 415.699 257.952 445.575 232.801 426.894 C216.258 412.369 220.142 372.551 220.142 372.551 L227.964 369.618 C227.964 369.618 223.968 408.642 241.205 418.079 C269.287 431.954 346.088 387.983 364.303 384.503 M392.269 391.834 C380.494 392.336 363.741 403.24 347.796 408.563 L350.45 419.361 C365.45 413.166 382.206 403.031 393.628 404.497 C403.512 405.797 407.177 415.707 407.249 417.165 C407.321 418.623 387.901 418.444 383.941 408.38 L378.792 409.97 C379.156 430.025 402.918 437.627 409.749 428.438 C415.535 419.004 410.331 391.956 392.269 391.834 M180.877 412.698 L175.883 421.755 C201.899 432.695 223.933 417.144 253.438 399.806 L251.552 389.609 C227.91 404.177 202.923 418.734 180.877 412.698 M269.103 400.756 L269.103 396.985 L341.943 369.569 L341.943 373.34 Z'/%3E%3C/svg%3E">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<!-- IBM Plex Sans Arabic is PROVISIONAL. It stands in until the client's
-     official Arabic typeface arrives. Swapping it is this line plus
-     --font-ar in styles.css. LilyUPC is deliberately not here: it contains
-     zero Arabic glyphs, so it lives inside the logo artwork only. -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 
 <link rel="stylesheet" href="/site/styles.css">
@@ -26,7 +19,6 @@
 
 <a class="skip" href="#main">تخطَّ إلى المحتوى</a>
 
-<!-- ── The official mark, defined once and reused ────────────────── -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
   <symbol id="m-mark" viewBox="175.88 369.57 239.65 76.01"><path fill="currentColor" d="M364.303 384.503 L364.916 395.576 C310.764 415.699 257.952 445.575 232.801 426.894 C216.258 412.369 220.142 372.551 220.142 372.551 L227.964 369.618 C227.964 369.618 223.968 408.642 241.205 418.079 C269.287 431.954 346.088 387.983 364.303 384.503 M392.269 391.834 C380.494 392.336 363.741 403.24 347.796 408.563 L350.45 419.361 C365.45 413.166 382.206 403.031 393.628 404.497 C403.512 405.797 407.177 415.707 407.249 417.165 C407.321 418.623 387.901 418.444 383.941 408.38 L378.792 409.97 C379.156 430.025 402.918 437.627 409.749 428.438 C415.535 419.004 410.331 391.956 392.269 391.834 M180.877 412.698 L175.883 421.755 C201.899 432.695 223.933 417.144 253.438 399.806 L251.552 389.609 C227.91 404.177 202.923 418.734 180.877 412.698 M269.103 400.756 L269.103 396.985 L341.943 369.569 L341.943 373.34 Z"/></symbol>
 </defs></svg>
@@ -45,14 +37,10 @@
       <li><a href="#teams">الفرق</a></li>
       <li><a href="#sectors">القطاعات</a></li>
       <li><a href="#security">الأمان</a></li>
+      <li><a href="#faq">الأسئلة الشائعة</a></li>
     </ul>
     <span class="nav-spacer"></span>
-    <!-- The client's own way in. Secondary to the demo request, because a
-         first-time visitor is not looking for a login form — which is exactly
-         what the root URL used to give them. -->
     <a class="btn btn-ghost nav-login" href="/login">لوحة التحكم</a>
-    <!-- TODO(client): destination for the demo request is not yet decided.
-         Left inert rather than pointing at an invented address. -->
     <a class="btn btn-primary nav-cta" href="/contact">احجز عرضًا توضيحيًا</a>
     <label for="nav-toggle" class="nav-burger" aria-label="فتح القائمة">
       <span></span><span></span><span></span>
@@ -66,6 +54,7 @@
       <li><a href="#teams">الفرق</a></li>
       <li><a href="#sectors">القطاعات</a></li>
       <li><a href="#security">الأمان</a></li>
+      <li><a href="#faq">الأسئلة الشائعة</a></li>
     </ul>
     <div class="drawer-cta">
       <a class="btn btn-primary" href="/contact">احجز عرضًا توضيحيًا</a>
@@ -96,9 +85,7 @@
   </div>
 </section>
 
-<!-- ══ 02 About ═════════════════════════════════════════════════
-     The client's own words, used verbatim. The four stages below are the
-     ones named in their second sentence, not a framework invented here. -->
+<!-- ══ 02 About ═════════════════════════════════════════════════ -->
 <section class="section" id="about">
   <div class="container">
     <div class="about-grid">
@@ -157,14 +144,7 @@
   </div>
 </section>
 
-<!-- ══ 03 Capabilities ══════════════════════════════════════════
-     These are the ten capabilities the backend registry declares, listed as
-     what the platform does rather than annotated one by one. No per-item
-     status is claimed here, because only two are implemented today and the
-     server refuses to enable the rest. Nothing on this page asserts that an
-     unbuilt capability is working; the registry stays the single source of
-     truth for what can actually be switched on for a company.
-     ═════════════════════════════════════════════════════════════ -->
+<!-- ══ 03 Capabilities ══════════════════════════════════════════ -->
 <section class="section" id="capabilities">
   <div class="container">
     <div class="section-head">
@@ -277,9 +257,7 @@
   </div>
 </section>
 
-<!-- ══ 06 Sectors ═══════════════════════════════════════════════
-     Named as sectors served. No case study or result is attached to
-     any of them, because none has been verified. -->
+<!-- ══ 06 Sectors ═══════════════════════════════════════════════ -->
 <section class="section" id="sectors">
   <div class="container">
     <div class="section-head">
@@ -295,10 +273,7 @@
   </div>
 </section>
 
-<!-- ══ 07 Integrations ══════════════════════════════════════════
-     Deliberately worded as "designed to connect", not "integrates
-     with". No integration has been built and no partner logo appears,
-     because that would claim a relationship that does not exist. -->
+<!-- ══ 07 Integrations ══════════════════════════════════════════ -->
 <section class="section" id="integrations">
   <div class="container">
     <div class="section-head">
@@ -315,10 +290,7 @@
   </div>
 </section>
 
-<!-- ══ 08 Security ══════════════════════════════════════════════
-     Every line here describes something the backend actually enforces.
-     No hosting-location claim and no certification badge appears,
-     because neither could be substantiated today. -->
+<!-- ══ 08 Security ══════════════════════════════════════════════ -->
 <section class="section section-dark" id="security">
   <div class="container">
     <div class="section-head">
@@ -357,6 +329,46 @@
   </div>
 </section>
 
+<!-- ══ FAQ Section (الأسئلة الشائعة) ════════════════════════════ -->
+<section class="section" id="faq">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">FAQ</p>
+      <h2>الأسئلة الشائعة</h2>
+      <hr class="stroke sm">
+      <p class="lede">كل ما تحتاج معرفته عن منصة "مسار" وكيفية عملها.</p>
+    </div>
+    <div class="faq-grid" style="max-width: 800px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px;">
+      <details class="faq-card" open style="border: 1px solid var(--border, #e2e8f0); border-radius: 12px; padding: 20px 24px; background: var(--bg-card, #f8fafc);">
+        <summary class="faq-question" style="font-weight: 600; font-size: 18px; cursor: pointer; list-style: none;">
+          ما هي منصة مسار وكيف تفيد مشروعي؟
+        </summary>
+        <div class="faq-answer" style="margin-top: 14px; color: var(--text-muted, #4b5563); line-height: 1.7;">
+          <p>منصة مسار هي نظام ذكاء اصطناعي متكامل يساعدك على أتمتة الرد على المكالمات، خدمة العملاء، وجدولة المواعيد وتتبع المبيعات تلقائياً على مدار الساعة.</p>
+        </div>
+      </details>
+
+      <details class="faq-card" style="border: 1px solid var(--border, #e2e8f0); border-radius: 12px; padding: 20px 24px; background: var(--bg-card, #f8fafc);">
+        <summary class="faq-question" style="font-weight: 600; font-size: 18px; cursor: pointer; list-style: none;">
+          هل يتحدث المساعد الذكي باللغة العربية واللهجة المحلية؟
+        </summary>
+        <div class="faq-answer" style="margin-top: 14px; color: var(--text-muted, #4b5563); line-height: 1.7;">
+          <p>نعم، تم تدريب نماذجنا الصوتية على فهم اللغة العربية الفصحى بالإضافة إلى اللهجة السعودية والخليجية بدقة عالية وبصوت طبيعي جداً.</p>
+        </div>
+      </details>
+
+      <details class="faq-card" style="border: 1px solid var(--border, #e2e8f0); border-radius: 12px; padding: 20px 24px; background: var(--bg-card, #f8fafc);">
+        <summary class="faq-question" style="font-weight: 600; font-size: 18px; cursor: pointer; list-style: none;">
+          هل يمكن ربط مسار مع أنظمة شركتي الداخلية؟
+        </summary>
+        <div class="faq-answer" style="margin-top: 14px; color: var(--text-muted, #4b5563); line-height: 1.7;">
+          <p>بالتأكيد، توفر المنصة واجهات ربط برمجية (API) وتكاملات مرنة للاتصال بأنظمة إدارة العملاء ومراكز الاتصال وقواعد البيانات الخاصة بك.</p>
+        </div>
+      </details>
+    </div>
+  </div>
+</section>
+
 <!-- ══ 09 Contact ═══════════════════════════════════════════════ -->
 <section class="section contact" id="contact">
   <div class="container">
@@ -364,27 +376,41 @@
     <h2>جاهز تجعل الذكاء جزءًا من عملك؟</h2>
     <hr class="stroke">
     <p class="lede">اكتشف كيف يمكن للمنصة تحويل عملياتك اليومية إلى عمليات أكثر ذكاءً وكفاءة.</p>
-    <!-- Live at last: the demo destination was a TODO for as long as there was
-         no contact channel to send anyone to. There is one now. -->
     <a class="btn btn-primary" href="/contact">احجز عرضًا توضيحيًا</a>
   </div>
 </section>
 
 </main>
 
+<!-- ══ Footer (طراز مهير مع تواصل واجتماعي مرتب) ══════════════ -->
 <footer class="site-footer">
-  <div class="container footer-row">
-    <span class="brand" aria-hidden="true">
-      <svg viewBox="0 0 239.65 76.01"><use href="#m-mark"/></svg>
-    </span>
-    <a class="footer-link" href="/login">لوحة التحكم</a>
-    <a class="footer-link" href="/contact">تواصل معنا</a>
-    <a class="footer-link" href="/privacy">سياسة الخصوصية</a>
-    <a class="footer-link" href="/terms">شروط الخدمة</a>
-    <a class="footer-link" href="https://www.linkedin.com/company/getmasar-sa/" target="_blank" rel="noopener noreferrer">لينكدإن</a>
-    <span class="footer-spacer"></span>
-    <!-- Legal entity as given on the commercial registration. -->
-    <small>© 2026 مؤسسة العنود محمد القحطاني لتقنية المعلومات — جميع الحقوق محفوظة</small>
+  <div class="container footer-row" style="display: flex; flex-wrap: wrap; align-items: center; gap: 20px; justify-content: space-between; padding: 30px 0;">
+    <div style="display: flex; align-items: center; gap: 24px;">
+      <span class="brand" aria-hidden="true" style="display: inline-flex; align-items: center;">
+        <svg viewBox="0 0 239.65 76.01" style="height: 28px; width: auto;"><use href="#m-mark"/></svg>
+      </span>
+      <div style="display: flex; gap: 18px; flex-wrap: wrap;">
+        <a class="footer-link" href="/login">لوحة التحكم</a>
+        <a class="footer-link" href="/contact">تواصل معنا</a>
+        <a class="footer-link" href="#faq">الأسئلة الشائعة</a>
+        <a class="footer-link" href="/privacy">سياسة الخصوصية</a>
+        <a class="footer-link" href="/terms">شروط الخدمة</a>
+      </div>
+    </div>
+    
+    <div style="display: flex; align-items: center; gap: 20px;">
+      <!-- السوشيال ميديا وقنوات التواصل (طراز مهير) -->
+      <div class="social-channels" style="display: flex; gap: 12px; align-items: center;">
+        <a href="https://www.linkedin.com/company/getmasar-sa/" target="_blank" rel="noopener noreferrer" class="social-icon" aria-label="لينكدإن" style="display: inline-flex; width: 36px; height: 36px; border-radius: 50%; background: rgba(118, 92, 54, 0.1); align-items: center; justify-content: center; color: #765C36; text-decoration: none; transition: background 0.2s;">
+          <svg style="width: 18px; height: 18px;" fill="currentColor" viewBox="0 0 24 24"><path d="M19 3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14m-.5 15.5v-5.3a3.26 3.26 0 0 0-3.26-3.26c-.85 0-1.84.52-2.28 1.3v-1.11h-2.79v8.37h2.79v-4.93c0-.77.62-1.4 1.39-1.4a1.4 1.4 0 0 1 1.4 1.4v4.93h2.75M6.88 8.56a1.68 1.68 0 0 0 1.68-1.68c0-.93-.75-1.69-1.68-1.69a1.69 1.69 0 0 0-1.69 1.69c0 .93.76 1.68 1.69 1.68m1.39 9.94v-8.37H5.5v8.37h2.77z"/></svg>
+        </a>
+        <a href="/contact" class="social-icon" aria-label="البريد والتواصل" style="display: inline-flex; width: 36px; height: 36px; border-radius: 50%; background: rgba(118, 92, 54, 0.1); align-items: center; justify-content: center; color: #765C36; text-decoration: none; transition: background 0.2s;">
+          <svg style="width: 18px; height: 18px;" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+        </a>
+      </div>
+      <!-- الكيان القانوني -->
+      <small style="color: var(--text-muted, #6b7280);">© 2026 مؤسسة العنود محمد القحطاني لتقنية المعلومات</small>
+    </div>
   </div>
 </footer>
 

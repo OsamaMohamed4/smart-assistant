@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   MessageSquare, PhoneCall, RefreshCw, Mic, ArrowDownLeft, ArrowUpRight, Download,
   Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown,
-  CheckCircle2, XCircle, Hourglass, Inbox,
+  CheckCircle2, XCircle, Hourglass, Inbox, PhoneMissed,
 } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { Button } from '../components/ui/Button';
@@ -120,7 +120,7 @@ export function SessionsPage({ user, pinnedCompanyId }) {
         title="المحادثات"
         subtitle={loading
           ? 'جاري التحميل...'
-          : `${data.total} ${data.total === 1 ? 'محادثة' : 'محادثة'} ${pinnedCompanyId ? '(workspace)' : ''}`}
+          : `${data.total} محادثة`}
         right={
           <Button variant="secondary" onClick={exportCsv} className="gap-1.5" disabled={loading || !data.total}>
             <Download className="w-3.5 h-3.5" strokeWidth={2} />
@@ -139,7 +139,8 @@ export function SessionsPage({ user, pinnedCompanyId }) {
               { v: 'all',         l: 'كل الحالات' },
               { v: 'completed',   l: 'مكتملة' },
               { v: 'in_progress', l: 'قيد التنفيذ' },
-              { v: 'failed',      l: 'فاشلة' },
+              { v: 'no_answer',   l: 'لم يتم الرد' },
+              { v: 'failed',      l: 'تعذّر الاتصال' },
             ]}
           />
           <FilterSelect
@@ -280,7 +281,7 @@ function Row({ item, onOpen }) {
         <ScenarioPill name={item.scenario} />
       </td>
       <td className="px-4 py-3">
-        <StatusBadge status={item.status} />
+        <StatusBadge status={item.status} type={item.type} reason={item.endedReasonLabel} />
       </td>
       <td className="px-4 py-3">
         <OutcomeBadge outcome={item.outcome} />
@@ -315,7 +316,23 @@ function DirectionBadge({ direction }) {
   );
 }
 
-function StatusBadge({ status }) {
+// A call that never connected says WHY under its badge: «لم يتم الرد» is the
+// customer's side (no answer, busy, phone off), «تعذّر الاتصال» the line's.
+function StatusBadge({ status, type, reason }) {
+  const why = reason && (status === 'no_answer' || status === 'failed')
+    ? <div className="mt-1 text-[10.5px] text-ink-500 leading-snug max-w-[160px]">{reason}</div>
+    : null;
+  if (status === 'no_answer') {
+    return (
+      <div>
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-sky-50 text-sky-700">
+          <PhoneMissed className="w-2.5 h-2.5" />
+          لم يتم الرد
+        </span>
+        {why}
+      </div>
+    );
+  }
   if (status === 'completed') {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-50 text-emerald-700">
@@ -333,10 +350,13 @@ function StatusBadge({ status }) {
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-rose-50 text-rose-700">
-      <XCircle className="w-2.5 h-2.5" />
-      فاشلة
-    </span>
+    <div>
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-rose-50 text-rose-700">
+        <XCircle className="w-2.5 h-2.5" />
+        {type === 'chat' ? 'لم يكتمل الرد' : 'تعذّر الاتصال'}
+      </span>
+      {why}
+    </div>
   );
 }
 

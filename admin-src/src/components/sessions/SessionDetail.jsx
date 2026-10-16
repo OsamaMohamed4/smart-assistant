@@ -19,12 +19,16 @@ export function SessionDetail({ open, onClose, kind, data, companyName, onResumm
     let lead = null;
     try { if (data.structured_data) lead = JSON.parse(data.structured_data); } catch {}
     const hasLead = lead && Object.values(lead).some((v) => v !== null && v !== '' && v !== undefined);
+    const outbound = data.direction === 'outbound';
+    // The server says why the call ended in Arabic; the raw provider code is
+    // only a fallback, kept as a tooltip for whoever has to chase it.
+    const reason = data.endedReasonLabel || (data.status === 'no_answer' ? 'لم يتم الرد' : null);
     return (
       <Modal
         open={open}
         onClose={onClose}
-        title={`مكالمة من ${data.caller_number || 'رقم مجهول'}`}
-        description={`${fmtDate(data.started_at)} · ${fmtDuration(data.duration_sec)} · ${data.ended_reason || 'انتهت'}`}
+        title={`${outbound ? 'مكالمة إلى' : 'مكالمة من'} ${data.caller_number || 'رقم مجهول'}`}
+        description={[fmtDate(data.started_at || data.created_at), fmtDuration(data.duration_sec), reason].filter(Boolean).join(' · ')}
         size="lg"
         footer={<>
           <Button variant="brand" onClick={handleSummarize} loading={summarizing}>
@@ -37,8 +41,8 @@ export function SessionDetail({ open, onClose, kind, data, companyName, onResumm
         <div className="space-y-5">
           <div className="grid grid-cols-3 gap-3">
             <MetaCard icon={Clock} label="المدة" value={fmtDuration(data.duration_sec)} />
-            <MetaCard icon={PhoneCall} label="السبب" value={data.ended_reason || '—'} />
-            <MetaCard icon={User} label="من" value={data.caller_number || 'مجهول'} mono />
+            <MetaCard icon={PhoneCall} label="السبب" value={reason || '—'} title={data.ended_reason || undefined} />
+            <MetaCard icon={User} label={outbound ? 'إلى' : 'من'} value={data.caller_number || 'مجهول'} mono />
           </div>
 
           {hasLead && (
@@ -184,9 +188,9 @@ function ChatBubble({ role, content, time, latencyMs, channel }) {
   );
 }
 
-function MetaCard({ icon: Icon, label, value, mono }) {
+function MetaCard({ icon: Icon, label, value, mono, title }) {
   return (
-    <div className="bg-white ring-1 ring-ink-100 rounded-xl p-3">
+    <div className="bg-white ring-1 ring-ink-100 rounded-xl p-3" title={title}>
       <div className="flex items-center gap-1.5 text-[10.5px] text-ink-500 uppercase tracking-wider font-medium">
         <Icon className="w-3 h-3" strokeWidth={2} />
         {label}

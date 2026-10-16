@@ -250,6 +250,24 @@ function mapEndedReason(raw, { hasTranscript = false } = {}) {
   return `provider:${s.slice(0, 80)}`;
 }
 
+// Why a call we placed never connected. The provider reports it as an error
+// (`metadata.error` on the conversation, or a call_initiation_failure event)
+// rather than a termination reason — and that error was dropped, so every
+// such call stored no reason at all and showed as a bare failure, whether the
+// customer let it ring out (SIP 480), was busy (486) or our trunk refused it
+// (403). The SIP status says which, so it is kept as `sip-<code>`. The
+// provider's own close code 1011 carries no SIP status; when its text is about
+// trunk credentials it is the same fault as a 407.
+function initiationFailureReason({ code, reason } = {}) {
+  const n = Number(code);
+  if (Number.isInteger(n) && n >= 100 && n <= 699) return `sip-${n}`;
+  const text = String(reason || '').trim();
+  const inText = /sip status:?\s*(\d{3})/i.exec(text);
+  if (inText) return `sip-${inText[1]}`;
+  if (/auth|username|password|credential/i.test(text)) return 'sip-407';
+  return mapEndedReason(text || 'initiation failed', { hasTranscript: false });
+}
+
 // ─── Event normalization ──────────────────────────────────────────
 // Turns a post-call webhook envelope (or a REST conversation object) into the
 // shape in ./provider.js. Note `direction: null` when the provider did not say:
@@ -297,6 +315,13 @@ function normalizeConversation(data, { eventType = 'post_call_transcription' } =
   const status = String(data.status || '').toLowerCase();
   const isFinal = eventType === 'post_call_transcription' || status === 'done' || status === 'failed';
 
+  // A call that never connected has no termination reason, only an error.
+  const initError = !meta.termination_reason && !transcript && meta.error && typeof meta.error === 'object'
+    ? meta.error : null;
+  const endedReason = initError
+    ? initiationFailureReason(initError)
+    : mapEndedReason(meta.termination_reason, { hasTranscript: !!transcript });
+
   return {
     provider        : NAME,
     providerCallId  : conversationId,
@@ -310,7 +335,7 @@ function normalizeConversation(data, { eventType = 'post_call_transcription' } =
     startedAt,
     endedAt,
     durationSec,
-    endedReason     : mapEndedReason(meta.termination_reason, { hasTranscript: !!transcript }),
+    endedReason,
     recordingUrl    : null,
     summary         : analysis.transcript_summary || null,
     structuredData,
@@ -324,7 +349,7 @@ function normalizeConversation(data, { eventType = 'post_call_transcription' } =
     hasRecording    : !!data.has_audio,
     metadata: {
       status,
-      rawTerminationReason: meta.termination_reason || null,
+      rawTerminationReason: meta.termination_reason || (initError ? String(initError.reason || '').slice(0, 200) : null),
       callSuccessful      : analysis.call_successful || null,
       phoneCallType       : phone.type || null,
       dynamicVariables    : data.conversation_initiation_client_data?.dynamic_variables || null,
@@ -378,6 +403,9 @@ function normalizeEvent(payload) {
     const conversationId = data.conversation_id || null;
     if (!conversationId) return null;
     const reason = data.reason || data.error || data.failure_reason || 'initiation failed';
+    // The SIP status, when the event carries one, says more than the summary
+    // word ("unknown") the provider puts in failure_reason.
+    const sipStatus = data.metadata?.body?.sip_status_code ?? data.sip_status_code ?? null;
     return {
       provider        : NAME,
       providerCallId  : conversationId,
@@ -395,7 +423,7 @@ function normalizeEvent(payload) {
       startedAt       : null,
       endedAt         : null,
       durationSec     : 0,
-      endedReason     : mapEndedReason(reason, { hasTranscript: false }),
+      endedReason     : sipStatus ? initiationFailureReason({ code: sipStatus }) : mapEndedReason(reason, { hasTranscript: false }),
       recordingUrl    : null,
       hasRecording    : false,
       summary         : null,
@@ -1202,7 +1230,7 @@ module.exports = {
   getAgent, getWorkspaceSettings,
   // exported for tests
   buildAgentConfig, buildKbToolConfig, buildFeatureToolConfig, buildTrunkConfig,
-  agentBase, outboundCallBody, upsertTool, deleteTool, mapEndedReason,
+  agentBase, outboundCallBody, upsertTool, deleteTool, mapEndedReason, initiationFailureReason,
   normalizeConversation, extractStructuredData, errText, DATA_COLLECTION,
   usdFromCredits, webhookSecret,
 };

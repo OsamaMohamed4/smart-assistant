@@ -25,6 +25,7 @@ const { runWithContext } = require('./lib/tenant-context');
 const { isSafeUrl } = require('./lib/ssrf');
 const { encryptField, decryptField, decryptRow, decryptRows, CALL_PII_FIELDS } = require('./lib/pii');
 const { qualifyCall, LEAD } = require('./lib/lead-scoring');
+const { callStatus, endedReasonLabel } = require('./lib/call-status');
 const authRoutes = require('./routes/auth');
 const clientsRoutes = require('./routes/clients');
 const { router: webhookRoutes, getRecentWebhookAttempts } = require('./routes/webhook');
@@ -1380,7 +1381,11 @@ app.get('/api/calls/:id', ensureCallOwned, async (req, res) => {
       req.log.warn('call refresh failed', { err: voice.errText(e), callId: call.id });
     }
   }
-  res.json(decryptRow(call, CALL_PII_FIELDS));
+  res.json({
+    ...decryptRow(call, CALL_PII_FIELDS),
+    status          : callStatus(call),
+    endedReasonLabel: endedReasonLabel(call.ended_reason),
+  });
 });
 
 app.post('/api/calls/:id/summarize', ensureCallOwned, async (req, res) => {
@@ -2082,7 +2087,7 @@ app.get('/api/usage', async (req, res) => {
 app.get('/api/conversations', async (req, res) => {
   const period       = String(req.query.period   || 'all');
   const typeFilter   = String(req.query.type     || 'all');     // all | chat | voice
-  const statusFilter = String(req.query.status   || 'all');     // all | completed | failed
+  const statusFilter = String(req.query.status   || 'all');     // all | completed | in_progress | no_answer | failed
   const outcomeFilter= String(req.query.outcome  || 'all');     // all | success | not_available
   const search       = String(req.query.search   || '').trim().toLowerCase();
   const requestedCompany = req.query.companyId ? String(req.query.companyId) : null;
@@ -2137,7 +2142,8 @@ app.get('/api/conversations', async (req, res) => {
 
   // Calls.
   const calls = typeFilter === 'chat' ? [] : await dataAll(`
-    SELECT id, company_id, created_at AS ts, caller_number, duration_sec, ended_reason, summary, direction
+    SELECT id, company_id, created_at AS ts, caller_number, duration_sec, ended_reason, summary, direction,
+           CASE WHEN transcript IS NOT NULL AND transcript <> '' THEN 1 ELSE 0 END AS has_transcript
     FROM calls
     WHERE company_id IN (${inPlaceholders}) ${timeClause}
   `, [...ids, ...timeArgs]);
@@ -2152,11 +2158,6 @@ app.get('/api/conversations', async (req, res) => {
   }
 
   const OK_REASONS = new Set(['customer-ended-call', 'assistant-ended-call']);
-  // 60-minute grace window: a row with no ended_reason that was created
-  // within the last hour is shown as "in progress" instead of "failed".
-  // The user can click into it to trigger an on-demand provider pull which
-  // hydrates the row immediately. Past 1h, the row is assumed stale.
-  const IN_PROGRESS_CUTOFF = Date.now() - 60 * 60 * 1000;
 
   const chatItems = chats.map((c) => ({
     id          : `chat-${c.session_id}`,
@@ -2180,18 +2181,11 @@ app.get('/api/conversations', async (req, res) => {
 
   const callItems = calls.map((c) => {
     const ok = OK_REASONS.has(c.ended_reason || '');
-    // Three-way status:
-    //   completed → call ended with an OK reason
-    //   in_progress → no ended_reason yet AND created recently (webhook may
-    //                 still arrive, or the call is literally still ringing)
-    //   failed → anything else
-    let status;
-    if (!c.ended_reason) {
-      const ts = c.ts ? Date.parse(c.ts + 'Z') : Date.now();
-      status = (Number.isFinite(ts) && ts >= IN_PROGRESS_CUTOFF) ? 'in_progress' : 'failed';
-    } else {
-      status = ok ? 'completed' : 'failed';
-    }
+    // completed | in_progress | no_answer | failed — see lib/call-status.js.
+    // A call that connected is completed however it ended (a transfer or a
+    // silence timeout used to read "failed"); one that never connected says
+    // whether the customer did not answer or the line itself refused it.
+    const status = callStatus({ ...c, created_at: c.ts });
     return {
       id          : `call-${c.id}`,
       callId      : c.id,
@@ -2208,6 +2202,7 @@ app.get('/api/conversations', async (req, res) => {
       messages    : null,
       duration    : c.duration_sec || 0,
       endedReason : c.ended_reason || null,
+      endedReasonLabel: endedReasonLabel(c.ended_reason),
       summary     : c.summary || null,
     };
   });

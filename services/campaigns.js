@@ -16,6 +16,7 @@ const { loadCompany } = require('../companies');
 const { dailyCap, checkAndBumpUsage } = require('./usage');
 const { decryptField } = require('../lib/pii');
 const { runWithContext } = require('../lib/tenant-context');
+const { sipDisposition } = require('../lib/call-status');
 const voice = require('./voice');
 
 const STALE_CALLING_MIN = 30;
@@ -326,14 +327,26 @@ async function tick() {
 
 // Map a finished call back to its campaign contact. Called from the
 // end-of-call pipeline (services/call-events.js).
+// The contact's status after a call. no_answer and failed are both retried
+// while attempts remain; completed is final.
+function contactStatusForCall(endedReason, durationSec) {
+  const reason = String(endedReason || '').toLowerCase();
+  // A call that never connected now carries its SIP status (sip-480 …) where
+  // it used to carry nothing. Read it here, or "sip-480" would fall through to
+  // 'completed' below and the contact would never be tried again.
+  const sip = sipDisposition(reason);
+  if (sip === 'no_answer' || sip === 'busy') return 'no_answer';
+  if (sip) return 'failed';
+  if (/no-answer|busy|voicemail|machine/.test(reason)) return 'no_answer';
+  if (/customer-ended|assistant-ended|end-call/.test(reason) && (durationSec || 0) >= 5) return 'completed';
+  if (!reason) return 'no_answer';
+  return /error|failed|rejected|did-not/.test(reason) ? 'failed' : 'completed';
+}
+
 async function handleCallEnded(callId, endedReason, durationSec) {
   if (!callId) return;
   const reason = String(endedReason || '').toLowerCase();
-  let status;
-  if (/no-answer|busy|voicemail|machine/.test(reason)) status = 'no_answer';
-  else if (/customer-ended|assistant-ended|end-call/.test(reason) && (durationSec || 0) >= 5) status = 'completed';
-  else if (!reason) status = 'no_answer';
-  else status = /error|failed|rejected|did-not/.test(reason) ? 'failed' : 'completed';
+  const status = contactStatusForCall(reason, durationSec);
   const r = await sql.updateContactByCallId.run({ call_id: callId, status, err: status === 'completed' ? null : reason });
   if (r.changes) logger.info('campaign contact updated from call', { callId, status });
 }
@@ -390,7 +403,7 @@ function startCampaignWorker() {
 }
 
 module.exports = {
-  startCampaignWorker, tick, tickCampaign, handleCallEnded,
+  startCampaignWorker, tick, tickCampaign, handleCallEnded, contactStatusForCall,
   inCallWindow, windowState, saudiHour, saudiMinutesOfDay, hhmmNow,
   diagnoseCampaign, getWorkerHealth,
 };

@@ -41,18 +41,17 @@
     <ul class="nav-links">
       <li><a href="#about">من نحن</a></li>
       <li><a href="#solution">المنصة</a></li>
-      <li><a href="#capabilities">القدرات</a></li>
-      <li><a href="#teams">الفرق</a></li>
+      <li><a href="#outcomes">النتائج</a></li>
+      <li><a href="#channels">القنوات</a></li>
       <li><a href="#sectors">القطاعات</a></li>
       <li><a href="#security">الأمان</a></li>
+      <li><a href="#faq">الأسئلة الشائعة</a></li>
     </ul>
     <span class="nav-spacer"></span>
     <!-- The client's own way in. Secondary to the demo request, because a
          first-time visitor is not looking for a login form — which is exactly
          what the root URL used to give them. -->
     <a class="btn btn-ghost nav-login" href="/login">لوحة التحكم</a>
-    <!-- TODO(client): destination for the demo request is not yet decided.
-         Left inert rather than pointing at an invented address. -->
     <a class="btn btn-primary nav-cta" href="/contact">احجز عرضًا توضيحيًا</a>
     <label for="nav-toggle" class="nav-burger" aria-label="فتح القائمة">
       <span></span><span></span><span></span>
@@ -62,10 +61,11 @@
     <ul>
       <li><a href="#about">من نحن</a></li>
       <li><a href="#solution">المنصة</a></li>
-      <li><a href="#capabilities">القدرات</a></li>
-      <li><a href="#teams">الفرق</a></li>
+      <li><a href="#outcomes">النتائج</a></li>
+      <li><a href="#channels">القنوات</a></li>
       <li><a href="#sectors">القطاعات</a></li>
       <li><a href="#security">الأمان</a></li>
+      <li><a href="#faq">الأسئلة الشائعة</a></li>
     </ul>
     <div class="drawer-cta">
       <a class="btn btn-primary" href="/contact">احجز عرضًا توضيحيًا</a>
@@ -78,25 +78,94 @@
 
 <!-- ══ 01 Hero ══════════════════════════════════════════════════ -->
 <section class="hero" id="top">
-  <div class="container">
-    <p class="eyebrow">AI FOR SAUDI BUSINESS</p>
-    <h1>ذكاء يصنع الفرق</h1>
-    <hr class="stroke">
-    <p class="lede">الذكاء الاصطناعي الذي يعمل داخل أعمالك. يفهم العميل، ويتخذ الإجراء، ويسجّل النتيجة.</p>
-    <div class="hero-actions">
-      <a class="btn btn-primary" href="/contact">احجز عرضًا توضيحيًا</a>
-      <a class="btn btn-ghost" href="#solution">اكتشف المنصة</a>
+  <div class="container hero-grid">
+    <div class="hero-copy">
+      <p class="eyebrow">AI FOR SAUDI BUSINESS</p>
+      <h1>ذكاء يصنع الفرق</h1>
+      <hr class="stroke">
+      <p class="lede">الذكاء الاصطناعي الذي يعمل داخل أعمالك. يفهم العميل، ويتخذ الإجراء، ويسجّل النتيجة.</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="/contact">احجز عرضًا توضيحيًا</a>
+        <a class="btn btn-ghost" href="#solution">اكتشف المنصة</a>
+      </div>
+      <div class="channels">
+        <span>مكالمات واردة وصادرة</span>
+        <span>محادثات رقمية</span>
+        <span>قاعدة معرفة</span>
+        <span>تحويل إلى موظف</span>
+      </div>
     </div>
-    <div class="channels">
-      <span>مكالمات واردة وصادرة</span>
-      <span>محادثات رقمية</span>
-      <span>قاعدة معرفة</span>
-      <span>تحويل إلى موظف</span>
+    <!-- Animated console, pure CSS. Decorative, so hidden from assistive tech. -->
+    <div class="hero-visual" aria-hidden="true">
+      <div class="hv-card">
+        <div class="hv-head"><span class="hv-dot"></span><span>اتصال مباشر</span></div>
+        <div class="hv-eq"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="hv-steps">
+          <span class="hv-step">يفهم</span>
+          <span class="hv-step">ينفّذ</span>
+          <span class="hv-step">يسجّل</span>
+        </div>
+      </div>
     </div>
   </div>
 </section>
 
-<!-- ══ 02 About ═════════════════════════════════════════════════
+<!-- ══ 02 Partners ══════════════════════════════════════════════
+     Logos supplied by the client. Shown as organisations that trust Masar
+     to manage their customer journey. No claim beyond that is made here. -->
+<section class="section" id="partners">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">PARTNERS</p>
+      <h2>شركاؤنا</h2>
+      <hr class="stroke sm">
+      <p class="lede">نفخر بشراكة جهات تثق بمسار لإدارة تواصلها مع عملائها.</p>
+    </div>
+    <!-- Auto-scrolling marquee, pure CSS. The set is duplicated once and the
+         track is shifted -50%, so the loop is seamless. Duplicates are hidden
+         from assistive tech; each logo is announced once. -->
+    <div class="marquee">
+      <ul class="marquee-track">
+        <li><img src="/site/assets/partner-maheer.png" alt="مهير العقارية" loading="lazy"></li>
+        <li><img src="/site/assets/partner-wakn.png" alt="وكن للتطوير والاستثمار العقاري" loading="lazy"></li>
+        <li><img src="/site/assets/partner-maheer.png" alt="" aria-hidden="true" loading="lazy"></li>
+        <li><img src="/site/assets/partner-wakn.png" alt="" aria-hidden="true" loading="lazy"></li>
+        <li><img src="/site/assets/partner-maheer.png" alt="" aria-hidden="true" loading="lazy"></li>
+        <li><img src="/site/assets/partner-wakn.png" alt="" aria-hidden="true" loading="lazy"></li>
+        <li aria-hidden="true"><img src="/site/assets/partner-maheer.png" alt="" loading="lazy"></li>
+        <li aria-hidden="true"><img src="/site/assets/partner-wakn.png" alt="" loading="lazy"></li>
+        <li aria-hidden="true"><img src="/site/assets/partner-maheer.png" alt="" loading="lazy"></li>
+        <li aria-hidden="true"><img src="/site/assets/partner-wakn.png" alt="" loading="lazy"></li>
+        <li aria-hidden="true"><img src="/site/assets/partner-maheer.png" alt="" loading="lazy"></li>
+        <li aria-hidden="true"><img src="/site/assets/partner-wakn.png" alt="" loading="lazy"></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 03 The challenge ═════════════════════════════════════════
+     The cost of handling customer contact by hand. Six plain statements,
+     no invented figures. -->
+<section class="section" id="challenge">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">THE CHALLENGE</p>
+      <h2>كل عميل جديد يكلّفك مكالمات ومتابعات وموظفين إضافيين</h2>
+      <hr class="stroke sm">
+      <p class="lede">التواصل اليدوي مع العملاء لا يتوسّع بسهولة — وكل نمو يعني تكلفة أعلى ووقتًا أطول وأخطاءً أكثر.</p>
+    </div>
+    <ul class="pains">
+      <li>انتظار طويل على الهاتف وقوائم صوتية تُرهق العميل.</li>
+      <li>مكالمات تضيع خارج أوقات الدوام دون رد.</li>
+      <li>متابعات ومستحقات تتأخر أو تُنسى.</li>
+      <li>بيانات العملاء تُدخل يدويًا وتتكرر الأخطاء.</li>
+      <li>حلول آلية جاهزة تعجز عن فهم اللهجة المحلية.</li>
+      <li>تكلفة توظيف وتدريب مستمرة مع كل توسّع.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ══ 04 About ═════════════════════════════════════════════════
      The client's own words, used verbatim. The four stages below are the
      ones named in their second sentence, not a framework invented here. -->
 <section class="section" id="about">
@@ -123,7 +192,7 @@
   </div>
 </section>
 
-<!-- ══ 03 The solution ══════════════════════════════════════════ -->
+<!-- ══ 05 The solution ══════════════════════════════════════════ -->
 <section class="section" id="solution">
   <div class="container">
     <div class="section-head">
@@ -157,7 +226,111 @@
   </div>
 </section>
 
-<!-- ══ 03 Capabilities ══════════════════════════════════════════
+<!-- ══ Showcase ═════════════════════════════════════════════════
+     An auto-advancing, CSS-only slideshow of illustrated screens. The
+     mockups are decorative (placeholder numbers), so the whole block is
+     hidden from assistive tech. Under prefers-reduced-motion the global
+     reset stops the animation and only the first screen shows. -->
+<section class="section" id="showcase">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">SHOWCASE</p>
+      <h2>لمحة من داخل المنصة</h2>
+      <hr class="stroke sm">
+      <p class="lede">من المحادثة، إلى المتابعة والتحصيل، إلى ذكاء يتحسّن مع كل مكالمة.</p>
+    </div>
+    <div class="shots" aria-hidden="true">
+      <div class="stage">
+        <!-- Screen 1: chat with a voice-note card -->
+        <div class="shot shot-1">
+          <div class="mock">
+            <div class="mock-head"><span class="dot"></span><span>محادثة واتساب</span></div>
+            <div class="bubbles">
+              <span class="bubble out">يا هلا وسهلاً! طلبك تأكّد ويوصلك اليوم خلال ساعتين.</span>
+              <span class="bubble in">أقدر أغيّر وقت التوصيل لبكرة؟</span>
+              <span class="bubble out">من عيوني! غيّرت الموعد لبكرة الساعة ٤ العصر، وأرسلت لك التأكيد على واتساب.</span>
+            </div>
+            <div class="vnote">
+              <span class="vnote-av"></span>
+              <span class="vnote-meta"><b>مسار</b><span>لهجة سعودية · إعادة جدولة التوصيل</span></span>
+              <span class="vnote-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+            </div>
+          </div>
+          <p class="shot-cap">محادثات رقمية تفهم العميل وتنفّذ طلبه</p>
+        </div>
+        <!-- Screen 2: collections / CRM (dark card) -->
+        <div class="shot shot-2">
+          <div class="mock mock-dark">
+            <div class="mock-head"><span class="dot"></span><span>متابعة التحصيل</span><span class="dstatus">تحصيل نشط</span></div>
+            <div class="dash-row"><span class="k">الغرض</span><span class="v">تحصيل دفعة</span></div>
+            <div class="dash-row"><span class="k">الحالة</span><span class="v">متأخّر ٣١ يومًا</span></div>
+            <div class="dash-row"><span class="k">الالتزام</span><span class="v">وفق الضوابط التنظيمية</span></div>
+            <div class="dassist"><span class="dassist-dots"><i></i><i></i><i></i></span><span>جارٍ الاتصال…</span></div>
+            <div class="dresult">✓ تم تسجيل الوعد</div>
+            <div class="dchips"><span class="chip">وعد بالسداد</span><span class="chip">تسجيل تلقائي في CRM</span></div>
+          </div>
+          <p class="shot-cap">متابعة وتحصيل تلقائي مع تسجيل كل نتيجة</p>
+        </div>
+        <!-- Screen 3: learns and improves -->
+        <div class="shot shot-3">
+          <div class="mock">
+            <div class="mock-head"><span class="dot"></span><span>يتعلّم ويتطوّر</span></div>
+            <div class="growth">
+              <svg class="growth-svg" viewBox="0 0 300 150" role="img" aria-hidden="true" focusable="false">
+                <line class="g-base" x1="12" y1="128" x2="288" y2="128"/>
+                <path class="g-flat" d="M15 118 C 110 114, 210 110, 285 104"/>
+                <path class="g-main" d="M15 120 C 120 118, 210 92, 285 24"/>
+                <circle class="g-halo" cx="285" cy="24" r="11"/>
+                <circle class="g-dot" cx="285" cy="24" r="6"/>
+              </svg>
+            </div>
+            <p class="growth-cap">يتأقلم مع التغيّرات ويتحسّن مع الوقت مع كل مكالمة</p>
+          </div>
+          <p class="shot-cap">ذكاء يتطوّر مع كل تفاعل</p>
+        </div>
+      </div>
+      <div class="shot-dots"><i></i><i></i><i></i></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 06 Outcomes ══════════════════════════════════════════════
+     What the platform changes, framed as outcomes rather than guarantees.
+     No percentage or figure is claimed, because none has been measured. -->
+<section class="section" id="outcomes">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">OUTCOMES</p>
+      <h2>قلّل التكلفة، ووسّع نطاق خدمتك، وانطلق خلال أيام</h2>
+      <hr class="stroke sm">
+      <p class="lede">مسار لا يضيف أداة جديدة فحسب، بل يغيّر معادلة التكلفة والوقت في التواصل مع عملائك.</p>
+    </div>
+    <div class="grid grid-2">
+      <div class="pillar">
+        <span class="tagline">Lower Cost</span>
+        <h3>اخفض تكلفة خدمة العملاء</h3>
+        <p>ردّ فوري على مدار الساعة بلهجة العميل، مع تحويل المكالمة إلى موظف بشري بسياق كامل عند الحاجة فقط.</p>
+      </div>
+      <div class="pillar">
+        <span class="tagline">More Revenue</span>
+        <h3>ارفع إيرادك ومعدّل التحصيل</h3>
+        <p>تواصل صادر تلقائي مع العملاء المحتملين، وتذكير بالمستحقات والمتابعة، مع تسجيل كل نتيجة في سجلاتك.</p>
+      </div>
+      <div class="pillar">
+        <span class="tagline">Structured Data</span>
+        <h3>حوّل المكالمات إلى بيانات منظَّمة</h3>
+        <p>كل مكالمة تُحفظ بنصها وملخّصها ونتيجتها، فتصبح معلومات قابلة للقياس والمراجعة بدل مجهود ضائع.</p>
+      </div>
+      <div class="pillar">
+        <span class="tagline">Custom Automation</span>
+        <h3>أتمتة مصمَّمة حول عملك</h3>
+        <p>وكلاء ومسارات عمل مبنية على إجراءاتك أنت، مصمَّمة للاتصال بأنظمتك الحالية عبر واجهات برمجية موثّقة.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 07 Capabilities ══════════════════════════════════════════
      These are the ten capabilities the backend registry declares, listed as
      what the platform does rather than annotated one by one. No per-item
      status is claimed here, because only two are implemented today and the
@@ -218,7 +391,7 @@
   </div>
 </section>
 
-<!-- ══ 04 How a call works ══════════════════════════════════════ -->
+<!-- ══ 08 How a call works ══════════════════════════════════════ -->
 <section class="section" id="how">
   <div class="container">
     <div class="section-head">
@@ -255,7 +428,39 @@
   </div>
 </section>
 
-<!-- ══ 05 Teams ═════════════════════════════════════════════════ -->
+<!-- ══ 09 Channels ══════════════════════════════════════════════
+     The same assistant across every channel: one understanding, one set of
+     sources, whatever the medium. -->
+<section class="section" id="channels">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">CHANNELS</p>
+      <h2>منصة واحدة، تعمل أينما يكون عملاؤك</h2>
+      <hr class="stroke sm">
+      <p class="lede">نفس الفهم ونفس المصادر عبر كل قناة — المساعد لا يتغيّر بتغيّر الوسيلة.</p>
+    </div>
+    <div class="grid grid-2">
+      <div class="channel-card">
+        <h3>مركز الاتصال</h3>
+        <p>مكالمات واردة وصادرة عبر رقم مخصص لشركتك.</p>
+      </div>
+      <div class="channel-card">
+        <h3>محادثة الموقع</h3>
+        <p>ردّ فوري على زوار موقعك داخل المنصّة.</p>
+      </div>
+      <div class="channel-card">
+        <h3>واتساب</h3>
+        <p>محادثات نصية ذكية على القناة الأكثر استخدامًا.</p>
+      </div>
+      <div class="channel-card">
+        <h3>قاعدة المعرفة</h3>
+        <p>إجابات مبنية على مستندات شركتك الرسمية.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 10 Teams ═════════════════════════════════════════════════ -->
 <section class="section" id="teams">
   <div class="container">
     <div class="section-head">
@@ -277,7 +482,7 @@
   </div>
 </section>
 
-<!-- ══ 06 Sectors ═══════════════════════════════════════════════
+<!-- ══ 11 Sectors ═══════════════════════════════════════════════
      Named as sectors served. No case study or result is attached to
      any of them, because none has been verified. -->
 <section class="section" id="sectors">
@@ -295,7 +500,7 @@
   </div>
 </section>
 
-<!-- ══ 07 Integrations ══════════════════════════════════════════
+<!-- ══ 12 Integrations ══════════════════════════════════════════
      Deliberately worded as "designed to connect", not "integrates
      with". No integration has been built and no partner logo appears,
      because that would claim a relationship that does not exist. -->
@@ -315,7 +520,7 @@
   </div>
 </section>
 
-<!-- ══ 08 Security ══════════════════════════════════════════════
+<!-- ══ 13 Security ══════════════════════════════════════════════
      Every line here describes something the backend actually enforces.
      No hosting-location claim and no certification badge appears,
      because neither could be substantiated today. -->
@@ -357,15 +562,74 @@
   </div>
 </section>
 
-<!-- ══ 09 Contact ═══════════════════════════════════════════════ -->
+<!-- ══ 14 FAQ ═══════════════════════════════════════════════════
+     CSS-only accordion built on <details>/<summary>: no JavaScript, which
+     keeps the page inside the app's script-src 'self' CSP. The first item
+     is open by default, as in the design. -->
+<section class="section" id="faq">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">FAQ</p>
+      <h2>الأسئلة الشائعة</h2>
+      <hr class="stroke sm">
+      <p class="lede">كل ما تحتاج معرفته عن منصة "مسار" وكيفية عملها.</p>
+    </div>
+    <div class="faq">
+      <details open>
+        <summary>ما هي منصة مسار؟</summary>
+        <div class="faq-a"><p>مسار منصة لإدارة وأتمتة رحلة العميل باستخدام الذكاء الاصطناعي، تربط التفاعل مع العميل بتنفيذ الإجراءات والمتابعة وقياس النتائج.</p></div>
+      </details>
+      <details>
+        <summary>ما الخدمات التي تقدمها مسار؟</summary>
+        <div class="faq-a"><p>توفر مسار وكلاء ذكاء اصطناعي للمكالمات الواردة والصادرة والمحادثات الرقمية، وتأهيل العملاء، وأتمتة العمليات والمتابعة، والتكامل مع أنظمة الأعمال، والتقارير والتحليلات.</p></div>
+      </details>
+      <details>
+        <summary>هل أحتاج إلى استبدال أنظمتي الحالية؟</summary>
+        <div class="faq-a"><p>لا. تتكامل مسار مع أنظمتك الحالية، مثل CRM وERP، لتضيف إليها قدرات الذكاء الاصطناعي والأتمتة دون الحاجة إلى استبدالها.</p></div>
+      </details>
+      <details>
+        <summary>هل يستطيع الذكاء الاصطناعي تنفيذ إجراءات فعلية؟</summary>
+        <div class="faq-a"><p>نعم. يمكن لوكلاء مسار تسجيل بيانات العملاء، وتحديث الأنظمة، وإنشاء مهام المتابعة، وتنفيذ الإجراءات المرتبطة برحلة العميل.</p></div>
+      </details>
+      <details>
+        <summary>هل تدعم مسار اللغة العربية واللهجات المحلية؟</summary>
+        <div class="faq-a"><p>نعم، تدعم مسار التفاعل باللغة العربية، مع قدرات فهم اللهجات وفقًا للحل المستخدم وإعداداته.</p></div>
+      </details>
+      <details>
+        <summary>أين تُخزَّن بيانات العملاء؟</summary>
+        <div class="faq-a"><p>تُستضاف بيانات مسار على خوادم محلية داخل المملكة العربية السعودية. وتسعى مسار للامتثال لمتطلبات SDAIA وNCA وSAMA، مع إمكانية النشر داخل بيئة العميل عند الحاجة.</p></div>
+      </details>
+      <details>
+        <summary>هل يمكن تحويل العميل إلى موظف بشري؟</summary>
+        <div class="faq-a"><p>نعم. يمكن تحويل المحادثة إلى الموظف المختص عند الحاجة، مع تمرير سياق المحادثة والمعلومات المتاحة لمواصلة خدمة العميل.</p></div>
+      </details>
+      <details>
+        <summary>هل توفر مسار تقارير وتحليلات؟</summary>
+        <div class="faq-a"><p>نعم. توفر مسار تقارير لمتابعة أداء المكالمات والتفاعلات والعمليات المؤتمتة، وتحليل النتائج ومؤشرات الأداء لدعم اتخاذ القرار.</p></div>
+      </details>
+      <details>
+        <summary>هل يمكن تخصيص مسار حسب طبيعة أعمال الشركة؟</summary>
+        <div class="faq-a"><p>نعم. يمكن تهيئة وكلاء الذكاء الاصطناعي وسير العمل والتكاملات بما يتناسب مع عمليات الشركة واحتياجات عملائها.</p></div>
+      </details>
+      <details>
+        <summary>كم تبلغ تكلفة استخدام مسار؟</summary>
+        <div class="faq-a"><p>تعتمد التكلفة على الخدمات المطلوبة، وحجم الاستخدام، والتكاملات ونطاق التنفيذ. تواصل مع فريق مسار للحصول على عرض يناسب احتياجات شركتك.</p></div>
+      </details>
+      <details>
+        <summary>كيف أبدأ باستخدام مسار؟</summary>
+        <div class="faq-a"><p>تواصل مع فريق مسار لمناقشة احتياجات شركتك، وتحديد العمليات المناسبة للأتمتة، والبدء في تهيئة الحل وفقًا لمتطلباتك.</p></div>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 15 Contact ═══════════════════════════════════════════════ -->
 <section class="section contact" id="contact">
   <div class="container">
     <p class="eyebrow" style="text-align:center">GET STARTED</p>
     <h2>جاهز تجعل الذكاء جزءًا من عملك؟</h2>
     <hr class="stroke">
     <p class="lede">اكتشف كيف يمكن للمنصة تحويل عملياتك اليومية إلى عمليات أكثر ذكاءً وكفاءة.</p>
-    <!-- Live at last: the demo destination was a TODO for as long as there was
-         no contact channel to send anyone to. There is one now. -->
     <a class="btn btn-primary" href="/contact">احجز عرضًا توضيحيًا</a>
   </div>
 </section>
@@ -373,20 +637,47 @@
 </main>
 
 <footer class="site-footer">
-  <div class="container footer-row">
-    <span class="brand" aria-hidden="true">
-      <svg viewBox="0 0 239.65 76.01"><use href="#m-mark"/></svg>
-    </span>
-    <a class="footer-link" href="/login">لوحة التحكم</a>
-    <a class="footer-link" href="/contact">تواصل معنا</a>
-    <a class="footer-link" href="/privacy">سياسة الخصوصية</a>
-    <a class="footer-link" href="/terms">شروط الخدمة</a>
-
-    <span class="footer-spacer"></span>
-    <!-- Legal entity as given on the commercial registration. -->
-    <small>© 2026 مؤسسة العنود محمد القحطاني لتقنية المعلومات — جميع الحقوق محفوظة</small>
+  <div class="container">
+    <div class="footer-main">
+      <div class="footer-brand">
+        <span class="brand" aria-hidden="true">
+          <svg viewBox="0 0 239.65 76.01"><use href="#m-mark"/></svg>
+        </span>
+        <p class="footer-tagline">ذكاء اصطناعي يعمل داخل أعمالك: يفهم العميل، ويتّخذ الإجراء، ويسجّل النتيجة.</p>
+        <ul class="footer-contact">
+          <li><a href="tel:920033842" dir="ltr">9200 33842</a></li>
+          <li><a href="mailto:info@getmasar.net" dir="ltr">info@getmasar.net</a></li>
+        </ul>
+        <ul class="footer-social" aria-label="روابط التواصل">
+          <li><a href="mailto:info@getmasar.net" aria-label="البريد الإلكتروني">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M3.5 6.5h17v11h-17z"/><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="m4 7 8 5.5L20 7"/></svg>
+          </a></li>
+          <li><a href="https://x.com/getmasar" target="_blank" rel="noopener noreferrer" aria-label="منصة إكس">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M17.5 3h3.2l-7 8 8.2 10.9h-6.4l-5-6.6-5.8 6.6H1.5l7.5-8.6L1 3h6.6l4.6 6.1Zm-1.1 16.9h1.8L7.7 4.9H5.8Z"/></svg>
+          </a></li>
+          <li><a href="https://www.linkedin.com/company/getmasar-sa/" target="_blank" rel="noopener noreferrer" aria-label="لينكدإن">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4.98 3.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5ZM3 9h4v12H3zM9 9h3.8v1.7h.05c.53-1 1.82-2.05 3.75-2.05C20.4 8.65 21 11 21 14.1V21h-4v-6c0-1.43-.03-3.27-2-3.27-2 0-2.3 1.56-2.3 3.17V21H9z"/></svg>
+          </a></li>
+          <li><a href="https://getmasar.net" target="_blank" rel="noopener noreferrer" aria-label="الموقع الإلكتروني">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><path fill="none" stroke="currentColor" stroke-width="1.6" d="M3 12h18M12 3c2.5 2.5 3.8 5.7 3.8 9S14.5 18.5 12 21C9.5 18.5 8.2 15.3 8.2 12S9.5 5.5 12 3Z"/></svg>
+          </a></li>
+        </ul>
+      </div>
+      <nav class="footer-nav" aria-label="روابط الموقع">
+        <a href="/login">لوحة التحكم</a>
+        <a href="/contact">تواصل معنا</a>
+        <a href="#faq">الأسئلة الشائعة</a>
+        <a href="/privacy">سياسة الخصوصية</a>
+        <a href="/terms">شروط الخدمة</a>
+      </nav>
+    </div>
+    <div class="footer-bottom">
+      <!-- Legal entity as given on the commercial registration. -->
+      <small>© 2026 مؤسسة العنود محمد القحطاني لتقنية المعلومات — جميع الحقوق محفوظة</small>
+    </div>
   </div>
 </footer>
 
 </body>
 </html>
+

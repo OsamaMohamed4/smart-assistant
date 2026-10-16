@@ -510,3 +510,378 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
 }
 .footer-link:hover { color: var(--brand); border-bottom-color: var(--brand); }
 .site-footer small { font-size: 13.5px; color: var(--ink-3); }
+
+/* ════════════════════════════════════════════════════════════
+   ADDITIONS — sections introduced by the client's design update.
+   Every value below reuses the existing tokens; no new brand
+   colours are introduced.
+   ════════════════════════════════════════════════════════════ */
+
+/* ── Partners ──────────────────────────────────────────────
+   Logos sit on a white card so a dark mark and a gold mark both
+   read. Height is capped and width is free, so logos of different
+   proportions share one baseline. */
+.partners {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; gap: var(--s-4);
+  grid-template-columns: 1fr;
+}
+@media (min-width: 640px) {
+  .partners { grid-template-columns: repeat(2, 1fr); }
+}
+.partner {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--s-6) var(--s-5);
+  min-height: 128px;
+}
+.partner img {
+  max-height: 64px; width: auto; object-fit: contain;
+  display: block;
+}
+
+/* ── The challenge: a plain list of pain points ────────────
+   Two columns on a wide screen, one on a phone. A short rule tops
+   each item instead of a bullet, matching the pillar treatment. */
+.pains {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; gap: 0 var(--s-7);
+  grid-template-columns: 1fr;
+}
+@media (min-width: 720px) {
+  .pains { grid-template-columns: repeat(2, 1fr); }
+}
+.pains li {
+  display: flex; align-items: flex-start; gap: var(--s-3);
+  padding-block: var(--s-4);
+  border-top: 1px solid var(--line);
+  font-size: 15.5px; color: var(--ink-2); line-height: 1.7;
+  max-width: none;
+}
+.pains li::before {
+  content: '—';
+  color: var(--b-500); flex: none;
+  font-family: var(--font-mo); line-height: 1.7;
+}
+
+/* ── Channel cards ─────────────────────────────────────────
+   Light cards, unlike the chrome-less pillars, because the design
+   shows bordered boxes here. */
+.channel-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--s-5);
+}
+.channel-card h3 { font-size: 17px; color: var(--brand); margin-bottom: var(--s-2); }
+.channel-card p { font-size: 15px; color: var(--ink-2); line-height: 1.7; }
+
+/* ── FAQ accordion (CSS-only, <details>/<summary>) ─────────
+   No JavaScript, so it stays inside the page's script-src 'self'
+   CSP. The marker is a custom +/− drawn with ::after. */
+.faq { border-top: 1px solid var(--line); }
+.faq details {
+  border-bottom: 1px solid var(--line);
+}
+.faq summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s-4);
+  padding: var(--s-4) 0;
+  font-size: 16.5px; font-weight: 500; color: var(--ink);
+  min-height: 56px;
+}
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after {
+  content: '+';
+  flex: none;
+  font-family: var(--font-mo); font-size: 20px; font-weight: 400;
+  color: var(--b-500); line-height: 1;
+  transition: transform .18s ease;
+}
+.faq details[open] summary::after { content: '−'; }
+.faq summary:hover { color: var(--brand); }
+.faq summary:hover::after { color: var(--brand); }
+.faq-a { padding: 0 0 var(--s-5); }
+.faq-a p {
+  font-size: 15.5px; color: var(--ink-2); line-height: 1.8;
+  max-width: 70ch;
+}
+
+/* ── Footer, redesigned ────────────────────────────────────
+   Brand block (mark, tagline, contact lines, social row) beside a
+   short link column, with a legal line underneath. The older
+   .footer-row rules remain in the stylesheet but are no longer
+   referenced by index.html. */
+.footer-main {
+  display: grid; gap: var(--s-7);
+  grid-template-columns: 1fr;
+  padding-bottom: var(--s-6);
+}
+@media (min-width: 760px) {
+  .footer-main { grid-template-columns: 1fr auto; gap: var(--s-8); align-items: start; }
+}
+.footer-brand .brand { color: var(--brand); display: inline-flex; }
+.footer-brand .brand svg { height: 26px; width: auto; display: block; }
+.footer-tagline {
+  margin-top: var(--s-4);
+  font-size: 15px; color: var(--ink-2); line-height: 1.75;
+  max-width: 44ch;
+}
+.footer-contact {
+  list-style: none; margin: var(--s-4) 0 0; padding: 0;
+  display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-5);
+  font-size: 15px;
+}
+.footer-contact a {
+  color: var(--ink-2); unicode-bidi: isolate;
+  min-height: 44px; display: inline-flex; align-items: center;
+}
+.footer-contact a:hover { color: var(--brand); }
+.footer-social {
+  list-style: none; margin: var(--s-5) 0 0; padding: 0;
+  display: flex; gap: var(--s-3);
+}
+.footer-social a {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 42px; height: 42px;
+  border: 1px solid var(--line-2); border-radius: var(--radius);
+  color: var(--ink-2); background: var(--surface);
+  transition: color .16s ease, border-color .16s ease;
+}
+.footer-social a:hover { color: var(--brand); border-color: var(--brand); }
+.footer-social svg { width: 19px; height: 19px; display: block; }
+.footer-nav {
+  display: flex; flex-direction: column; gap: var(--s-2);
+}
+.footer-nav a {
+  font-size: 15px; color: var(--ink-2);
+  min-height: 40px; display: inline-flex; align-items: center;
+}
+.footer-nav a:hover { color: var(--brand); }
+.footer-bottom {
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--line);
+}
+.footer-bottom small { font-size: 13.5px; color: var(--ink-3); }
+
+/* ════════════════════════════════════════════════════════════
+   MOTION — animated hero console, auto-advancing slideshow, logo
+   marquee, and scroll reveals. All CSS-only: no JavaScript, so the
+   page stays inside the app's script-src 'self' CSP. The global
+   prefers-reduced-motion rule above disables every animation here,
+   and each piece has a sensible static fallback for that case.
+   ════════════════════════════════════════════════════════════ */
+
+/* ── Scroll reveal (progressive enhancement; needs view timelines) ── */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    .section, .hero .hero-copy, .hero .hero-visual {
+      animation: reveal-up linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 55%;
+    }
+  }
+}
+@keyframes reveal-up {
+  from { opacity: 0; transform: translateY(26px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Hero: two columns with an animated "live call" console ── */
+.hero-grid { display: grid; gap: var(--s-7); align-items: center; }
+@media (min-width: 900px) { .hero-grid { grid-template-columns: 1.05fr .95fr; } }
+
+.hero-visual { display: flex; justify-content: center; }
+.hv-card {
+  width: 100%; max-width: 360px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: var(--s-5);
+  box-shadow: 0 24px 60px -32px rgba(26, 21, 14, .28);
+}
+.hv-head {
+  display: flex; align-items: center; gap: var(--s-2);
+  font-family: var(--font-mo); font-size: 12px; color: var(--ink-3);
+  letter-spacing: .04em; margin-bottom: var(--s-5);
+}
+.hv-dot {
+  width: 9px; height: 9px; border-radius: 50%; background: var(--brand);
+  animation: hv-pulse 1.8s ease-in-out infinite;
+}
+@keyframes hv-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(118, 92, 54, .45); opacity: 1; }
+  50%      { box-shadow: 0 0 0 7px rgba(118, 92, 54, 0); opacity: .55; }
+}
+.hv-eq { display: flex; align-items: flex-end; gap: 5px; height: 64px; margin-bottom: var(--s-5); }
+.hv-eq i {
+  flex: 1; background: linear-gradient(var(--b-300), var(--brand));
+  border-radius: 3px; height: 100%;
+  transform-origin: bottom; transform: scaleY(.25);
+  animation: eq-bar 1.1s ease-in-out infinite alternate;
+}
+.hv-eq i:nth-child(1){animation-delay:0s}   .hv-eq i:nth-child(2){animation-delay:.12s}
+.hv-eq i:nth-child(3){animation-delay:.24s} .hv-eq i:nth-child(4){animation-delay:.36s}
+.hv-eq i:nth-child(5){animation-delay:.48s} .hv-eq i:nth-child(6){animation-delay:.6s}
+.hv-eq i:nth-child(7){animation-delay:.72s} .hv-eq i:nth-child(8){animation-delay:.84s}
+.hv-eq i:nth-child(9){animation-delay:.96s}
+@keyframes eq-bar { from { transform: scaleY(.2); } to { transform: scaleY(1); } }
+.hv-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s-2); }
+.hv-step {
+  text-align: center; font-size: 13.5px; color: var(--ink-3);
+  padding: 9px 4px; border-radius: var(--radius);
+  background: var(--surface-2); border: 1px solid var(--line);
+  animation: hv-step 3s ease-in-out infinite;
+}
+.hv-step:nth-child(1){animation-delay:0s}
+.hv-step:nth-child(2){animation-delay:1s}
+.hv-step:nth-child(3){animation-delay:2s}
+@keyframes hv-step {
+  0%, 100% { background: var(--surface-2); color: var(--ink-3); border-color: var(--line); }
+  16%, 28% { background: var(--brand); color: #fff; border-color: var(--brand); }
+}
+
+/* ── Partners as an auto-scrolling marquee ── */
+.marquee {
+  overflow: hidden; position: relative;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+          mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+.marquee-track {
+  display: flex; align-items: center; gap: var(--s-4);
+  list-style: none; margin: 0; padding: var(--s-2) 0; width: max-content;
+  animation: marquee 30s linear infinite;
+}
+.marquee-track li {
+  flex: none; width: 230px; height: 108px;
+  display: flex; align-items: center; justify-content: center;
+  /* Logos sit transparent on the page — no card behind them. */
+}
+.marquee-track img { max-height: 52px; width: auto; object-fit: contain; }
+@keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+/* ── Showcase: auto-advancing slideshow (PowerPoint-style) ── */
+.shots { position: relative; max-width: 560px; margin-inline: auto; }
+.stage {
+  position: relative; min-height: clamp(460px, 90vw, 540px);
+  background: linear-gradient(140deg, var(--b-100), #E7D7BC);
+  border-radius: 18px; overflow: hidden;
+}
+.shot {
+  position: absolute; inset: 0; opacity: 0;
+  padding: clamp(20px, 5vw, 40px);
+  display: flex; flex-direction: column; gap: var(--s-4); justify-content: center;
+  animation: shot-fade 15s ease-in-out infinite;
+}
+.shot-1 { opacity: 1; animation-delay: 0s; }   /* first screen is the static fallback */
+.shot-2 { animation-delay: 5s; }
+.shot-3 { animation-delay: 10s; }
+@keyframes shot-fade {
+  0%   { opacity: 0; transform: translateY(10px); }
+  3%   { opacity: 1; transform: none; }
+  30%  { opacity: 1; transform: none; }
+  33%  { opacity: 0; transform: translateY(-10px); }
+  100% { opacity: 0; }
+}
+.mock {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  padding: var(--s-5); box-shadow: 0 20px 50px -34px rgba(26, 21, 14, .3);
+}
+.mock-head {
+  display: flex; align-items: center; gap: var(--s-2);
+  font-family: var(--font-mo); font-size: 11.5px; color: var(--ink-3);
+  letter-spacing: .04em; margin-bottom: var(--s-4);
+}
+.mock-head .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--brand); }
+.shot-cap { text-align: center; font-size: 14.5px; color: var(--ink-2); max-width: none; }
+/* chat bubbles */
+.bubbles { display: flex; flex-direction: column; gap: var(--s-2); }
+.bubble { max-width: 82%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.6; }
+.bubble.in  { align-self: flex-start; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-end-start-radius: 4px; }
+.bubble.out { align-self: flex-end; background: var(--brand); color: #fff; border-end-end-radius: 4px; }
+/* call */
+.call-no { font-size: 18px; font-weight: 600; color: var(--ink); direction: ltr; text-align: center; margin: 0 auto var(--s-3); }
+.call-eq { display: flex; align-items: flex-end; justify-content: center; gap: 4px; height: 40px; margin-bottom: var(--s-4); }
+.call-eq i {
+  width: 5px; background: var(--b-300); border-radius: 3px; height: 100%;
+  transform-origin: bottom; transform: scaleY(.3);
+  animation: eq-bar 1s ease-in-out infinite alternate;
+}
+.call-eq i:nth-child(2n){animation-delay:.2s} .call-eq i:nth-child(3n){animation-delay:.4s}
+.call-action { text-align: center; }
+.chip {
+  display: inline-block; font-size: 13px; padding: 7px 14px; border-radius: 999px;
+  background: var(--b-100); color: var(--b-700); border: 1px solid var(--b-200);
+}
+/* dashboard */
+.dash-row { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.dash-row:last-of-type { border-bottom: 0; }
+.dash-row .k { color: var(--ink-3); } .dash-row .v { color: var(--ink); font-weight: 500; }
+.dash-bars { display: flex; align-items: flex-end; gap: 6px; height: 48px; margin-top: var(--s-3); }
+.dash-bars i { flex: 1; background: var(--b-200); border-radius: 3px 3px 0 0; }
+.dash-bars i:nth-child(1){height:40%} .dash-bars i:nth-child(2){height:70%}
+.dash-bars i:nth-child(3){height:55%} .dash-bars i:nth-child(4){height:90%; background: var(--brand)}
+.dash-bars i:nth-child(5){height:65%}
+/* dots */
+.shot-dots { display: flex; justify-content: center; gap: var(--s-2); margin-top: var(--s-6); }
+.shot-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--line-2); animation: shot-dot 15s ease-in-out infinite; }
+.shot-dots i:nth-child(1){animation-delay:0s}
+.shot-dots i:nth-child(2){animation-delay:5s}
+.shot-dots i:nth-child(3){animation-delay:10s}
+@keyframes shot-dot {
+  0%, 33%, 100% { background: var(--line-2); transform: scale(1); }
+  3%, 30%       { background: var(--brand);  transform: scale(1.25); }
+}
+
+/* ── Showcase: richer mockups (chat + voice note, collections, growth) ── */
+/* Voice-note card under the chat */
+.vnote {
+  display: flex; align-items: center; gap: 10px; margin-top: var(--s-3);
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2);
+}
+.vnote-av { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, var(--b-300), var(--brand)); flex: none; }
+.vnote-meta { display: flex; flex-direction: column; line-height: 1.35; font-size: 12px; color: var(--ink-3); }
+.vnote-meta b { font-size: 13px; color: var(--ink); font-weight: 600; }
+.vnote-wave { margin-inline-start: auto; display: flex; align-items: center; gap: 3px; height: 20px; }
+.vnote-wave i {
+  width: 3px; background: var(--brand); border-radius: 2px; height: 100%;
+  transform-origin: center; transform: scaleY(.4);
+  animation: eq-bar 1s ease-in-out infinite alternate;
+}
+.vnote-wave i:nth-child(2n){animation-delay:.15s} .vnote-wave i:nth-child(3n){animation-delay:.3s}
+
+/* Collections card — dark variant, like the reference */
+.mock-dark { background: var(--dark); border-color: var(--dark-2); color: #EFE9DE; }
+.mock-dark .mock-head { color: var(--b-300); }
+.mock-dark .mock-head .dot { background: var(--b-300); }
+.mock-dark .dash-row { border-color: #2E2619; }
+.mock-dark .dash-row .k { color: #9A8E7C; }
+.mock-dark .dash-row .v { color: #F1E8DA; }
+.mock-head .dstatus {
+  margin-inline-start: auto; font-family: var(--font-ar); font-size: 11px; letter-spacing: 0;
+  padding: 3px 10px; border-radius: 999px;
+  background: rgba(197, 166, 119, .16); color: var(--b-300); border: 1px solid rgba(197, 166, 119, .3);
+}
+.dassist { display: flex; align-items: center; gap: 8px; margin: var(--s-3) 0; font-size: 13px; color: #B7AB97; }
+.dassist-dots { display: inline-flex; gap: 3px; }
+.dassist-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--b-300); animation: dassist 1.2s ease-in-out infinite; }
+.dassist-dots i:nth-child(2){animation-delay:.2s} .dassist-dots i:nth-child(3){animation-delay:.4s}
+@keyframes dassist { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
+.dresult { margin: var(--s-2) 0 var(--s-3); padding: 9px 12px; border-radius: 8px; background: rgba(197, 166, 119, .12); color: var(--b-300); font-size: 14px; font-weight: 500; }
+.dchips { display: flex; flex-wrap: wrap; gap: 8px; }
+.mock-dark .chip { background: rgba(197, 166, 119, .14); color: var(--b-300); border-color: rgba(197, 166, 119, .32); }
+
+/* Growth chart — "learns and improves" */
+.growth { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: var(--s-4); margin-bottom: var(--s-3); }
+.growth-svg { display: block; width: 100%; height: auto; }
+.g-base { stroke: var(--line-2); stroke-width: 1.5; }
+.g-flat { fill: none; stroke: var(--b-300); stroke-width: 2.5; opacity: .5; }
+.g-main { fill: none; stroke: var(--brand); stroke-width: 3.5; stroke-linecap: round; }
+.g-dot  { fill: var(--brand); }
+.g-halo { fill: none; stroke: var(--brand); stroke-width: 2; transform-box: fill-box; transform-origin: center; animation: g-halo 1.8s ease-in-out infinite; }
+@keyframes g-halo { 0%, 100% { opacity: .4; transform: scale(1); } 50% { opacity: 0; transform: scale(1.8); } }
+.growth-cap { font-size: 13.5px; color: var(--ink-2); text-align: center; max-width: none; }

@@ -11,6 +11,7 @@ import { CapabilitiesPage } from './pages/CapabilitiesPage';
 import { WorkspaceGate } from './pages/WorkspaceGate';
 import { AuthPage } from './pages/AuthPage';
 import { LoginPage } from './pages/LoginPage';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { MasarMark } from './components/ui/MasarMark';
 import { ClientsPage } from './pages/ClientsPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -40,6 +41,7 @@ function getRoute() {
   const m = path.match(/^\/c\/([a-z0-9-]+)/i);
   if (m) return { kind: 'workspace', companyId: m[1].toLowerCase() };
   if (/^\/login\/?$/i.test(path)) return { kind: 'login' };
+  if (/^\/reset-password\/?$/i.test(path)) return { kind: 'reset' };
   return { kind: 'admin' };
 }
 
@@ -71,6 +73,17 @@ export default function App() {
       <div className="min-h-screen flex items-center justify-center bg-ink-50" dir="rtl">
         <div className="text-ink-400 text-sm">جارٍ التحميل…</div>
       </div>
+    );
+  }
+
+  // /reset-password — where a reset or sign-in link from an e-mail lands. It
+  // works whoever is signed in: the link, not the session, says whose
+  // password is being set.
+  if (route.kind === 'reset') {
+    return (
+      <ToastProvider>
+        <ResetPasswordPage />
+      </ToastProvider>
     );
   }
 

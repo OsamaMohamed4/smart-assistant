@@ -9,6 +9,10 @@ const {
   logEvent, requireAuth, companiesFor,
 } = require('../lib/auth');
 const { audit } = require('../lib/audit');
+const mailer = require('../lib/mailer');
+const resets = require('../lib/password-reset');
+const { publicSiteUrl } = require('../lib/site-url');
+const { logger } = require('../lib/logger');
 
 const router = express.Router();
 
@@ -43,6 +47,16 @@ const bootstrapLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders  : false,
   message : { error: 'too many requests' },
+});
+
+// The reset form sends e-mail, so it gets its own, tighter budget per address
+// of the requester on top of the per-account cap in lib/password-reset.js.
+const forgotLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max     : 5,
+  standardHeaders: true,
+  legacyHeaders  : false,
+  message : { error: 'طلبات كثيرة، حاول مرة أخرى بعد قليل' },
 });
 
 router.use(authLimiter);
@@ -168,6 +182,67 @@ router.post('/switch-company', requireAuth, async (req, res) => {
   await sql.setSessionCompany.run(companyId, req.sessionId);
   audit(req, 'auth.switch_company', `companies/${companyId}`, { from: req.user.companyId });
   res.json({ user: { ...req.user, companyId, companies } });
+});
+
+// ─── Forgotten password ──────────────────────────────────────────
+// "نسيت كلمة المرور": the account's own mailbox gets a one-hour, one-use link.
+//
+// The answer is the same, and goes out BEFORE anything is looked up or sent,
+// whether or not the address has an account — so the form cannot be used to
+// find out who has one, by the words or by the timing. The link is built
+// from configuration (lib/site-url.js), never from this request's Host.
+router.post('/forgot-password', forgotLimiter, async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  res.json({ ok: true });
+  if (!EMAIL_RE.test(email)) return;
+  try {
+    const user = await sql.getUserByEmail.get(email);
+    if (!user) { await logEvent('reset_request_unknown', req, { email }); return; }
+    if (await resets.tooManyRecent(user.id)) { await logEvent('reset_throttled', req, { userId: user.id, email }); return; }
+    const base = publicSiteUrl();
+    if (!base || !mailer.isConfigured()) {
+      logger.error('password reset: cannot send — no public URL or no mail transport', { userId: user.id });
+      await logEvent('reset_not_sent', req, { userId: user.id, email });
+      return;
+    }
+    const token = await resets.issueToken(user.id, 'reset', req.ip);
+    const sent = await mailer.sendMail({
+      to: user.email,
+      ...resets.linkEmail({ link: `${base}/reset-password?token=${token}`, name: user.name, purpose: 'reset' }),
+    });
+    await logEvent(sent.ok ? 'reset_email_sent' : 'reset_email_failed', req, { userId: user.id, email });
+    if (!sent.ok) logger.error('password reset e-mail failed', { userId: user.id, err: sent.error });
+  } catch (e) {
+    logger.error('password reset request failed', { err: e.message });
+  }
+});
+
+// Whether a link is still good, so the page can say so before anyone types a
+// new password. Shows the address masked, for the user to recognise.
+router.get('/reset-password', async (req, res) => {
+  const row = await resets.findValid(String(req.query.token || ''));
+  res.json(row ? { valid: true, purpose: row.purpose, email: resets.maskEmail(row.email) } : { valid: false });
+});
+
+// Set the new password. The link is spent first (only one submission wins);
+// then every existing session ends, any lockout lifts, and the person is
+// signed in with the new password.
+router.post('/reset-password', async (req, res) => {
+  const password = String(req.body?.password || '');
+  if (!isStrongPassword(password)) {
+    return res.status(400).json({ error: `يجب أن تتكوّن كلمة المرور من ${MIN_PASSWORD} أحرف على الأقل، وتتضمّن حرفاً ورقماً.` });
+  }
+  const consumed = await resets.consumeToken(String(req.body?.token || ''));
+  if (consumed.error) return res.status(400).json({ error: consumed.error });
+  const r = consumed.row;
+  await sql.updatePassword.run(await hashPassword(password), r.user_id);
+  await sql.unlockUser.run(r.user_id);
+  await sql.deleteUserSessions.run(r.user_id);
+  const session = await createSession(r.user_id, req);
+  setSessionCookie(res, session.id);
+  await logEvent(r.purpose === 'invite' ? 'invite_accepted' : 'password_reset', req, { userId: r.user_id, email: r.email });
+  const u = { id: r.user_id, email: r.email, name: r.user_name, role: r.role, companyId: r.company_id };
+  res.json({ user: { ...u, companies: await companiesFor(u) } });
 });
 
 router.post('/change-password', requireAuth, async (req, res) => {

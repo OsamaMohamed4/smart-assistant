@@ -154,7 +154,12 @@ function ClientLogin({ company, companyId, currentUser, onAuthed, onLogout }) {
             </div>
 
             <div>
-              <Label>كلمة المرور</Label>
+              <div className="flex items-center justify-between">
+                <Label>كلمة المرور</Label>
+                <a href="/login?forgot=1" className="text-[11.5px] text-brand-600 hover:text-brand-700 mb-1.5">
+                  نسيت كلمة المرور؟
+                </a>
+              </div>
               <Input
                 type="password"
                 value={password}

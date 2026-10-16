@@ -120,6 +120,19 @@ const sql = {
     SELECT c.id, c.name FROM user_companies uc JOIN companies c ON c.id = uc.company_id
      WHERE uc.user_id = $1 ORDER BY c.name`),
   deleteUserCompany: stmt(`DELETE FROM user_companies WHERE user_id = $1 AND company_id = $2`),
+  // ─── Password-reset / sign-in links — see db-sqlite.js ───────
+  insertPasswordReset: stmt(
+    `INSERT INTO password_resets (user_id, token_hash, purpose, expires_at, created_ip)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    ['user_id', 'token_hash', 'purpose', 'expires_at', 'created_ip'],
+  ),
+  getPasswordReset: stmt(`
+    SELECT r.*, u.email, u.name AS user_name, u.role, u.company_id
+      FROM password_resets r JOIN users u ON u.id = r.user_id
+     WHERE r.token_hash = $1`),
+  usePasswordReset: stmt(`UPDATE password_resets SET used_at = ${NOW} WHERE id = $1 AND used_at IS NULL`),
+  retireUserResets: stmt(`UPDATE password_resets SET used_at = ${NOW} WHERE user_id = $1 AND used_at IS NULL`),
+  countRecentResets: stmt(`SELECT COUNT(*)::int AS n FROM password_resets WHERE user_id = $1 AND created_at >= $2`),
   insertUserCompany: stmt(
     `INSERT INTO user_companies (user_id, company_id, created_by)
      VALUES ($1, $2, $3)

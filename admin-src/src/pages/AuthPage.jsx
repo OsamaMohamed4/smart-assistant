@@ -161,6 +161,11 @@ export function AuthPage({ onAuthed }) {
             <Button variant="brand" size="lg" loading={busy} className="w-full mt-2">
               {isSignup ? 'إنشاء حساب المسؤول' : 'دخول'}
             </Button>
+            {!isSignup && (
+              <a href="/login?forgot=1" className="block text-center text-[12px] text-brand-600 hover:text-brand-700">
+                نسيت كلمة المرور؟
+              </a>
+            )}
           </form>
         </div>
 

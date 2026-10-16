@@ -55,6 +55,14 @@ export function ClientsPage() {
     api.listClients(companyId).then(setClients).catch(() => {});
   };
 
+  // The client gets a sign-in link by e-mail and sets their own password.
+  const sendAccess = async (c) => {
+    try {
+      await api.sendClientAccess(companyId, c.id);
+      push(`أُرسل رابط الدخول إلى ${c.email}`, 'success');
+    } catch (e) { push(e.message, 'error'); }
+  };
+
   // The new password is shown in the same dialog as a newly created client's,
   // because it is the same one-shot handover: the server keeps only the hash,
   // so once the dialog closes nobody can recover it.
@@ -164,6 +172,13 @@ export function ClientsPage() {
                           <Building2 className="w-3.5 h-3.5" />
                         </button>
                       )}
+                      <button
+                        onClick={() => sendAccess(c)}
+                        className="w-8 h-8 rounded-lg text-ink-500 hover:text-brand-600 hover:bg-brand-50 flex items-center justify-center transition-colors"
+                        title="إرسال رابط الدخول بالبريد"
+                      >
+                        <Mail className="w-3.5 h-3.5" />
+                      </button>
                       <button
                         onClick={() => setConfirmReset(c)}
                         className="w-8 h-8 rounded-lg text-ink-500 hover:text-brand-600 hover:bg-brand-50 flex items-center justify-center transition-colors"
@@ -296,17 +311,25 @@ function CompanyAccessModal({ client, homeCompanyId, companies, onClose, onSaved
 }
 
 function CreateClientModal({ open, companyId, onClose, onCreated }) {
+  const { push } = useToast();
   const [name, setName]   = useState('');
   const [email, setEmail] = useState('');
+  const [mailLink, setMailLink] = useState(true);
   const [busy, setBusy]   = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => { if (open) { setName(''); setEmail(''); setError(''); } }, [open]);
+  useEffect(() => { if (open) { setName(''); setEmail(''); setError(''); setMailLink(true); } }, [open]);
 
   const submit = async () => {
     setBusy(true); setError('');
     try {
       const cred = await api.createClient(companyId, { email: email.trim(), name: name.trim() });
+      // The account exists either way; the e-mail is a convenience on top of
+      // the one-time password shown next, so its failure is only reported.
+      if (mailLink) {
+        try { await api.sendClientAccess(companyId, cred.id); push(`أُرسل رابط الدخول إلى ${cred.email}`, 'success'); }
+        catch (e) { push(`أُنشئ الحساب، ولم يُرسل رابط الدخول: ${e.message}`, 'error'); }
+      }
       onCreated(cred);
     } catch (e) { setError(e.message); }
     finally     { setBusy(false); }
@@ -346,6 +369,10 @@ function CreateClientModal({ open, companyId, onClose, onCreated }) {
             dir="ltr"
           />
         </div>
+        <label className="flex items-start gap-2.5 text-[12.5px] text-ink-700 cursor-pointer">
+          <input type="checkbox" className="mt-0.5 w-4 h-4 accent-brand-600" checked={mailLink} onChange={(e) => setMailLink(e.target.checked)} />
+          <span>أرسل له رابط الدخول على بريده ليعيّن كلمة المرور بنفسه (صالح 72 ساعة)</span>
+        </label>
         {error && (
           <div className="text-[12.5px] text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{error}</div>
         )}

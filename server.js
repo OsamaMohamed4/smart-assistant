@@ -125,19 +125,12 @@ const app = express();
 // and default to 1 there; the TRUST_PROXY env var still overrides.
 const ON_RAILWAY = !!(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_STATIC_URL);
 
-// Public base URL of THIS server (no trailing slash). Needed when we hand the
-// voice provider a callback URL (the in-call KB search tool). Railway exposes
-// the public domain as RAILWAY_PUBLIC_DOMAIN; PUBLIC_BASE_URL env overrides.
-const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL
-  || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')
-).replace(/\/+$/, '');
-// The address people use, once the company's own domain is live:
-// CANONICAL_HOST=www.getmasar.sa. Page views that arrive on any other host
-// (the Railway address, an old domain) are sent there; see the middleware
-// below. Links in e-mails use it too. Unset, nothing is redirected.
-const CANONICAL_HOST = String(process.env.CANONICAL_HOST || '').trim().toLowerCase()
-  .replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-function publicSiteUrl() { return CANONICAL_HOST ? `https://${CANONICAL_HOST}` : (PUBLIC_BASE_URL || null); }
+// PUBLIC_BASE_URL: this server, for the callback URLs handed to the voice
+// provider (the in-call KB search tool) — Railway's domain unless overridden.
+// CANONICAL_HOST: the address people use once the company's own domain is
+// live; page views on any other host are sent there (middleware below), and
+// links in e-mails use it. Both read from configuration only: lib/site-url.js.
+const { PUBLIC_BASE_URL, CANONICAL_HOST, publicSiteUrl } = require('./lib/site-url');
 const TRUST_PROXY = Number.isFinite(Number(process.env.TRUST_PROXY))
   ? Number(process.env.TRUST_PROXY)
   : (ON_RAILWAY ? 1 : 0);
@@ -186,7 +179,7 @@ app.use(cookieParser());
 // calls, webhooks, tool callbacks and assets are answered on whatever host
 // they arrive at, so nothing already configured with the old address — the
 // voice provider, LoopChat — stops working when the domain changes.
-const PAGE_PATHS = /^\/(?:$|login\/?$|c\/|admin(?:\/|$)|contact\/?$|privacy\/?$|terms\/?$)/;
+const PAGE_PATHS = /^\/(?:$|login\/?$|reset-password\/?$|c\/|admin(?:\/|$)|contact\/?$|privacy\/?$|terms\/?$)/;
 app.use((req, res, next) => {
   if (!CANONICAL_HOST || req.method !== 'GET' || !PAGE_PATHS.test(req.path)) return next();
   const host = String(req.hostname || '').toLowerCase();
@@ -306,6 +299,12 @@ app.get('/c/:companyId', async (_req, res) => {
 // it is a sign-in form and nothing more. Where the visitor goes afterwards is
 // decided from the session the server issues, never from the URL.
 app.get('/login', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin', 'index.html'));
+});
+
+// Where a password-reset or sign-in link lands. The token in the link is
+// checked by the API, never by this page.
+app.get('/reset-password', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin', 'index.html'));
 });
 

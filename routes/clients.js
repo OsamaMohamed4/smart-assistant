@@ -2,6 +2,9 @@ const express = require('express');
 const crypto = require('crypto');
 const { sql } = require('../db');
 const { requireAuth, requireCompanyAdmin, hashPassword } = require('../lib/auth');
+const mailer = require('../lib/mailer');
+const resets = require('../lib/password-reset');
+const { publicSiteUrl } = require('../lib/site-url');
 
 const router = express.Router({ mergeParams: true });
 
@@ -168,6 +171,43 @@ router.post('/:userId/reset-password', async (req, res) => {
   } catch {}
 
   res.json({ id: uid, email: u.email, password });           // shown once, then lost
+});
+
+// POST /api/companies/:id/clients/:userId/send-access
+//
+// E-mail a client their sign-in link: they set their own password from it
+// (three days, one use), instead of an operator reading a password out to
+// them. Retires any earlier link. Superadmin only, like the rest of this
+// router.
+router.post('/:userId/send-access', async (req, res) => {
+  const uid = Number(req.params.userId);
+  if (!uid) return res.status(400).json({ error: 'invalid id' });
+  const u = await sql.getUserById.get(uid);
+  if (!u || u.role !== 'client' || u.company_id !== req.params.id) {
+    return res.status(404).json({ error: 'client not found' });
+  }
+  const base = publicSiteUrl();
+  if (!base) return res.status(400).json({ error: 'رابط الموقع العام غير مضبوط على الخادم (PUBLIC_BASE_URL).' });
+  if (!mailer.isConfigured()) return res.status(400).json({ error: 'البريد غير مضبوط على الخادم.' });
+  const company = await sql.getCompanyIdName.get(req.params.id);
+  const token = await resets.issueToken(uid, 'invite', req.ip);
+  const sent = await mailer.sendMail({
+    to: u.email,
+    ...resets.linkEmail({ link: `${base}/reset-password?token=${token}`, name: u.name, purpose: 'invite', companyName: company?.name }),
+  });
+  try {
+    await sql.logAuditEvent.run({
+      actor_id   : req.user?.id || null,
+      actor_email: req.user?.email || null,
+      action     : 'client.send_access',
+      resource   : `companies/${req.params.id}/clients/${uid}`,
+      metadata   : JSON.stringify({ email: u.email, ok: sent.ok }),
+      ip         : req.ip || null,
+      user_agent : (req.get('user-agent') || '').slice(0, 255),
+    });
+  } catch {}
+  if (!sent.ok) return res.status(502).json({ error: sent.error });
+  res.json({ sent: true, email: u.email });
 });
 
 // DELETE /api/companies/:id/clients/:userId

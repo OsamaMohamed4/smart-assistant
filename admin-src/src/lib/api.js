@@ -56,6 +56,12 @@ export const api = {
   whatsappOverview  : () => request('/api/whatsapp/overview'),
   companyWhatsapp   : (companyId) => request(`/api/companies/${companyId}/whatsapp`),
   saveCompanyWhatsapp: (companyId, body) => request(`/api/companies/${companyId}/whatsapp`, { method: 'PUT', body: JSON.stringify(body) }),
+  // Forgotten password: request a link, check it, set the new password.
+  forgotPassword    : (email) => request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
+  checkResetLink    : (token) => request(`/api/auth/reset-password?token=${encodeURIComponent(token)}`),
+  resetPassword     : (token, password) => request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, password }) }),
+  // E-mail a client their sign-in link (superadmin).
+  sendClientAccess  : (companyId, userId) => request(`/api/companies/${companyId}/clients/${userId}/send-access`, { method: 'POST', body: '{}' }),
   // Move this session to another company granted to the account.
   switchCompany     : (companyId) => request('/api/auth/switch-company', { method: 'POST', body: JSON.stringify({ companyId }) }),
   createClient      : (companyId, body) => request(`/api/companies/${companyId}/clients`, { method: 'POST', body: JSON.stringify(body) }),

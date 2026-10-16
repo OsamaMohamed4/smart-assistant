@@ -819,6 +819,24 @@ runMigration(43, 'create_invoices', `
   );
 `);
 
+// Migration 44: password-reset and sign-in links sent by e-mail. Only the
+// SHA-256 of a token is stored, so the table cannot be used to sign in; a
+// token works once (used_at) and only until expires_at. purpose: 'reset'
+// (the user asked) or 'invite' (an operator sent a sign-in link).
+runMigration(44, 'create_password_resets', `
+  CREATE TABLE IF NOT EXISTS password_resets (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash  TEXT NOT NULL UNIQUE,
+    purpose     TEXT NOT NULL DEFAULT 'reset',
+    expires_at  TEXT NOT NULL,
+    used_at     TEXT,
+    created_ip  TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id, created_at);
+`);
+
 // ─── Tenant-safety: one company per phone number ──────────────────
 // A DID and an imported provider number each identify exactly ONE tenant.
 // Inbound calls are attributed by those values (services/voice resolves a call
@@ -937,6 +955,21 @@ const sql = {
      WHERE uc.user_id = ? ORDER BY c.name
   `),
   deleteUserCompany  : db.prepare('DELETE FROM user_companies WHERE user_id = ? AND company_id = ?'),
+  // ─── Password-reset / sign-in links ──────────────────────────────
+  insertPasswordReset: db.prepare(`
+    INSERT INTO password_resets (user_id, token_hash, purpose, expires_at, created_ip)
+    VALUES (@user_id, @token_hash, @purpose, @expires_at, @created_ip)
+  `),
+  getPasswordReset   : db.prepare(`
+    SELECT r.*, u.email, u.name AS user_name, u.role, u.company_id
+      FROM password_resets r JOIN users u ON u.id = r.user_id
+     WHERE r.token_hash = ?
+  `),
+  // Claims the token: only the first caller gets changes = 1.
+  usePasswordReset   : db.prepare("UPDATE password_resets SET used_at = datetime('now') WHERE id = ? AND used_at IS NULL"),
+  // A new link retires every earlier one, so only the newest e-mail works.
+  retireUserResets   : db.prepare("UPDATE password_resets SET used_at = datetime('now') WHERE user_id = ? AND used_at IS NULL"),
+  countRecentResets  : db.prepare('SELECT COUNT(*) AS n FROM password_resets WHERE user_id = ? AND created_at >= ?'),
   insertUserCompany  : db.prepare(`
     INSERT INTO user_companies (user_id, company_id, created_by)
     VALUES (@user_id, @company_id, @created_by)

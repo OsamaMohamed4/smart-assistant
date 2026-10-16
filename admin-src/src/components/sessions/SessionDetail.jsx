@@ -114,12 +114,13 @@ export function SessionDetail({ open, onClose, kind, data, companyName, onResumm
   // Chat session
   const messages = data.messages || [];
   const summary = data.summary || messages[0]?.summary;
+  const isWhatsapp = messages.some((m) => m.channel === 'whatsapp');
 
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title={`جلسة شات — ${companyName || ''}`}
+      title={`${isWhatsapp ? 'محادثة واتساب' : 'جلسة شات'} — ${companyName || ''}`}
       description={`${messages.length} رسالة · ${messages[0] ? relTime(messages[0].created_at) : ''}`}
       size="lg"
       footer={<>
@@ -174,6 +175,8 @@ function ChatBubble({ role, content, time, latencyMs, channel }) {
           {!isUser && latencyMs ? <span className="text-[10.5px] text-ink-400 tabular-nums">· {latencyMs}ms</span> : null}
           {!isUser && channel === 'voice' ? (
             <Badge tone="info" className="text-[9.5px] !py-0"><Mic className="w-2.5 h-2.5" /> صوت</Badge>
+          ) : !isUser && channel === 'whatsapp' ? (
+            <Badge tone="success" className="text-[9.5px] !py-0">واتساب</Badge>
           ) : !isUser && channel === 'text' ? (
             <Badge tone="neutral" className="text-[9.5px] !py-0"><Type className="w-2.5 h-2.5" /> نص</Badge>
           ) : null}

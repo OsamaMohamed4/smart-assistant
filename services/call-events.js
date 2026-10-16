@@ -11,7 +11,7 @@ const { sql } = require('../db');
 const { summarize } = require('../summarize');
 const { logger } = require('../lib/logger');
 const { sendCallCompleted } = require('./outbound-webhook');
-const { encryptField } = require('../lib/pii');
+const { encryptField, decryptField } = require('../lib/pii');
 const { runWithContext } = require('../lib/tenant-context');
 const voice = require('./voice');
 
@@ -94,10 +94,17 @@ async function processCallEvent(ev, log) {
   // carries the final summary, then fire-and-forget.
   if (companyId) {
     try {
-      const { loadCompany } = require('../companies'); // lazy: avoids require cycle at module load
+      const { loadCompany, fillGlobals } = require('../companies'); // lazy: avoids require cycle at module load
       const company = await loadCompany(companyId);
       const finalRow = await sql.getCall.get(ev.providerCallId);
-      if (company && finalRow) sendCallCompleted(company, finalRow);
+      if (company && finalRow) {
+        sendCallCompleted(company, finalRow);
+        // The WhatsApp template after the call, when the company has one set
+        // up. It sends at most once per call and never for an old call, so a
+        // replayed event is harmless; it never throws into this pipeline.
+        require('./whatsapp').afterCall(company, finalRow, { sql, logger, decryptField, fillGlobals })
+          .catch((e) => logger.warn('whatsapp follow-up failed', { err: e.message, callId: finalRow.id }));
+      }
     } catch (e) {
       logger.warn('outbound webhook dispatch skipped', { err: e.message });
     }

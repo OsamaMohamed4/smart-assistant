@@ -1,4 +1,4 @@
-import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen, PhoneOutgoing, ShieldCheck, ClipboardList, Zap, Inbox, Gauge } from 'lucide-react';
+import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen, PhoneOutgoing, ShieldCheck, ClipboardList, Zap, Inbox, Gauge, MessageCircle } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { MasarMark } from '../ui/MasarMark';
 
@@ -25,6 +25,9 @@ const NAV_GROUPS = [
       // workspace, the page renders only the client's own company.
       { id: 'companies',  label: 'الشركات',     icon: Building2, hint: 'إدارة',              roles: ['superadmin', 'client'] },
       { id: 'clients',    label: 'العملاء',     icon: Users,     hint: 'حسابات الزبائن',     roles: ['superadmin'] },
+      // Which WhatsApp number belongs to which company, and what the
+      // assistant does there. Superadmin-only, like the phone numbers.
+      { id: 'whatsapp',   label: 'واتساب',      icon: MessageCircle, hint: 'رسائل',          roles: ['superadmin'] },
     ],
   },
   {
@@ -53,7 +56,7 @@ export function Sidebar({ active, onChange, user, onLogout, workspaceMode = fals
   // Inside a workspace there's no "list of clients" page — that's a
   // control-plane concern. 'companies' is shown but the page itself filters
   // to a single company.
-  const WORKSPACE_HIDDEN = new Set(['clients', 'audit']);
+  const WORKSPACE_HIDDEN = new Set(['clients', 'audit', 'whatsapp']);
   // An account granted several companies works in one at a time and moves
   // between them here.
   const companies = user?.role === 'client' ? (user.companies || []) : [];

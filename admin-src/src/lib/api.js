@@ -42,6 +42,10 @@ export const api = {
   setClientCompanies: (companyId, userId, companyIds) => request(`/api/companies/${companyId}/clients/${userId}/companies`, {
     method: 'PUT', body: JSON.stringify({ companyIds }),
   }),
+  // WhatsApp (superadmin): the LoopChat account as it stands, and one company's settings.
+  whatsappOverview  : () => request('/api/whatsapp/overview'),
+  companyWhatsapp   : (companyId) => request(`/api/companies/${companyId}/whatsapp`),
+  saveCompanyWhatsapp: (companyId, body) => request(`/api/companies/${companyId}/whatsapp`, { method: 'PUT', body: JSON.stringify(body) }),
   // Move this session to another company granted to the account.
   switchCompany     : (companyId) => request('/api/auth/switch-company', { method: 'POST', body: JSON.stringify({ companyId }) }),
   createClient      : (companyId, body) => request(`/api/companies/${companyId}/clients`, { method: 'POST', body: JSON.stringify(body) }),

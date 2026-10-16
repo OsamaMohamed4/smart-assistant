@@ -32,16 +32,22 @@ class NoActiveScenarioError extends Error {
   }
 }
 
-async function buildSystemPromptWithRAG(company, userQuery, vars) {
+// `inbound`: the customer started the conversation (a WhatsApp message), so
+// the scenario's instructions for inbound calls apply when it has them — the
+// same ones its inbound agent answers the phone with.
+async function buildSystemPromptWithRAG(company, userQuery, vars, { inbound = false } = {}) {
   const scenario = await sql.getActiveScenarioForCompany.get(company.id);
   if (!scenario || !scenario.instruction_prompt) {
     throw new NoActiveScenarioError(company.id);
   }
+  const instructions = (inbound && String(scenario.instruction_prompt_inbound || '').trim())
+    ? scenario.instruction_prompt_inbound
+    : scenario.instruction_prompt;
   // Runtime vars first (per-call values like agent_name from selected voice),
   // then globals as fallback (date/time, company_name, and agent_name from
   // the company's voice if the caller didn't supply one). Scenario is the SOLE source of truth — no
   // MASTER prefix — so the text channel matches the voice channel.
-  let filled = fillRuntimeVars(scenario.instruction_prompt, vars);
+  let filled = fillRuntimeVars(instructions, vars);
   filled = fillGlobals(filled, company);
   const base = filled;
 

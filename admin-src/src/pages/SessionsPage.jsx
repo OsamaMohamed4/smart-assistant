@@ -269,7 +269,7 @@ function Row({ item, onOpen }) {
         {item.user || <span className="text-ink-400">—</span>}
       </td>
       <td className="px-4 py-3">
-        <TypeBadge type={item.type} />
+        <TypeBadge type={item.type} channel={item.channel} />
       </td>
       <td className="px-4 py-3">
         <DirectionBadge direction={item.direction} />
@@ -290,7 +290,15 @@ function Row({ item, onOpen }) {
   );
 }
 
-function TypeBadge({ type }) {
+function TypeBadge({ type, channel }) {
+  if (channel === 'whatsapp') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-50 text-emerald-700">
+        <MessageSquare className="w-2.5 h-2.5" />
+        واتساب
+      </span>
+    );
+  }
   const isVoice = type === 'voice';
   return (
     <span className={cn(

@@ -749,6 +749,42 @@ runMigration(41, 'create_user_companies', `
   ALTER TABLE sessions ADD COLUMN active_company_id TEXT;
 `);
 
+// Migration 42: WhatsApp through the client's provider (LoopChat).
+// whatsapp_messages is every message in and out -- the usage count, and the
+// record of why a reply or a follow-up did or did not go out. event_id makes a
+// redelivered webhook a no-op; (company_id, call_id) makes the after-call
+// template go out once per call. whatsapp_threads remembers which
+// conversations an employee has taken over from the assistant.
+runMigration(42, 'create_whatsapp_tables', `
+  CREATE TABLE IF NOT EXISTS whatsapp_messages (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id          TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    channel_id          INTEGER,
+    contact_phone       TEXT,
+    direction           TEXT NOT NULL,
+    kind                TEXT NOT NULL,
+    body                TEXT,
+    status              TEXT NOT NULL,
+    detail              TEXT,
+    event_id            TEXT,
+    provider_message_id TEXT,
+    call_id             TEXT,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_messages_event ON whatsapp_messages(event_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_messages_call ON whatsapp_messages(company_id, call_id);
+  CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_company ON whatsapp_messages(company_id, created_at);
+  CREATE TABLE IF NOT EXISTS whatsapp_threads (
+    company_id     TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    channel_id     INTEGER NOT NULL,
+    contact_phone  TEXT NOT NULL,
+    ai_paused      INTEGER NOT NULL DEFAULT 0,
+    paused_by      TEXT,
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (channel_id, contact_phone)
+  );
+`);
+
 // ─── Tenant-safety: one company per phone number ──────────────────
 // A DID and an imported provider number each identify exactly ONE tenant.
 // Inbound calls are attributed by those values (services/voice resolves a call
@@ -1596,6 +1632,47 @@ const sql = {
        AND (@company_id IS NULL OR company_id = @company_id)
      GROUP BY company_id
   `),
+  // ─── WhatsApp (LoopChat) ────────────────────────────────────────
+  // ON CONFLICT DO NOTHING: a redelivered event, or a second attempt at a
+  // call's follow-up, inserts nothing (changes = 0) and is skipped.
+  insertWhatsappMessage: db.prepare(`
+    INSERT INTO whatsapp_messages
+      (company_id, channel_id, contact_phone, direction, kind, body, status, detail, event_id, provider_message_id, call_id)
+    VALUES (@company_id, @channel_id, @contact_phone, @direction, @kind, @body, @status, @detail, @event_id, @provider_message_id, @call_id)
+    ON CONFLICT DO NOTHING
+  `),
+  updateWhatsappMessage: db.prepare(`
+    UPDATE whatsapp_messages SET status = @status, detail = @detail, provider_message_id = @provider_message_id, body = COALESCE(@body, body)
+     WHERE id = @id
+  `),
+  listWhatsappMessages: db.prepare(`
+    SELECT id, channel_id, contact_phone, direction, kind, body, status, detail, call_id, created_at
+      FROM whatsapp_messages WHERE company_id = ? ORDER BY id DESC LIMIT ?
+  `),
+  getWhatsappThread: db.prepare('SELECT * FROM whatsapp_threads WHERE channel_id = ? AND contact_phone = ?'),
+  upsertWhatsappThread: db.prepare(`
+    INSERT INTO whatsapp_threads (company_id, channel_id, contact_phone, ai_paused, paused_by, updated_at)
+    VALUES (@company_id, @channel_id, @contact_phone, @ai_paused, @paused_by, datetime('now'))
+    ON CONFLICT (channel_id, contact_phone) DO UPDATE SET
+      company_id = excluded.company_id, ai_paused = excluded.ai_paused,
+      paused_by = excluded.paused_by, updated_at = excluded.updated_at
+  `),
+  whatsappUsageByCompanyInRange: db.prepare(`
+    SELECT company_id,
+           SUM(CASE WHEN direction = 'in' THEN 1 ELSE 0 END) AS received,
+           SUM(CASE WHEN direction = 'out' AND kind = 'text' AND status = 'sent' THEN 1 ELSE 0 END) AS replies,
+           SUM(CASE WHEN direction = 'out' AND kind = 'template' AND status = 'sent' THEN 1 ELSE 0 END) AS templates,
+           SUM(CASE WHEN direction = 'out' AND status = 'failed' THEN 1 ELSE 0 END) AS failed
+      FROM whatsapp_messages
+     WHERE created_at >= @from AND created_at < @to
+       AND (@company_id IS NULL OR company_id = @company_id)
+     GROUP BY company_id
+  `),
+  listRequestsForConversation: db.prepare(`
+    SELECT request_type, customer_name FROM customer_requests
+     WHERE company_id = ? AND conversation_id = ? ORDER BY id
+  `),
+
   chatsPerHourInRange : db.prepare(`
     SELECT substr(created_at, 12, 2) AS hour, COUNT(*) AS n
       FROM chats

@@ -51,11 +51,23 @@ test('every company gets a row, zeros included', () => {
     [{ id: 'co-a', name: 'أ' }, { id: 'co-b', name: 'ب' }],
   );
   assert.equal(r.rows.length, 2);
+  const noWhatsapp = { received: 0, replies: 0, templates: 0, failed: 0 };
   assert.deepEqual(r.rows[1], {
     companyId: 'co-b', companyName: 'ب',
-    inbound: { calls: 0, seconds: 0 }, outbound: { calls: 0, seconds: 0 },
+    inbound: { calls: 0, seconds: 0 }, outbound: { calls: 0, seconds: 0 }, whatsapp: noWhatsapp,
   });
-  assert.deepEqual(r.totals, { inbound: { calls: 2, seconds: 90 }, outbound: { calls: 1, seconds: 45 } });
+  assert.deepEqual(r.totals, { inbound: { calls: 2, seconds: 90 }, outbound: { calls: 1, seconds: 45 }, whatsapp: noWhatsapp });
+});
+
+test('WhatsApp counts join each company\'s row and the totals', () => {
+  const r = buildUsageReport([], [{ id: 'co-a', name: 'أ' }, { id: 'co-b', name: 'ب' }], {
+    whatsappRows: [
+      { company_id: 'co-a', received: 7, replies: 6, templates: 2, failed: 1 },
+      { company_id: 'co-b', received: 1, replies: 0, templates: 0, failed: 0 },
+    ],
+  });
+  assert.deepEqual(r.rows[0].whatsapp, { received: 7, replies: 6, templates: 2, failed: 1 });
+  assert.deepEqual(r.totals.whatsapp, { received: 8, replies: 6, templates: 2, failed: 1 });
 });
 
 test('provider credits appear only when the viewer may see them', () => {

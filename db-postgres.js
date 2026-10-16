@@ -788,6 +788,47 @@ const sql = {
       GROUP BY company_id`,
     ['from', 'to', 'company_id'],
   ),
+  // ─── WhatsApp (LoopChat) — see db-sqlite.js ──────────────────
+  insertWhatsappMessage: stmt(
+    `INSERT INTO whatsapp_messages
+       (company_id, channel_id, contact_phone, direction, kind, body, status, detail, event_id, provider_message_id, call_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     ON CONFLICT DO NOTHING RETURNING id`,
+    ['company_id', 'channel_id', 'contact_phone', 'direction', 'kind', 'body', 'status', 'detail', 'event_id', 'provider_message_id', 'call_id'],
+  ),
+  updateWhatsappMessage: stmt(
+    `UPDATE whatsapp_messages SET status = $1, detail = $2, provider_message_id = $3, body = COALESCE($4, body)
+      WHERE id = $5`,
+    ['status', 'detail', 'provider_message_id', 'body', 'id'],
+  ),
+  listWhatsappMessages: stmt(`
+    SELECT id, channel_id, contact_phone, direction, kind, body, status, detail, call_id, created_at
+      FROM whatsapp_messages WHERE company_id = $1 ORDER BY id DESC LIMIT $2`),
+  getWhatsappThread: stmt(`SELECT * FROM whatsapp_threads WHERE channel_id = $1 AND contact_phone = $2`),
+  upsertWhatsappThread: stmt(
+    `INSERT INTO whatsapp_threads (company_id, channel_id, contact_phone, ai_paused, paused_by, updated_at)
+     VALUES ($1, $2, $3, $4, $5, ${NOW})
+     ON CONFLICT (channel_id, contact_phone) DO UPDATE SET
+       company_id = EXCLUDED.company_id, ai_paused = EXCLUDED.ai_paused,
+       paused_by = EXCLUDED.paused_by, updated_at = EXCLUDED.updated_at`,
+    ['company_id', 'channel_id', 'contact_phone', 'ai_paused', 'paused_by'],
+  ),
+  whatsappUsageByCompanyInRange: stmt(
+    `SELECT company_id,
+            SUM(CASE WHEN direction = 'in' THEN 1 ELSE 0 END)::int AS received,
+            SUM(CASE WHEN direction = 'out' AND kind = 'text' AND status = 'sent' THEN 1 ELSE 0 END)::int AS replies,
+            SUM(CASE WHEN direction = 'out' AND kind = 'template' AND status = 'sent' THEN 1 ELSE 0 END)::int AS templates,
+            SUM(CASE WHEN direction = 'out' AND status = 'failed' THEN 1 ELSE 0 END)::int AS failed
+       FROM whatsapp_messages
+      WHERE created_at >= $1 AND created_at < $2
+        AND ($3::text IS NULL OR company_id = $3)
+      GROUP BY company_id`,
+    ['from', 'to', 'company_id'],
+  ),
+  listRequestsForConversation: stmt(`
+    SELECT request_type, customer_name FROM customer_requests
+     WHERE company_id = $1 AND conversation_id = $2 ORDER BY id`),
+
   chatsPerHourInRange: stmt(
     `SELECT substr(created_at, 12, 2) AS hour, COUNT(*)::int AS n
        FROM chats

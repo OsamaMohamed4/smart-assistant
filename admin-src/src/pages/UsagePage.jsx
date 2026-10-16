@@ -61,6 +61,67 @@ function SummaryCard({ icon: Icon, label, calls, seconds, accent }) {
   );
 }
 
+// WhatsApp messages for the month: received from customers, answered by the
+// assistant, templates sent after calls, and sends that did not go out.
+// Before WhatsApp is linked at all, it says so instead of showing zeros that
+// would read as "linked, and nothing happened".
+const WA_COLUMNS = [
+  { key: 'received',  label: 'رسائل واردة' },
+  { key: 'replies',   label: 'ردود المساعد' },
+  { key: 'templates', label: 'رسائل بعد المكالمة' },
+  { key: 'failed',    label: 'لم تُرسل' },
+];
+
+function WhatsappUsage({ data, rows }) {
+  const t = data?.totals?.whatsapp;
+  return (
+    <div className="rounded-2xl border border-ink-100 bg-white px-5 py-4">
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+          <MessageCircle className="w-4 h-4" strokeWidth={2} />
+        </div>
+        <div className="text-[13px] font-semibold text-ink-900">رسائل واتساب</div>
+      </div>
+      {!data ? null : !data.whatsappConnected ? (
+        <p className="text-[12px] text-ink-500 mt-3">واتساب غير مربوط بالمنصة بعد، فلا يوجد استهلاك رسائل لعرضه.</p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+            {WA_COLUMNS.map((c) => (
+              <div key={c.key} className="rounded-xl bg-ink-50/60 px-4 py-3">
+                <div className={cn('text-[22px] font-bold tabular-nums leading-none', c.key === 'failed' && t?.failed ? 'text-rose-600' : 'text-ink-900')}>
+                  {fmtNumber(t?.[c.key] || 0)}
+                </div>
+                <div className="mt-1.5 text-[11px] text-ink-500">{c.label}</div>
+              </div>
+            ))}
+          </div>
+          {rows.length > 1 && (
+            <div className="overflow-x-auto mt-4">
+              <table className="w-full text-[13px] whitespace-nowrap">
+                <thead>
+                  <tr className="text-[11.5px] text-ink-500">
+                    <th className="text-right font-medium py-2 pl-4">الشركة</th>
+                    {WA_COLUMNS.map((c) => <th key={c.key} className="text-right font-medium py-2 px-3">{c.label}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.companyId} className="border-t border-ink-100">
+                      <td className="py-2.5 pl-4 font-medium text-ink-900">{r.companyName}</td>
+                      {WA_COLUMNS.map((c) => <td key={c.key} className="py-2.5 px-3 tabular-nums">{fmtNumber(r.whatsapp?.[c.key] || 0)}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function UsagePage({ pinnedCompanyId }) {
   const { push } = useToast();
   const months = useMemo(() => recentMonths(), []);
@@ -91,7 +152,7 @@ export function UsagePage({ pinnedCompanyId }) {
     <div>
       <TopBar
         title="الاستهلاك"
-        subtitle="المكالمات الواردة والصادرة ومدتها، لكل شهر بتوقيت السعودية."
+        subtitle="المكالمات الواردة والصادرة ومدتها، ورسائل واتساب، لكل شهر بتوقيت السعودية."
         right={(
           <select
             value={month}
@@ -170,17 +231,8 @@ export function UsagePage({ pinnedCompanyId }) {
           <EmptyState icon={Gauge} title="لا توجد شركات" description="أنشئ شركة من تبويب الشركات أولاً." />
         )}
 
-        <div className="flex items-start gap-3 rounded-2xl border border-ink-100 bg-white px-5 py-4">
-          <div className="w-9 h-9 rounded-xl bg-ink-50 text-ink-500 flex items-center justify-center shrink-0">
-            <MessageCircle className="w-4 h-4" strokeWidth={2} />
-          </div>
-          <div>
-            <div className="text-[13px] font-semibold text-ink-900">رسائل واتساب</div>
-            <p className="text-[12px] text-ink-500 mt-0.5">
-              واتساب غير مربوط بالمنصة بعد، فلا يوجد استهلاك رسائل لعرضه.
-            </p>
-          </div>
-        </div>
+        <WhatsappUsage data={data} rows={rows} />
+
 
         <p className="text-[11.5px] text-ink-400 leading-relaxed">
           المدة هي مجموع مدة المكالمات الفعلية. المكالمة الصادرة التي لم يُرد عليها تُحسب مكالمة بمدة صفر.

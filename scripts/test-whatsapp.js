@@ -1,0 +1,268 @@
+// WhatsApp through LoopChat: the assistant answers incoming messages, an
+// employee can take a conversation over, a template follows a call once, and
+// every message is counted.
+//
+// Real statements on a throwaway SQLite DB; LoopChat is a local fake that
+// records what it was sent; the model is a stub. No network.
+//
+//   node --test scripts/test-whatsapp.js
+const { test, before, after, beforeEach } = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const fs = require('node:fs');
+const http = require('node:http');
+
+const DB = path.join(require('node:os').tmpdir(), `sa-whatsapp-${Date.now()}.db`);
+process.env.DB_DRIVER = 'sqlite';
+process.env.DB_PATH = DB;
+process.env.LOOPCHAT_API_TOKEN = 'lc-test-token';
+
+// ─── Fake LoopChat ────────────────────────────────────────────────
+const sent = [];
+let sendResult = 'sent';
+const fake = http.createServer((req, res) => {
+  let body = '';
+  req.on('data', (c) => { body += c; });
+  req.on('end', () => {
+    const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+    if (req.headers.authorization !== 'Bearer lc-test-token') return json(401, { message: 'Unauthenticated.' });
+    const url = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && url.pathname === '/api/v2/integrations/account-channels') {
+      return json(200, { data: { account_channels: [{ id: 6, name: 'مهير', phone_number: '+966920000000', has_active_bot: false, created_at: 'x' }] }, meta: { hasMorePages: false } });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/v2/integrations/templates') {
+      const page = Number(url.searchParams.get('page') || 1);
+      const t = (id) => ({ id: String(id), channel_id: '6', template_name: `t${id}`, header_format: 'text', language_code: 'ar', template_category: 'utility', status: 'APPROVED', template_body: 'مرحباً {{1}}، تم رفع طلبك لدى {{2}}.', created_at: 'x' });
+      return json(200, { data: { templates: page === 1 ? [t(1)] : [t(2)] }, meta: { hasMorePages: page === 1 } });
+    }
+    if (req.method === 'POST') {
+      const b = JSON.parse(body || '{}');
+      sent.push({ path: url.pathname, body: b });
+      if (sendResult === 'sent') return json(202, { data: { status: 'sent', message_id: 900 + sent.length, contact_id: 1, channel_id: 6 } });
+      return json(202, { data: { status: 'failed', message_id: 5, failure_reason: 'The 24-hour window is closed. Please use a WhatsApp template to contact this customer.', contact_id: 1, channel_id: 6 } });
+    }
+    json(404, {});
+  });
+});
+
+let sql; let db; let wa; let loopchat;
+const replies = [];
+const deps = () => ({
+  sql,
+  logger: { info() {}, warn() {}, error() {} },
+  listCompanies: async () => require('../companies').listCompaniesFull(),
+  askReply: async (company, text, history, vars) => { replies.push({ company: company.id, text, history, vars }); return { reply: `رد على: ${text}` }; },
+  loadSessionHistory: async () => [],
+  checkAndBumpUsage: async () => true,
+  dailyCap: () => 2000,
+  decryptField: (v) => v,
+  fillGlobals: (t) => t.replace('{{agent_name}}', 'جداوي'),
+});
+
+before(async () => {
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
+  process.env.LOOPCHAT_API_BASE = `http://127.0.0.1:${fake.address().port}/api`;
+  ({ sql, db } = require('../db'));
+  wa = require('../services/whatsapp');
+  loopchat = require('../services/whatsapp/loopchat');
+  const settings = JSON.stringify({ whatsappChannelId: 6, whatsappAutoReply: true });
+  db.prepare("INSERT INTO companies (id, name, language, system_prompt, settings) VALUES ('maheer', 'مهير العقارية', 'ar', '', ?)").run(settings);
+  db.prepare("INSERT INTO companies (id, name, language, system_prompt) VALUES ('wakan', 'وكن', 'ar', '')").run();
+});
+after(() => {
+  fake.close();
+  try { db.close(); } catch {}
+  for (const s of ['', '-wal', '-shm']) fs.rmSync(DB + s, { force: true });
+});
+beforeEach(() => { sent.length = 0; replies.length = 0; sendResult = 'sent'; require('../companies').invalidateCache(); });
+
+let eventSeq = 0;
+const incoming = (text, { phone = '966501234567', channel = 6, type = 'text', id } = {}) => ({
+  event_type: 'message.received',
+  event_id: id || `evt-${++eventSeq}`,
+  contact: { id: 101, name: 'أبو فهد', phone, email: null },
+  message: { messageId: 765607, traffic: 'incoming', timestamp: Date.now(), message: { type, text, attachments: type === 'text' ? undefined : { url: 'https://x/y.jpg', name: 'y.jpg', mimeType: 'image/jpeg' } } },
+  channel: { id: channel, name: 'WhatsApp', source: 'whatsapp' },
+});
+const messages = () => db.prepare('SELECT * FROM whatsapp_messages ORDER BY id').all();
+const setSettings = (id, s) => { db.prepare('UPDATE companies SET settings = ? WHERE id = ?').run(JSON.stringify(s), id); require('../companies').invalidateCache(); };
+
+// ─── (أ) replies ──────────────────────────────────────────────────
+test('a customer message on the company\'s number is answered through LoopChat', async () => {
+  const r = await wa.handleEvent(incoming('كم سعر الشقة؟'), deps());
+  assert.deepEqual(r, { sent: true });
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].company, 'maheer');
+  assert.equal(replies[0].vars.customer_name, 'أبو فهد');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].path, '/api/v2/integrations/messages/send');
+  assert.deepEqual(sent[0].body, { account_channel_id: 6, phone_number: '966501234567', type: 'text', content: 'رد على: كم سعر الشقة؟' });
+  const rows = messages().slice(-2);
+  assert.equal(rows[0].direction, 'in'); assert.equal(rows[0].status, 'received'); assert.equal(rows[0].body, 'كم سعر الشقة؟');
+  assert.equal(rows[1].direction, 'out'); assert.equal(rows[1].status, 'sent'); assert.equal(rows[1].kind, 'text');
+  const chat = db.prepare("SELECT * FROM chats WHERE session_id = 'wa-966501234567' ORDER BY id DESC").get();
+  assert.equal(chat.channel, 'whatsapp');
+  assert.equal(chat.assistant_reply, 'رد على: كم سعر الشقة؟');
+});
+
+test('a redelivered event is answered once', async () => {
+  const evt = incoming('مرحبا', { id: 'evt-same' });
+  await wa.handleEvent(evt, deps());
+  const again = await wa.handleEvent(evt, deps());
+  assert.deepEqual(again, { duplicate: true });
+  assert.equal(sent.length, 1);
+});
+
+test('a number no company uses is ignored, and nothing is recorded', async () => {
+  const before = messages().length;
+  assert.deepEqual(await wa.handleEvent(incoming('هلا', { channel: 99 }), deps()), { ignored: 'unmapped channel' });
+  assert.equal(messages().length, before);
+  assert.equal(sent.length, 0);
+});
+
+test('with replies switched off the message is counted but not answered', async () => {
+  setSettings('maheer', { whatsappChannelId: 6, whatsappAutoReply: false });
+  try {
+    assert.deepEqual(await wa.handleEvent(incoming('هلا'), deps()), { skipped: 'auto-reply off' });
+    assert.equal(sent.length, 0);
+    assert.equal(messages().at(-1).direction, 'in');
+  } finally { setSettings('maheer', { whatsappChannelId: 6, whatsappAutoReply: true }); }
+});
+
+test('a picture or a voice note is left to the team', async () => {
+  assert.deepEqual(await wa.handleEvent(incoming('', { type: 'image' }), deps()), { skipped: 'not text' });
+  assert.equal(sent.length, 0);
+  assert.equal(messages().at(-1).kind, 'media');
+});
+
+test('once an employee takes the conversation over, the assistant stays quiet until it is handed back', async () => {
+  const phone = '966509999999';
+  const handover = (type) => ({ event_type: type, event_id: `h-${++eventSeq}`, conversation: { id: 1 }, contact: { id: 2, phone }, channel: { id: 6 }, stopped_by: { id: 12, name: 'سارة' } });
+  assert.deepEqual(await wa.handleEvent(handover('message_integration.stopped'), deps()), { paused: true });
+  assert.deepEqual(await wa.handleEvent(incoming('أبي موظف', { phone }), deps()), { skipped: 'taken over by staff' });
+  assert.equal(sent.length, 0);
+  assert.deepEqual(await wa.handleEvent(handover('message_integration.started'), deps()), { paused: false });
+  assert.deepEqual(await wa.handleEvent(incoming('رجعت', { phone }), deps()), { sent: true });
+});
+
+test('a reply LoopChat refuses is recorded with its reason and kept out of the conversation', async () => {
+  sendResult = 'failed';
+  const r = await wa.handleEvent(incoming('سؤال', { phone: '966508888888' }), deps());
+  assert.match(r.failed, /24-hour window/);
+  const out = messages().at(-1);
+  assert.equal(out.status, 'failed');
+  assert.match(out.detail, /24-hour window/);
+  const chat = db.prepare("SELECT * FROM chats WHERE session_id = 'wa-966508888888'").get();
+  assert.equal(chat.assistant_reply, '');
+});
+
+// ─── (ب) the template after a call ─────────────────────────────────
+const now = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
+let callSeq = 0;
+function call(extra = {}) {
+  const id = `conv-${++callSeq}`;
+  db.prepare(`INSERT INTO calls (id, company_id, caller_number, duration_sec, transcript, direction, created_at)
+              VALUES (?, 'maheer', ?, ?, ?, 'inbound', ?)`)
+    .run(id, extra.number ?? '0501234567', extra.dur ?? 60, 'transcript' in extra ? extra.transcript : 'وكيل: هلا', extra.created_at ?? now());
+  return db.prepare('SELECT * FROM calls WHERE id = ?').get(id);
+}
+const followup = (extra = {}) => ({
+  whatsappChannelId: 6, whatsappAutoReply: true,
+  whatsappFollowup: { trigger: 'request', templateId: 1, variables: [{ source: 'customer_name', text: 'عميلنا' }, { source: 'company_name', text: '' }], ...extra },
+});
+const company = () => require('../companies').loadCompany('maheer');
+
+test('after a call where the agent filed a request, the chosen template goes to the customer once', async () => {
+  setSettings('maheer', followup());
+  const c = call();
+  db.prepare("INSERT INTO customer_requests (company_id, conversation_id, request_type, customer_name, fields) VALUES ('maheer', ?, 'interest', 'خالد', '{}')").run(c.id);
+  assert.deepEqual(await wa.afterCall(await company(), c, deps()), { sent: true });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].path, '/api/v2/integrations/templates/send');
+  assert.deepEqual(sent[0].body, { channel_id: 6, template_id: 1, phone: '+966501234567', variables: { 1: 'خالد', 2: 'مهير العقارية' } });
+  assert.deepEqual(await wa.afterCall(await company(), c, deps()), { duplicate: true });
+  assert.equal(sent.length, 1);
+  const row = db.prepare('SELECT * FROM whatsapp_messages WHERE call_id = ?').get(c.id);
+  assert.equal(row.status, 'sent');
+  assert.equal(row.kind, 'template');
+});
+
+test('no request filed, no template (on the request trigger)', async () => {
+  setSettings('maheer', followup());
+  assert.deepEqual(await wa.afterCall(await company(), call(), deps()), { skipped: 'no request filed' });
+  assert.equal(sent.length, 0);
+});
+
+test('on the "every answered call" trigger an unanswered call gets nothing', async () => {
+  setSettings('maheer', followup({ trigger: 'answered' }));
+  assert.deepEqual(await wa.afterCall(await company(), call({ dur: 0, transcript: null }), deps()), { skipped: 'not answered' });
+  assert.deepEqual(await wa.afterCall(await company(), call(), deps()), { sent: true });
+});
+
+test('an old call replayed through the pipeline never messages the customer', async () => {
+  setSettings('maheer', followup({ trigger: 'answered' }));
+  assert.deepEqual(await wa.afterCall(await company(), call({ created_at: '2026-01-01 10:00:00' }), deps()), { skipped: 'call too old' });
+  assert.equal(sent.length, 0);
+});
+
+test('a landline is not sent to, and the reason is recorded', async () => {
+  setSettings('maheer', followup({ trigger: 'answered' }));
+  const c = call({ number: '0114567890' });
+  assert.deepEqual(await wa.afterCall(await company(), c, deps()), { skipped: 'not a mobile' });
+  assert.equal(sent.length, 0);
+  assert.match(db.prepare('SELECT detail FROM whatsapp_messages WHERE call_id = ?').get(c.id).detail, /جوال/);
+});
+
+test('a variable with no value falls back to its text', async () => {
+  setSettings('maheer', followup({ trigger: 'answered' }));
+  await wa.afterCall(await company(), call(), deps());
+  assert.equal(sent[0].body.variables['1'], 'عميلنا');
+});
+
+// ─── Pieces ───────────────────────────────────────────────────────
+test('numbers are normalised for WhatsApp; Saudi landlines are refused', () => {
+  assert.equal(wa.whatsappNumber('0501234567'), '966501234567');
+  assert.equal(wa.whatsappNumber('+966 50 123 4567'), '966501234567');
+  assert.equal(wa.whatsappNumber('00966501234567'), '966501234567');
+  assert.equal(wa.whatsappNumber('501234567'), '966501234567');
+  assert.equal(wa.whatsappNumber('966501234567'), '966501234567');
+  assert.equal(wa.whatsappNumber('+966114567890'), null);
+  assert.equal(wa.whatsappNumber('0114567890'), null);
+  assert.equal(wa.whatsappNumber('920033842'), null);
+  assert.equal(wa.whatsappNumber('8001234567'), null);
+  assert.equal(wa.whatsappNumber('+971501234567'), '971501234567');
+  assert.equal(wa.whatsappNumber('00971501234567'), '971501234567');
+  assert.equal(wa.whatsappNumber('123'), null);
+});
+
+test('settings are validated before they are stored', () => {
+  assert.match(wa.validateSettings({ channelId: 'abc' }).error, /قناة/);
+  assert.match(wa.validateSettings({ channelId: 6, followup: { trigger: 'request' } }).error, /قالب/);
+  assert.match(wa.validateSettings({ followup: { trigger: 'request', templateId: 1 } }).error, /قناة/);
+  assert.match(wa.validateSettings({ channelId: 6, followup: { trigger: 'bogus' } }).error, /توقيت/);
+  const ok = wa.validateSettings({ channelId: 6, autoReply: true, followup: { trigger: 'answered', templateId: 3, variables: [{ source: 'nope', text: 'x' }] } });
+  assert.deepEqual(ok.settings.whatsappFollowup.variables, [{ source: 'fixed', text: 'x' }]);
+  // Replies need a number to reply from.
+  assert.equal(wa.validateSettings({ channelId: null, autoReply: true }).settings.whatsappAutoReply, false);
+});
+
+test('the LoopChat client reads every page of templates and counts their variables', async () => {
+  const t = await loopchat.listTemplates();
+  assert.deepEqual(t.map((x) => x.id), [1, 2]);
+  assert.equal(t[0].variables, 2);
+  assert.equal(t[0].channelId, 6);
+  assert.equal(loopchat.templateVariableCount('بدون متغيرات'), 0);
+  assert.deepEqual((await loopchat.listChannels())[0], { id: 6, name: 'مهير', phoneNumber: '+966920000000', hasActiveBot: false });
+});
+
+// ─── (ج) the counts ───────────────────────────────────────────────
+test('the usage query counts received, replied, templated and failed apart', () => {
+  const r = sql.whatsappUsageByCompanyInRange.all({ from: '2000-01-01 00:00:00', to: '2100-01-01 00:00:00', company_id: 'maheer' });
+  assert.equal(r.length, 1);
+  const all = messages().filter((m) => m.company_id === 'maheer');
+  assert.equal(r[0].received, all.filter((m) => m.direction === 'in').length);
+  assert.equal(r[0].replies, all.filter((m) => m.direction === 'out' && m.kind === 'text' && m.status === 'sent').length);
+  assert.equal(r[0].templates, all.filter((m) => m.kind === 'template' && m.status === 'sent').length);
+  assert.equal(r[0].failed, all.filter((m) => m.direction === 'out' && m.status === 'failed').length);
+  assert.ok(r[0].received > 0 && r[0].replies > 0 && r[0].templates > 0 && r[0].failed > 0);
+});

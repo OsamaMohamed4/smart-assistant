@@ -18,6 +18,7 @@ import { CampaignsPage } from './pages/CampaignsPage';
 import { AuditPage } from './pages/AuditPage';
 import { RequestsPage } from './pages/RequestsPage';
 import { UsagePage } from './pages/UsagePage';
+import { WhatsappPage } from './pages/WhatsappPage';
 import { ToastProvider } from './components/ui/Toast';
 import { api, setUnauthenticatedHandler } from './lib/api';
 
@@ -155,7 +156,7 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
   const allowedTabs = isWorkspace
     ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'sessions', 'requests', 'campaigns', 'usage'])
     : isSuper
-      ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'clients', 'sessions', 'requests', 'campaigns', 'usage', 'audit'])
+      ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'clients', 'whatsapp', 'sessions', 'requests', 'campaigns', 'usage', 'audit'])
       : new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'sessions', 'requests', 'campaigns', 'usage']);
   const activeTab = allowedTabs.has(tab) ? tab : 'dashboard';
 
@@ -199,6 +200,7 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
           <CompaniesPage pinnedCompanyId={pinnedCompanyId} user={user} />
         )}
         {activeTab === 'clients'   && isSuper && !isWorkspace && <ClientsPage />}
+        {activeTab === 'whatsapp'  && isSuper && !isWorkspace && <WhatsappPage />}
         {activeTab === 'sessions'  && <SessionsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'requests'  && <RequestsPage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'campaigns' && <CampaignsPage user={user} pinnedCompanyId={pinnedCompanyId} />}

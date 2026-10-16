@@ -34,6 +34,8 @@ const evalsRoutes = require('./routes/evals');
 const { startDrainTimer, backfillRecentCalls, refreshCall, recordingLinkFor } = require('./services/call-events');
 const voice = require('./services/voice');
 const { publishCompany } = require('./services/publish/pipeline');
+const whatsapp = require('./services/whatsapp');
+const loopchat = require('./services/whatsapp/loopchat');
 const { describeFeatures, setFeature } = require('./services/features/store');
 const { startCampaignWorker, getWorkerHealth: getCampaignWorkerHealth } = require('./services/campaigns');
 const { startRetentionWorker } = require('./services/retention');
@@ -587,8 +589,8 @@ async function claimPhoneOwnership({ companyId, phoneNumber, phoneNumberId, log 
   return [...released];
 }
 
-async function askGPT(company, message, history, vars) {
-  const systemContent = await buildSystemPromptWithRAG(company, message, vars);
+async function askGPT(company, message, history, vars, { inbound = false } = {}) {
+  const systemContent = await buildSystemPromptWithRAG(company, message, vars, { inbound });
   const messages = [
     { role: 'system', content: systemContent },
     ...history,
@@ -978,6 +980,42 @@ app.post('/api/companies/:id/assistant-chat', requireCompanyAccess, async (req, 
 // The provider webhook pipeline lives in routes/webhook.js (verification +
 // inbox) and services/call-events.js (event -> calls row + drain).
 app.use('/webhook', webhookRoutes);
+
+// ─── WhatsApp (LoopChat) ─────────────────────────────────────────
+// LoopChat signs nothing, so the webhook URL itself is the secret: its last
+// segment is derived from the Integration Token, shown to a superadmin to
+// paste into LoopChat, and compared in constant time. Regenerating the token
+// in LoopChat changes the URL with it. See services/whatsapp.
+function loopchatWebhookToken() {
+  const t = String(process.env.LOOPCHAT_API_TOKEN || '').trim();
+  return t ? crypto.createHmac('sha256', t).update('masar:loopchat:webhook').digest('hex').slice(0, 40) : null;
+}
+function loopchatWebhookUrl() {
+  const token = loopchatWebhookToken();
+  return token && PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/webhook/loopchat/${token}` : null;
+}
+const whatsappDeps = () => ({
+  sql, logger, decryptField, fillGlobals,
+  listCompanies: listCompaniesFull,
+  loadSessionHistory, checkAndBumpUsage, dailyCap,
+  // A customer who writes first is answered as an inbound caller would be.
+  askReply: (company, text, history, vars) => askGPT(company, text, history, vars, { inbound: true }),
+});
+
+app.post('/webhook/loopchat/:token', (req, res) => {
+  const expected = loopchatWebhookToken();
+  const given = String(req.params.token || '');
+  const ok = !!expected && given.length === expected.length
+    && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+  if (!ok) return res.status(404).json({ error: 'not found' });
+  // Acknowledge first: LoopChat must not wait on a model reply. Each event
+  // carries its own id, so a redelivery records nothing new.
+  res.json({ ok: true });
+  const evt = req.body;
+  runWithContext({ bypass: true, companyId: null }, () => whatsapp.handleEvent(evt, whatsappDeps()))
+    .then((r) => logger.info('whatsapp event', { type: evt?.event_type, ...r }))
+    .catch((e) => logger.error('whatsapp event failed', { err: e.message, type: evt?.event_type }));
+});
 startDrainTimer();
 startCampaignWorker();
 // PDPL retention. No-op unless RETENTION_DAYS_* is configured (audit F-04a).
@@ -2043,15 +2081,68 @@ app.get('/api/dashboard', async (req, res) => {
   });
 });
 
+// ─── WhatsApp settings (superadmin) ──────────────────────────────
+// What the LoopChat account holds, read live so the screen shows LoopChat's
+// own state, and the webhook URL to paste into it.
+app.get('/api/whatsapp/overview', async (req, res) => {
+  if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  const out = {
+    configured: loopchat.isConfigured(), webhookUrl: loopchatWebhookUrl(),
+    channels: [], templates: [], error: null,
+  };
+  if (out.configured) {
+    try {
+      [out.channels, out.templates] = await Promise.all([loopchat.listChannels(), loopchat.listTemplates()]);
+    } catch (e) {
+      out.error = loopchat.errText(e);
+    }
+  }
+  res.json(out);
+});
+
+app.get('/api/companies/:id/whatsapp', requireCompanyAdmin, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  const s = whatsapp.settingsOf(c);
+  const messages = (await sql.listWhatsappMessages.all(c.id, 40)).map((m) => ({
+    ...m, contact_phone: m.contact_phone ? `+${m.contact_phone}` : null,
+  }));
+  res.json({ channelId: s.channelId, autoReply: s.autoReply, followup: s.followup, messages });
+});
+
+app.put('/api/companies/:id/whatsapp', requireCompanyAdmin, async (req, res) => {
+  const row = await sql.getCompany.get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const v = whatsapp.validateSettings(req.body);
+  if (v.error) return res.status(400).json({ error: v.error });
+  // One channel, one company: the channel is how an incoming message finds
+  // its tenant, exactly as a phone number is for a call.
+  if (v.settings.whatsappChannelId) {
+    const other = await whatsapp.companyForChannel(v.settings.whatsappChannelId, { listCompanies: listCompaniesFull });
+    if (other && other.id !== row.id) {
+      return res.status(409).json({ error: `قناة واتساب هذه مربوطة بشركة أخرى: ${other.name}` });
+    }
+  }
+  let existing = {};
+  try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
+  const merged = { ...existing, ...v.settings };
+  await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify(merged) });
+  invalidateCache();
+  audit(req, 'company.whatsapp', `companies/${row.id}`, {
+    channelId: v.settings.whatsappChannelId, autoReply: v.settings.whatsappAutoReply,
+    followup: v.settings.whatsappFollowup ? v.settings.whatsappFollowup.trigger : 'off',
+  });
+  const s = whatsapp.settingsOf({ settings: merged });
+  res.json({ channelId: s.channelId, autoReply: s.autoReply, followup: s.followup });
+});
+
 // ─── Usage: consumption per company for one Saudi month ──────────────
-// Inbound and outbound apart, for every company the viewer may see -- zeros
-// included, so a quiet month still lists the client. Clients are pinned to
-// their own company. Provider credits are platform cost, not the client's
-// business, so they leave the server only for a superadmin.
-//
-// WhatsApp is deliberately absent: no WhatsApp channel is connected to the
-// platform yet, so there are no messages to count, and a zero would read as
-// "connected, and nothing was sent".
+// Inbound and outbound calls apart, and WhatsApp messages, for every company
+// the viewer may see -- zeros included, so a quiet month still lists the
+// client. Clients are pinned to their own company. Provider credits are
+// platform cost, not the client's business, so they leave the server only for
+// a superadmin. `whatsappConnected` says whether WhatsApp is linked at all, so
+// a zero is not read as "linked, and nothing was sent".
 app.get('/api/usage', async (req, res) => {
   const month = String(req.query.month || currentSaudiMonth());
   const range = saudiMonthRange(month);
@@ -2072,7 +2163,9 @@ app.get('/api/usage', async (req, res) => {
     ? [await sql.getCompanyIdName.get(companyId)].filter(Boolean)
     : await sql.listCompanyIdNames.all();
   const rows = await sql.usageByCompanyInRange.all({ from: range.from, to: range.to, company_id: companyId });
-  const report = buildUsageReport(rows, companies, { includeCredits: isSuper });
+  const whatsappRows = await sql.whatsappUsageByCompanyInRange.all({ from: range.from, to: range.to, company_id: companyId });
+  const report = buildUsageReport(rows, companies, { includeCredits: isSuper, whatsappRows });
+  report.whatsappConnected = loopchat.isConfigured();
   report.rows.sort((x, y) => (y.inbound.seconds + y.outbound.seconds) - (x.inbound.seconds + x.outbound.seconds)
     || String(x.companyName).localeCompare(String(y.companyName), 'ar'));
   res.json({ month, ...report });
@@ -2134,6 +2227,7 @@ app.get('/api/conversations', async (req, res) => {
       MAX(user_id)      AS user_id,
       COUNT(*)          AS messages,
       MAX(summary)      AS summary,
+      MAX(channel)      AS channel,
       SUM(CASE WHEN assistant_reply IS NULL OR assistant_reply = '' THEN 1 ELSE 0 END) AS missing_replies
     FROM chats
     WHERE company_id IN (${inPlaceholders}) ${timeClause}
@@ -2163,10 +2257,13 @@ app.get('/api/conversations', async (req, res) => {
     id          : `chat-${c.session_id}`,
     sessionId   : c.session_id,
     type        : 'chat',
+    // 'whatsapp' for a WhatsApp conversation, whose thread id is the
+    // customer's number (services/whatsapp: wa-<digits>).
+    channel     : c.channel || null,
     direction   : 'inbound',
     timestamp   : c.ts,
     user        : userMap.get(c.user_id) || null,
-    phoneNumber : null,
+    phoneNumber : /^wa-\d+$/.test(c.session_id) ? `+${c.session_id.slice(3)}` : null,
     companyId   : c.company_id,
     companyName : companyMap.get(c.company_id) || c.company_id,
     // Placeholder until the Scenarios feature lands; for now every company has

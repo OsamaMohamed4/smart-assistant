@@ -731,6 +731,24 @@ if (!db.prepare('SELECT 1 FROM schema_migrations WHERE id = 40').get()) {
   })();
 }
 
+// Migration 41: one client account may work in several companies (a group
+// that owns more than one). users.company_id stays the HOME company; the
+// others are granted here by a superadmin. A session works in exactly one
+// company at a time — sessions.active_company_id, checked against these
+// grants on every request — so every query, and Postgres RLS, still sees a
+// single tenant. Mirrors db-pg-schema.js + lib/migrations-pg.js.
+runMigration(41, 'create_user_companies', `
+  CREATE TABLE IF NOT EXISTS user_companies (
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    company_id  TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    created_by  TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, company_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_user_companies_company ON user_companies(company_id);
+  ALTER TABLE sessions ADD COLUMN active_company_id TEXT;
+`);
+
 // ─── Tenant-safety: one company per phone number ──────────────────
 // A DID and an imported provider number each identify exactly ONE tenant.
 // Inbound calls are attributed by those values (services/voice resolves a call
@@ -820,10 +838,39 @@ const sql = {
     INSERT INTO sessions (id, user_id, expires_at, user_agent, ip, last_seen_at)
     VALUES (@id, @user_id, @expires_at, @user_agent, @ip, datetime('now'))
   `),
+  // company_id is the company this session works in: the one it switched to,
+  // while the user still holds that grant, else the user's home company. A
+  // revoked grant therefore takes effect on the very next request.
   getSessionById     : db.prepare(`
-    SELECT s.*, u.id AS uid, u.email, u.name AS user_name, u.role, u.company_id, u.locked_until
+    SELECT s.*, u.id AS uid, u.email, u.name AS user_name, u.role, u.locked_until,
+           u.company_id AS home_company_id,
+           CASE WHEN s.active_company_id IS NOT NULL
+                 AND (s.active_company_id = u.company_id
+                      OR EXISTS (SELECT 1 FROM user_companies uc
+                                  WHERE uc.user_id = u.id AND uc.company_id = s.active_company_id))
+                THEN s.active_company_id ELSE u.company_id END AS company_id
       FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.id = ? AND datetime(s.expires_at) > datetime('now')
+  `),
+  setSessionCompany  : db.prepare('UPDATE sessions SET active_company_id = ? WHERE id = ?'),
+  // Every company a user may work in: home first, then the granted ones.
+  listAccessibleCompanies: db.prepare(`
+    SELECT c.id, c.name, CASE WHEN c.id = u.company_id THEN 1 ELSE 0 END AS is_home
+      FROM users u JOIN companies c
+        ON c.id = u.company_id
+        OR c.id IN (SELECT company_id FROM user_companies WHERE user_id = u.id)
+     WHERE u.id = ?
+     ORDER BY is_home DESC, c.name
+  `),
+  listGrantedCompanies: db.prepare(`
+    SELECT c.id, c.name FROM user_companies uc JOIN companies c ON c.id = uc.company_id
+     WHERE uc.user_id = ? ORDER BY c.name
+  `),
+  deleteUserCompany  : db.prepare('DELETE FROM user_companies WHERE user_id = ? AND company_id = ?'),
+  insertUserCompany  : db.prepare(`
+    INSERT INTO user_companies (user_id, company_id, created_by)
+    VALUES (@user_id, @company_id, @created_by)
+    ON CONFLICT (user_id, company_id) DO NOTHING
   `),
   touchSession       : db.prepare("UPDATE sessions SET last_seen_at = datetime('now') WHERE id = ?"),
   touchAndExtendSession: db.prepare(

@@ -47,11 +47,16 @@ function initials(label) {
   return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || s[0].toUpperCase();
 }
 
-export function Sidebar({ active, onChange, user, onLogout, workspaceMode = false, mobileOpen = false, onClose }) {
+const ROLE_LABELS = { superadmin: 'مدير النظام', client: 'حساب الشركة' };
+
+export function Sidebar({ active, onChange, user, onLogout, workspaceMode = false, mobileOpen = false, onClose, onSwitchCompany }) {
   // Inside a workspace there's no "list of clients" page — that's a
   // control-plane concern. 'companies' is shown but the page itself filters
   // to a single company.
   const WORKSPACE_HIDDEN = new Set(['clients', 'audit']);
+  // An account granted several companies works in one at a time and moves
+  // between them here.
+  const companies = user?.role === 'client' ? (user.companies || []) : [];
   return (
     <>
       {mobileOpen && (
@@ -78,6 +83,20 @@ export function Sidebar({ active, onChange, user, onLogout, workspaceMode = fals
           </button>
         </div>
       </div>
+
+      {workspaceMode && companies.length > 1 && (
+        <div className="px-4 pt-4">
+          <label htmlFor="company-switch" className="block text-[10.5px] font-semibold text-ink-500 mb-1.5 px-0.5">الشركة</label>
+          <select
+            id="company-switch"
+            value={user.companyId || ''}
+            onChange={(e) => onSwitchCompany?.(e.target.value)}
+            className="w-full h-10 rounded-xl border border-ink-200 bg-white px-3 text-[13px] font-medium text-ink-900 focus-ring"
+          >
+            {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+      )}
 
       {/* ─── Nav ─── */}
       <nav className="flex-1 px-3 py-4 space-y-4">
@@ -136,7 +155,7 @@ export function Sidebar({ active, onChange, user, onLogout, workspaceMode = fals
                 <div className="text-ink-800 text-[12.5px] font-medium leading-tight truncate">
                   {user.name || user.email}
                 </div>
-                <div className="text-ink-500 text-[10.5px] mt-0.5 capitalize">{user.role}</div>
+                <div className="text-ink-500 text-[10.5px] mt-0.5">{ROLE_LABELS[user.role] || user.role}</div>
               </div>
               <button
                 onClick={onLogout}

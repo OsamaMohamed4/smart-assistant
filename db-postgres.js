@@ -96,10 +96,36 @@ const sql = {
      VALUES ($1, $2, $3, $4, $5, ${NOW})`,
     ['id', 'user_id', 'expires_at', 'user_agent', 'ip'],
   ),
+  // See db-sqlite.js: company_id is the company this session works in, the
+  // switched-to one only while the grant still stands.
   getSessionById: stmt(`
-    SELECT s.*, u.id AS uid, u.email, u.name AS user_name, u.role, u.company_id, u.locked_until
+    SELECT s.*, u.id AS uid, u.email, u.name AS user_name, u.role, u.locked_until,
+           u.company_id AS home_company_id,
+           CASE WHEN s.active_company_id IS NOT NULL
+                 AND (s.active_company_id = u.company_id
+                      OR EXISTS (SELECT 1 FROM user_companies uc
+                                  WHERE uc.user_id = u.id AND uc.company_id = s.active_company_id))
+                THEN s.active_company_id ELSE u.company_id END AS company_id
       FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.id = $1 AND s.expires_at::timestamptz > now()`),
+  setSessionCompany: stmt(`UPDATE sessions SET active_company_id = $1 WHERE id = $2`),
+  listAccessibleCompanies: stmt(`
+    SELECT c.id, c.name, CASE WHEN c.id = u.company_id THEN 1 ELSE 0 END AS is_home
+      FROM users u JOIN companies c
+        ON c.id = u.company_id
+        OR c.id IN (SELECT company_id FROM user_companies WHERE user_id = u.id)
+     WHERE u.id = $1
+     ORDER BY is_home DESC, c.name`),
+  listGrantedCompanies: stmt(`
+    SELECT c.id, c.name FROM user_companies uc JOIN companies c ON c.id = uc.company_id
+     WHERE uc.user_id = $1 ORDER BY c.name`),
+  deleteUserCompany: stmt(`DELETE FROM user_companies WHERE user_id = $1 AND company_id = $2`),
+  insertUserCompany: stmt(
+    `INSERT INTO user_companies (user_id, company_id, created_by)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id, company_id) DO NOTHING`,
+    ['user_id', 'company_id', 'created_by'],
+  ),
   touchSession: stmt(`UPDATE sessions SET last_seen_at = ${NOW} WHERE id = $1`),
   touchAndExtendSession: stmt(`UPDATE sessions SET last_seen_at = ${NOW}, expires_at = $1 WHERE id = $2`),
   deleteSession: stmt(`DELETE FROM sessions WHERE id = $1`),

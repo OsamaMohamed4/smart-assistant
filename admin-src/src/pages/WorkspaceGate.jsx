@@ -21,8 +21,41 @@ export function WorkspaceGate({ companyId, user, onAuthed, onLogout, render }) {
       .catch(() => setError('تعذّر الاتصال بالخادم'));
   }, [companyId]);
 
+  // A client account granted this company as well as its own: the session is
+  // moved here first (the server checks the grant), then the page renders.
+  const mayWorkHere = user?.role === 'client' && user?.companyId !== companyId
+    && (user?.companies || []).some((c) => c.id === companyId);
+  useEffect(() => {
+    if (!mayWorkHere) return;
+    api.switchCompany(companyId).then((r) => onAuthed(r.user)).catch((e) => setError(e.message));
+  }, [mayWorkHere, companyId]);
+
+  // Two tabs on two companies share one session. Whichever tab the user comes
+  // back to takes the session back to its own company, so its requests are
+  // answered for the company it shows rather than refused.
+  const multi = user?.role === 'client' && (user?.companies || []).length > 1;
+  useEffect(() => {
+    if (!multi) return undefined;
+    const resync = () => {
+      if (document.visibilityState !== 'visible') return;
+      api.me().then((r) => {
+        const u = r.user;
+        if (u?.companyId !== companyId && (u?.companies || []).some((c) => c.id === companyId)) {
+          return api.switchCompany(companyId);
+        }
+        return null;
+      }).catch(() => {});
+    };
+    document.addEventListener('visibilitychange', resync);
+    window.addEventListener('focus', resync);
+    return () => {
+      document.removeEventListener('visibilitychange', resync);
+      window.removeEventListener('focus', resync);
+    };
+  }, [multi, companyId]);
+
   if (error)   return <NotFound message={error} />;
-  if (!company) return <Loading />;
+  if (!company || mayWorkHere) return <Loading />;
 
   // Allowed: a client of THIS company, or any superadmin (they can preview
   // any workspace). Anyone else has to log in or switch accounts.
@@ -60,11 +93,18 @@ function ClientLogin({ company, companyId, currentUser, onAuthed, onLogout }) {
     try {
       if (currentUser) { try { await api.logout(); } catch {} }
       const r = await api.login({ email: email.trim(), password });
-      const ok = (r.user.role === 'client' && r.user.companyId === companyId)
-              || r.user.role === 'superadmin';
+      const granted = r.user.role === 'client'
+        && (r.user.companyId === companyId || (r.user.companies || []).some((c) => c.id === companyId));
+      const ok = granted || r.user.role === 'superadmin';
       if (!ok) {
         try { await api.logout(); } catch {}
         setError('بيانات الدخول غير صحيحة لهذه الشركة');
+        return;
+      }
+      // An account that works in several companies signs in to its home one;
+      // move the session to the company this page belongs to.
+      if (r.user.role === 'client' && r.user.companyId !== companyId) {
+        onAuthed((await api.switchCompany(companyId)).user);
         return;
       }
       onAuthed(r.user);

@@ -6,8 +6,9 @@ const {
   hashPassword, verifyPassword,
   createSession, destroySession,
   sessionFromCookie, setSessionCookie, clearSessionCookie,
-  logEvent, requireAuth,
+  logEvent, requireAuth, companiesFor,
 } = require('../lib/auth');
+const { audit } = require('../lib/audit');
 
 const router = express.Router();
 
@@ -134,9 +135,8 @@ router.post('/login', async (req, res) => {
   setSessionCookie(res, session.id);
   await logEvent('login_ok', req, { userId: user.id, email });
 
-  res.json({
-    user: { id: user.id, email: user.email, name: user.name, role: user.role, companyId: user.company_id },
-  });
+  const u = { id: user.id, email: user.email, name: user.name, role: user.role, companyId: user.company_id };
+  res.json({ user: { ...u, companies: await companiesFor(u) } });
 });
 
 router.post('/logout', async (req, res) => {
@@ -149,8 +149,25 @@ router.post('/logout', async (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/me', requireAuth, (req, res) => {
-  res.json({ user: req.user });
+router.get('/me', requireAuth, async (req, res) => {
+  res.json({ user: { ...req.user, companies: await companiesFor(req.user) } });
+});
+
+// Move this session to another company the account may work in. Only for
+// client accounts granted more than one company (a superadmin already sees
+// every company and has nothing to switch). The grant is checked here and
+// again on every later request (getSessionById), so a revoked grant cannot be
+// kept alive by a session that switched before it was revoked.
+router.post('/switch-company', requireAuth, async (req, res) => {
+  const companyId = String(req.body?.companyId || '').trim();
+  if (req.user.role !== 'client') return res.status(400).json({ error: 'تبديل الشركة لحسابات الشركات فقط' });
+  const companies = await companiesFor(req.user);
+  if (!companies.some((c) => c.id === companyId)) {
+    return res.status(404).json({ error: 'هذه الشركة غير متاحة لحسابك' });
+  }
+  await sql.setSessionCompany.run(companyId, req.sessionId);
+  audit(req, 'auth.switch_company', `companies/${companyId}`, { from: req.user.companyId });
+  res.json({ user: { ...req.user, companyId, companies } });
 });
 
 router.post('/change-password', requireAuth, async (req, res) => {

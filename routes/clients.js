@@ -23,9 +23,57 @@ function generatePassword() {
   return groups.join('-');
 }
 
-// GET /api/companies/:id/clients
+// GET /api/companies/:id/clients — each with the OTHER companies it may also
+// work in (user_companies), so the grant is visible where it is managed.
 router.get('/', async (req, res) => {
-  res.json(await sql.listClientsForCompany.all(req.params.id));
+  const clients = await sql.listClientsForCompany.all(req.params.id);
+  for (const c of clients) c.extraCompanies = await sql.listGrantedCompanies.all(c.id);
+  res.json(clients);
+});
+
+// PUT /api/companies/:id/clients/:userId/companies  body: { companyIds: [...] }
+//
+// Grant a client of THIS company access to other companies too — one account
+// for a group that owns several. Replaces the whole list, so removing a
+// company from it revokes that access; a session working in a revoked
+// company falls back to the home company on its next request. Superadmin
+// only (router-level requireCompanyAdmin): a client can never widen its own
+// reach.
+router.put('/:userId/companies', async (req, res) => {
+  const uid = Number(req.params.userId);
+  if (!uid) return res.status(400).json({ error: 'invalid id' });
+  const u = await sql.getUserById.get(uid);
+  if (!u || u.role !== 'client' || u.company_id !== req.params.id) {
+    return res.status(404).json({ error: 'client not found' });
+  }
+  const raw = Array.isArray(req.body?.companyIds) ? req.body.companyIds : null;
+  if (!raw) return res.status(400).json({ error: 'companyIds must be a list' });
+  const wanted = [...new Set(raw.map((x) => String(x || '').trim()).filter(Boolean))]
+    .filter((id) => id !== u.company_id);                    // the home company is implicit
+  for (const id of wanted) {
+    if (!(await sql.companyExists.get(id))) return res.status(400).json({ error: `شركة غير موجودة: ${id}` });
+  }
+  // Applied as a difference — revoke what was removed, grant what was added —
+  // rather than delete-all-then-insert, so a request landing mid-update never
+  // sees the account with no grants at all (statements are not transactional
+  // across calls on Postgres).
+  const before = (await sql.listGrantedCompanies.all(uid)).map((c) => c.id);
+  for (const id of before.filter((x) => !wanted.includes(x))) await sql.deleteUserCompany.run(uid, id);
+  for (const id of wanted.filter((x) => !before.includes(x))) {
+    await sql.insertUserCompany.run({ user_id: uid, company_id: id, created_by: req.user?.email || null });
+  }
+  try {
+    await sql.logAuditEvent.run({
+      actor_id   : req.user?.id || null,
+      actor_email: req.user?.email || null,
+      action     : 'client.companies',
+      resource   : `companies/${req.params.id}/clients/${uid}`,
+      metadata   : JSON.stringify({ email: u.email, before, after: wanted }),
+      ip         : req.ip || null,
+      user_agent : (req.get('user-agent') || '').slice(0, 255),
+    });
+  } catch {}
+  res.json({ id: uid, extraCompanies: await sql.listGrantedCompanies.all(uid) });
 });
 
 // Tighter than the loose `[^@\s]+@...` from before.

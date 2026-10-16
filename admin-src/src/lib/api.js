@@ -38,6 +38,12 @@ export const api = {
 
   // clients (per-company, owner+superadmin)
   listClients       : (companyId) => request(`/api/companies/${companyId}/clients`),
+  // The other companies a client account may also work in (superadmin only).
+  setClientCompanies: (companyId, userId, companyIds) => request(`/api/companies/${companyId}/clients/${userId}/companies`, {
+    method: 'PUT', body: JSON.stringify({ companyIds }),
+  }),
+  // Move this session to another company granted to the account.
+  switchCompany     : (companyId) => request('/api/auth/switch-company', { method: 'POST', body: JSON.stringify({ companyId }) }),
   createClient      : (companyId, body) => request(`/api/companies/${companyId}/clients`, { method: 'POST', body: JSON.stringify(body) }),
   deleteClient      : (companyId, userId) => request(`/api/companies/${companyId}/clients/${userId}`, { method: 'DELETE' }),
 

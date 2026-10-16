@@ -159,6 +159,13 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
       : new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'sessions', 'requests', 'campaigns', 'usage']);
   const activeTab = allowedTabs.has(tab) ? tab : 'dashboard';
 
+  // A full page load, not a re-render: every page holds state for the company
+  // it opened with, and none of it may carry over to the next one.
+  const switchCompany = async (id) => {
+    try { await api.switchCompany(id); } catch { return; }
+    window.location.assign(`/c/${encodeURIComponent(id)}`);
+  };
+
   return (
     <div className="flex min-h-screen flex-row-reverse">
       <Sidebar
@@ -169,6 +176,7 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         workspaceMode={isWorkspace}
         mobileOpen={navOpen}
         onClose={() => setNavOpen(false)}
+        onSwitchCompany={switchCompany}
       />
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="lg:hidden sticky top-0 z-30 flex items-center gap-2 h-14 px-3 bg-white text-ink-900 border-b border-ink-100">

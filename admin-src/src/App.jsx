@@ -19,6 +19,7 @@ import { AuditPage } from './pages/AuditPage';
 import { RequestsPage } from './pages/RequestsPage';
 import { UsagePage } from './pages/UsagePage';
 import { WhatsappPage } from './pages/WhatsappPage';
+import { InvoicesPage } from './pages/InvoicesPage';
 import { ToastProvider } from './components/ui/Toast';
 import { api, setUnauthenticatedHandler } from './lib/api';
 
@@ -154,10 +155,10 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
   // 'requests' is open to clients too: the leads are theirs to work.
   // 'usage' too: a client sees their own consumption, the server pins it.
   const allowedTabs = isWorkspace
-    ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'sessions', 'requests', 'campaigns', 'usage'])
+    ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'sessions', 'requests', 'campaigns', 'usage', 'invoices'])
     : isSuper
-      ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'clients', 'whatsapp', 'sessions', 'requests', 'campaigns', 'usage', 'audit'])
-      : new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'sessions', 'requests', 'campaigns', 'usage']);
+      ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'clients', 'whatsapp', 'sessions', 'requests', 'campaigns', 'usage', 'invoices', 'audit'])
+      : new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'sessions', 'requests', 'campaigns', 'usage', 'invoices']);
   const activeTab = allowedTabs.has(tab) ? tab : 'dashboard';
 
   // A full page load, not a re-render: every page holds state for the company
@@ -205,6 +206,7 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         {activeTab === 'requests'  && <RequestsPage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'campaigns' && <CampaignsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'usage'     && <UsagePage pinnedCompanyId={pinnedCompanyId} />}
+        {activeTab === 'invoices'  && <InvoicesPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'audit'     && isSuper && !isWorkspace && <AuditPage />}
         </main>
       </div>

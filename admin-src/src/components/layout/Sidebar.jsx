@@ -1,4 +1,4 @@
-import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen, PhoneOutgoing, ShieldCheck, ClipboardList, Zap, Inbox, Gauge, MessageCircle } from 'lucide-react';
+import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen, PhoneOutgoing, ShieldCheck, ClipboardList, Zap, Inbox, Gauge, MessageCircle, Receipt } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { MasarMark } from '../ui/MasarMark';
 
@@ -38,6 +38,7 @@ const NAV_GROUPS = [
       { id: 'requests',   label: 'الطلبات',     icon: Inbox,           hint: 'من الوكيل',           roles: ['superadmin', 'client'] },
       { id: 'campaigns',  label: 'الحملات',     icon: PhoneOutgoing,   hint: 'مكالمات صادرة',       roles: ['superadmin', 'client'] },
       { id: 'usage',      label: 'الاستهلاك',   icon: Gauge,           hint: 'وارد + صادر',         roles: ['superadmin', 'client'] },
+      { id: 'invoices',   label: 'الفواتير',    icon: Receipt,         hint: 'شهرية',               roles: ['superadmin', 'client'] },
       { id: 'audit',      label: 'سجل العمليات', icon: ShieldCheck,    hint: 'audit',               roles: ['superadmin'] },
     ],
   },

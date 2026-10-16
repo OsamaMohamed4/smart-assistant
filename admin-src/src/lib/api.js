@@ -42,6 +42,16 @@ export const api = {
   setClientCompanies: (companyId, userId, companyIds) => request(`/api/companies/${companyId}/clients/${userId}/companies`, {
     method: 'PUT', body: JSON.stringify({ companyIds }),
   }),
+  // Invoices: contracts and sending are superadmin-only; a company lists its own.
+  billingProfile    : () => request('/api/billing/profile'),
+  saveBillingProfile: (body) => request('/api/billing/profile', { method: 'PUT', body: JSON.stringify(body) }),
+  testMail          : (to) => request('/api/mail/test', { method: 'POST', body: JSON.stringify({ to }) }),
+  companyContract   : (companyId) => request(`/api/companies/${companyId}/contract`),
+  saveCompanyContract: (companyId, body) => request(`/api/companies/${companyId}/contract`, { method: 'PUT', body: JSON.stringify(body) }),
+  listInvoices      : (companyId) => request(`/api/companies/${companyId}/invoices`),
+  invoicePreview    : (companyId, month) => request(`/api/companies/${companyId}/invoices/preview?month=${encodeURIComponent(month)}`),
+  issueInvoice      : (companyId, month) => request(`/api/companies/${companyId}/invoices`, { method: 'POST', body: JSON.stringify({ month }) }),
+  resendInvoice     : (invoiceId) => request(`/api/invoices/${invoiceId}/send`, { method: 'POST', body: '{}' }),
   // WhatsApp (superadmin): the LoopChat account as it stands, and one company's settings.
   whatsappOverview  : () => request('/api/whatsapp/overview'),
   companyWhatsapp   : (companyId) => request(`/api/companies/${companyId}/whatsapp`),

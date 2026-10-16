@@ -785,6 +785,40 @@ runMigration(42, 'create_whatsapp_tables', `
   );
 `);
 
+// Migration 43: monthly invoices, and the platform's own settings (the
+// seller's details printed on them). An invoice is a snapshot taken when it
+// is issued -- lines, counts, contract terms, seller and buyer -- so changing
+// a contract later never rewrites one already sent. One per company per
+// month. Deliberately no foreign key to companies: an invoice is a financial
+// record and outlives the company row.
+runMigration(43, 'create_invoices', `
+  CREATE TABLE IF NOT EXISTS invoices (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id  TEXT NOT NULL,
+    number      TEXT NOT NULL UNIQUE,
+    month       TEXT NOT NULL,
+    subtotal    INTEGER NOT NULL,
+    vat         INTEGER NOT NULL,
+    total       INTEGER NOT NULL,
+    data        TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    sent_to     TEXT,
+    sent_at     TEXT,
+    error       TEXT,
+    created_by  TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (company_id, month)
+  );
+  CREATE INDEX IF NOT EXISTS idx_invoices_company ON invoices(company_id, month);
+  CREATE TABLE IF NOT EXISTS platform_settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT,
+    updated_by  TEXT,
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+
 // ─── Tenant-safety: one company per phone number ──────────────────
 // A DID and an imported provider number each identify exactly ONE tenant.
 // Inbound calls are attributed by those values (services/voice resolves a call
@@ -1671,6 +1705,38 @@ const sql = {
   listRequestsForConversation: db.prepare(`
     SELECT request_type, customer_name FROM customer_requests
      WHERE company_id = ? AND conversation_id = ? ORDER BY id
+  `),
+
+  // ─── Invoices ────────────────────────────────────────────────────
+  listOutboundDurations: db.prepare(`
+    SELECT COALESCE(duration_sec, 0) AS duration_sec FROM calls
+     WHERE company_id = ? AND direction = 'outbound' AND created_at >= ? AND created_at < ?
+  `),
+  inboundTotals: db.prepare(`
+    SELECT COUNT(*) AS calls, COALESCE(SUM(duration_sec), 0) AS seconds FROM calls
+     WHERE company_id = ? AND COALESCE(direction, 'inbound') <> 'outbound' AND created_at >= ? AND created_at < ?
+  `),
+  insertInvoice: db.prepare(`
+    INSERT INTO invoices (company_id, number, month, subtotal, vat, total, data, status, created_by)
+    VALUES (@company_id, @number, @month, @subtotal, @vat, @total, @data, @status, @created_by)
+    ON CONFLICT DO NOTHING
+  `),
+  getInvoice: db.prepare('SELECT * FROM invoices WHERE id = ?'),
+  getInvoiceForMonth: db.prepare('SELECT * FROM invoices WHERE company_id = ? AND month = ?'),
+  listInvoicesForCompany: db.prepare(`
+    SELECT id, company_id, number, month, subtotal, vat, total, status, sent_to, sent_at, error, created_at, updated_at
+      FROM invoices WHERE company_id = ? ORDER BY month DESC
+  `),
+  lastInvoiceNumber: db.prepare('SELECT number FROM invoices WHERE number LIKE ? ORDER BY number DESC LIMIT 1'),
+  updateInvoiceDelivery: db.prepare(`
+    UPDATE invoices SET status = @status, sent_to = @sent_to, sent_at = COALESCE(@sent_at, sent_at),
+                        error = @error, updated_at = datetime('now')
+     WHERE id = @id
+  `),
+  getPlatformSetting: db.prepare('SELECT value FROM platform_settings WHERE key = ?'),
+  setPlatformSetting: db.prepare(`
+    INSERT INTO platform_settings (key, value, updated_by, updated_at) VALUES (@key, @value, @updated_by, datetime('now'))
+    ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = excluded.updated_at
   `),
 
   chatsPerHourInRange : db.prepare(`

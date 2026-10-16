@@ -36,6 +36,8 @@ const voice = require('./services/voice');
 const { publishCompany } = require('./services/publish/pipeline');
 const whatsapp = require('./services/whatsapp');
 const loopchat = require('./services/whatsapp/loopchat');
+const invoices = require('./services/invoices');
+const mailer = require('./lib/mailer');
 const { describeFeatures, setFeature } = require('./services/features/store');
 const { startCampaignWorker, getWorkerHealth: getCampaignWorkerHealth } = require('./services/campaigns');
 const { startRetentionWorker } = require('./services/retention');
@@ -129,6 +131,13 @@ const ON_RAILWAY = !!(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_ENVI
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL
   || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')
 ).replace(/\/+$/, '');
+// The address people use, once the company's own domain is live:
+// CANONICAL_HOST=www.getmasar.sa. Page views that arrive on any other host
+// (the Railway address, an old domain) are sent there; see the middleware
+// below. Links in e-mails use it too. Unset, nothing is redirected.
+const CANONICAL_HOST = String(process.env.CANONICAL_HOST || '').trim().toLowerCase()
+  .replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+function publicSiteUrl() { return CANONICAL_HOST ? `https://${CANONICAL_HOST}` : (PUBLIC_BASE_URL || null); }
 const TRUST_PROXY = Number.isFinite(Number(process.env.TRUST_PROXY))
   ? Number(process.env.TRUST_PROXY)
   : (ON_RAILWAY ? 1 : 0);
@@ -1020,6 +1029,19 @@ startDrainTimer();
 startCampaignWorker();
 // PDPL retention. No-op unless RETENTION_DAYS_* is configured (audit F-04a).
 startRetentionWorker();
+
+// Monthly invoices: issued and e-mailed in the first days of each month for
+// every company whose contract says so (services/invoices.js). Outside that
+// window a tick does nothing, and a sent invoice is never sent again.
+function startInvoiceScheduler() {
+  const tick = () => runWithContext({ bypass: true, companyId: null },
+    () => invoices.monthlyRun({ sql, listCompanies: listCompaniesFull }, new Date(), { siteUrl: publicSiteUrl() }))
+    .then((r) => { if (r?.done?.length) logger.info('monthly invoices', r); })
+    .catch((e) => logger.error('monthly invoices failed', { err: e.message }));
+  setInterval(tick, 30 * 60 * 1000).unref();
+  setTimeout(tick, 60 * 1000).unref();
+}
+startInvoiceScheduler();
 
 // ─── Admin: backfill recent calls from the provider ──────────────
 // Superadmin-only. Pulls the most recent conversations straight from the
@@ -2134,6 +2156,113 @@ app.put('/api/companies/:id/whatsapp', requireCompanyAdmin, async (req, res) => 
   });
   const s = whatsapp.settingsOf({ settings: merged });
   res.json({ channelId: s.channelId, autoReply: s.autoReply, followup: s.followup });
+});
+
+// ─── Invoices ────────────────────────────────────────────────────
+// A company's contract and its monthly invoices. Contracts, previews and
+// sending are superadmin-only; a company account sees its own issued
+// invoices. See services/invoices.js for the rules.
+const invoicesDeps = () => ({ sql, listCompanies: listCompaniesFull });
+const sendHtml = (res, html) => res.type('html').set('Cache-Control', 'no-store').send(html);
+
+app.get('/api/billing/profile', async (req, res) => {
+  if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  res.json({ profile: await invoices.billingProfile(invoicesDeps()), mail: { configured: mailer.isConfigured(), transport: mailer.transportName(), sender: mailer.sender() || null } });
+});
+
+app.put('/api/billing/profile', async (req, res) => {
+  if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  const v = invoices.validateProfile(req.body);
+  if (v.error) return res.status(400).json({ error: v.error });
+  await sql.setPlatformSetting.run({ key: 'billing_profile', value: JSON.stringify(v.profile), updated_by: req.user.email });
+  audit(req, 'billing.profile', 'platform/billing_profile', null);
+  res.json({ profile: await invoices.billingProfile(invoicesDeps()) });
+});
+
+// A short test message, so a broken mailbox shows up here and not on the
+// first of the month.
+app.post('/api/mail/test', async (req, res) => {
+  if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  const to = String(req.body?.to || req.user.email || '').trim();
+  const r = await mailer.sendMail({
+    to, subject: 'رسالة تجريبية من مسار',
+    text: 'هذه رسالة تجريبية من لوحة تحكم مسار للتأكد من إعدادات البريد. لا يلزم الرد عليها.',
+    html: '<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;font-size:14px;">هذه رسالة تجريبية من لوحة تحكم مسار للتأكد من إعدادات البريد. لا يلزم الرد عليها.</div>',
+  });
+  audit(req, 'mail.test', null, { to, ok: r.ok, transport: r.transport });
+  res.status(r.ok ? 200 : 502).json(r);
+});
+
+app.get('/api/companies/:id/contract', requireCompanyAdmin, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  res.json({ contract: invoices.contractOf(c), saved: !!c.settings?.contract });
+});
+
+app.put('/api/companies/:id/contract', requireCompanyAdmin, async (req, res) => {
+  const row = await sql.getCompany.get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const v = invoices.validateContract(req.body);
+  if (v.error) return res.status(400).json({ error: v.error });
+  let existing = {};
+  try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
+  await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify({ ...existing, contract: v.contract }) });
+  invalidateCache();
+  audit(req, 'company.contract', `companies/${row.id}`, { startDate: v.contract.startDate, autoSend: v.contract.autoSend, vat: v.contract.vat });
+  res.json({ contract: v.contract, saved: true });
+});
+
+app.get('/api/companies/:id/invoices', requireCompanyAccess, async (req, res) => {
+  res.json(await sql.listInvoicesForCompany.all(req.params.id));
+});
+
+app.get('/api/companies/:id/invoices/preview', requireCompanyAdmin, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  const month = String(req.query.month || currentSaudiMonth());
+  const built = await invoices.buildInvoice(c, month, invoicesDeps());
+  if (built.error) return res.status(400).json({ error: built.error });
+  const issued = await sql.getInvoiceForMonth.get(c.id, month);
+  res.json({ ...built.invoice, issued: issued ? { id: issued.id, number: issued.number, status: issued.status } : null });
+});
+
+app.get('/api/companies/:id/invoices/preview.html', requireCompanyAdmin, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).send('not found');
+  const built = await invoices.buildInvoice(c, String(req.query.month || currentSaudiMonth()), invoicesDeps());
+  if (built.error) return res.status(400).send(built.error);
+  sendHtml(res, invoices.renderInvoiceHtml({ ...built.invoice, seller: await invoices.billingProfile(invoicesDeps()) }));
+});
+
+// Issue a month's invoice and send it. Issuing happens once; asking again
+// for the same month sends the invoice already issued.
+app.post('/api/companies/:id/invoices', requireCompanyAdmin, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  const month = String(req.body?.month || '');
+  const issued = await invoices.issueInvoice(c, month, invoicesDeps(), { actor: req.user.email });
+  if (issued.error) return res.status(400).json({ error: issued.error });
+  audit(req, 'invoice.issue', `invoices/${issued.invoice.id}`, { number: issued.invoice.number, month, existed: !!issued.existed });
+  const sent = req.body?.send === false ? null : await invoices.sendInvoice(issued.invoice, c, invoicesDeps(), { siteUrl: publicSiteUrl() });
+  res.json({ invoice: await sql.getInvoice.get(issued.invoice.id), sent });
+});
+
+app.post('/api/invoices/:id/send', async (req, res) => {
+  if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  const inv = await sql.getInvoice.get(req.params.id);
+  if (!inv) return res.status(404).json({ error: 'not found' });
+  const c = await loadCompany(inv.company_id);
+  if (!c) return res.status(404).json({ error: 'الشركة غير موجودة' });
+  const sent = await invoices.sendInvoice(inv, c, invoicesDeps(), { siteUrl: publicSiteUrl() });
+  audit(req, 'invoice.send', `invoices/${inv.id}`, { number: inv.number, ok: sent.ok });
+  res.status(sent.ok ? 200 : 502).json({ invoice: await sql.getInvoice.get(inv.id), sent, ...(sent.ok ? {} : { error: sent.error }) });
+});
+
+// The issued invoice as a printable page (the same HTML the e-mail carries).
+app.get('/api/invoices/:id/html', async (req, res) => {
+  const inv = await sql.getInvoice.get(req.params.id);
+  if (!inv || !userCanAccessCompany(req.user, inv.company_id)) return res.status(404).send('not found');
+  sendHtml(res, invoices.renderInvoiceHtml(JSON.parse(inv.data)));
 });
 
 // ─── Usage: consumption per company for one Saudi month ──────────────

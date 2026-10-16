@@ -829,6 +829,37 @@ const sql = {
     SELECT request_type, customer_name FROM customer_requests
      WHERE company_id = $1 AND conversation_id = $2 ORDER BY id`),
 
+  // ─── Invoices — see db-sqlite.js ─────────────────────────────
+  listOutboundDurations: stmt(`
+    SELECT COALESCE(duration_sec, 0)::int AS duration_sec FROM calls
+     WHERE company_id = $1 AND direction = 'outbound' AND created_at >= $2 AND created_at < $3`),
+  inboundTotals: stmt(`
+    SELECT COUNT(*)::int AS calls, COALESCE(SUM(duration_sec), 0)::int AS seconds FROM calls
+     WHERE company_id = $1 AND COALESCE(direction, 'inbound') <> 'outbound' AND created_at >= $2 AND created_at < $3`),
+  insertInvoice: stmt(
+    `INSERT INTO invoices (company_id, number, month, subtotal, vat, total, data, status, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     ON CONFLICT DO NOTHING RETURNING id`,
+    ['company_id', 'number', 'month', 'subtotal', 'vat', 'total', 'data', 'status', 'created_by'],
+  ),
+  getInvoice: stmt(`SELECT * FROM invoices WHERE id = $1`),
+  getInvoiceForMonth: stmt(`SELECT * FROM invoices WHERE company_id = $1 AND month = $2`),
+  listInvoicesForCompany: stmt(`
+    SELECT id, company_id, number, month, subtotal, vat, total, status, sent_to, sent_at, error, created_at, updated_at
+      FROM invoices WHERE company_id = $1 ORDER BY month DESC`),
+  lastInvoiceNumber: stmt(`SELECT number FROM invoices WHERE number LIKE $1 ORDER BY number DESC LIMIT 1`),
+  updateInvoiceDelivery: stmt(
+    `UPDATE invoices SET status = $1, sent_to = $2, sent_at = COALESCE($3, sent_at), error = $4, updated_at = ${NOW}
+      WHERE id = $5`,
+    ['status', 'sent_to', 'sent_at', 'error', 'id'],
+  ),
+  getPlatformSetting: stmt(`SELECT value FROM platform_settings WHERE key = $1`),
+  setPlatformSetting: stmt(
+    `INSERT INTO platform_settings (key, value, updated_by, updated_at) VALUES ($1, $2, $3, ${NOW})
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at`,
+    ['key', 'value', 'updated_by'],
+  ),
+
   chatsPerHourInRange: stmt(
     `SELECT substr(created_at, 12, 2) AS hour, COUNT(*)::int AS n
        FROM chats

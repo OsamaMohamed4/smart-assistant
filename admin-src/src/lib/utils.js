@@ -44,6 +44,28 @@ export function fmtNumber(n) {
   return new Intl.NumberFormat('ar-SA').format(n);
 }
 
+// ─── Saudi months (usage, invoices) ───────────────────────────
+export const MONTHS_AR = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+  'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+
+// The last `count` Saudi calendar months, newest first, as { value: 'YYYY-MM', label }.
+export function recentMonths(count = 12, now = new Date()) {
+  const local = new Date(now.getTime() + 3 * 3600 * 1000);
+  let year = local.getUTCFullYear();
+  let month = local.getUTCMonth();
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    out.push({ value: `${year}-${String(month + 1).padStart(2, '0')}`, label: `${MONTHS_AR[month]} ${year}` });
+    if (--month < 0) { month = 11; year--; }
+  }
+  return out;
+}
+
+// Halalas to "1,234.50" — money is kept in halalas so it never drifts.
+export function fmtSar(halalas) {
+  return (Number(halalas || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 // ─── Avatar gradient from string (consistent hash) ───────────
 const GRADIENTS = [
   ['#765C36', '#8b5cf6'],

@@ -4,7 +4,7 @@ import { TopBar } from '../components/layout/TopBar';
 import { Card } from '../components/ui/Card';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useToast } from '../components/ui/Toast';
-import { cn, fmtDuration, fmtNumber } from '../lib/utils';
+import { cn, fmtDuration, fmtNumber, recentMonths } from '../lib/utils';
 import { api } from '../lib/api';
 
 // Consumption per company for one month: inbound and outbound calls apart,
@@ -13,22 +13,6 @@ import { api } from '../lib/api';
 // A client sees only their own company. The provider's credits are platform
 // cost rather than the client's business, so the server sends them to a
 // superadmin only, and the column exists only when the data does.
-
-const MONTHS_AR = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
-  'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
-
-// The last twelve Saudi months, newest first.
-function recentMonths(count = 12, now = new Date()) {
-  const local = new Date(now.getTime() + 3 * 3600 * 1000);
-  let year = local.getUTCFullYear();
-  let month = local.getUTCMonth();
-  const out = [];
-  for (let i = 0; i < count; i++) {
-    out.push({ value: `${year}-${String(month + 1).padStart(2, '0')}`, label: `${MONTHS_AR[month]} ${year}` });
-    if (--month < 0) { month = 11; year--; }
-  }
-  return out;
-}
 
 const mmss = (sec) => fmtDuration(Math.round(Number(sec) || 0));
 const fmtCredits = (v) => (Number(v) || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });

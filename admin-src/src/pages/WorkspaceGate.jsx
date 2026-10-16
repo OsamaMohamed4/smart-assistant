@@ -133,10 +133,6 @@ function ClientLogin({ company, companyId, currentUser, onAuthed, onLogout }) {
 
             <Button variant="brand" size="lg" loading={busy} className="w-full mt-2">دخول</Button>
           </form>
-
-          <div className="mt-5 pt-5 border-t border-ink-100 text-center text-[12px] text-ink-500">
-            ما عندكش حساب؟ تواصل مع <strong className="text-ink-700">{company.name}</strong> ليُنشئ لك حساب.
-          </div>
         </div>
       </div>
     </div>

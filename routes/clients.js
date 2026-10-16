@@ -37,7 +37,7 @@ router.post('/', async (req, res) => {
   const name  = String(req.body?.name || '').trim().slice(0, 80) || null;
   if (!EMAIL_RE_STRICT.test(email)) return res.status(400).json({ error: 'بريد إلكتروني غير صالح' });
   if (await sql.getUserByEmail.get(email)) {
-    return res.status(409).json({ error: 'الإيميل ده مسجّل بالفعل' });
+    return res.status(409).json({ error: 'هذا البريد الإلكتروني مسجّل بالفعل' });
   }
 
   const password = generatePassword();

@@ -51,7 +51,7 @@ export function AuthPage({ onAuthed }) {
       const r = await fn(body);
       onAuthed(r.user);
     } catch (err) {
-      setError(err.message || 'حصل خطأ، حاول مرة ثانية');
+      setError(err.message || 'حدث خطأ، حاول مرة أخرى');
     } finally {
       setBusy(false);
     }
@@ -162,13 +162,6 @@ export function AuthPage({ onAuthed }) {
               {isSignup ? 'إنشاء حساب المسؤول' : 'دخول'}
             </Button>
           </form>
-
-          {!isSignup && (
-            <div className="mt-5 pt-5 border-t border-ink-100 text-center text-[12px] text-ink-500 leading-relaxed">
-              التسجيل الذاتي مغلق.<br />
-              تواصل مع مسؤول النظام أو الشركة التي تتعامل معها لإنشاء حسابك.
-            </div>
-          )}
         </div>
 
         <p className="mt-6 text-center text-[11px] text-ink-400">

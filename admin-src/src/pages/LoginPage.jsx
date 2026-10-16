@@ -40,7 +40,7 @@ export function LoginPage() {
         setBusy(false);
       }
     } catch (err) {
-      setError(err.message || 'حصل خطأ، حاول مرة ثانية');
+      setError(err.message || 'حدث خطأ، حاول مرة أخرى');
       setBusy(false);
     }
   };
@@ -114,11 +114,6 @@ export function LoginPage() {
 
             <Button variant="brand" size="lg" loading={busy} className="w-full mt-2">دخول</Button>
           </form>
-
-          <div className="mt-5 pt-5 border-t border-ink-100 text-center text-[12px] text-ink-500 leading-relaxed">
-            التسجيل الذاتي مغلق.<br />
-            تواصل مع مسؤول النظام أو الشركة التي تتعامل معها لإنشاء حسابك.
-          </div>
         </div>
 
         <p className="mt-6 text-center text-[11px] text-ink-400">

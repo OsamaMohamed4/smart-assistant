@@ -79,7 +79,7 @@ router.post('/signup', async (req, res) => {
       return res.status(403).json({ error: 'التسجيل مغلق. تواصل مع المسؤول للحصول على حساب.' });
     }
     if (e.message === 'EMAIL_TAKEN') {
-      return res.status(409).json({ error: 'الإيميل ده مسجّل بالفعل' });
+      return res.status(409).json({ error: 'هذا البريد الإلكتروني مسجّل بالفعل' });
     }
     throw e;
   }

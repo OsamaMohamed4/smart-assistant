@@ -181,6 +181,19 @@ app.use(helmet({
 }));
 app.use(cookieParser());
 
+// Page views on the wrong host go to CANONICAL_HOST, permanently. Only GETs
+// of the pages people open (the site, /login, workspaces, the admin): API
+// calls, webhooks, tool callbacks and assets are answered on whatever host
+// they arrive at, so nothing already configured with the old address — the
+// voice provider, LoopChat — stops working when the domain changes.
+const PAGE_PATHS = /^\/(?:$|login\/?$|c\/|admin(?:\/|$)|contact\/?$|privacy\/?$|terms\/?$)/;
+app.use((req, res, next) => {
+  if (!CANONICAL_HOST || req.method !== 'GET' || !PAGE_PATHS.test(req.path)) return next();
+  const host = String(req.hostname || '').toLowerCase();
+  if (!host || host === CANONICAL_HOST || host === 'localhost' || host === '127.0.0.1') return next();
+  res.redirect(301, `https://${CANONICAL_HOST}${req.originalUrl}`);
+});
+
 // Raw body capture for provider webhook HMAC verification. The signature is
 // over the exact bytes sent, so a re-serialized req.body would never match.
 app.use(express.json({

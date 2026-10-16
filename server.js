@@ -47,23 +47,43 @@ initMonitoring(logger);
 startBackupScheduler(logger);
 
 // Allow only the document types our RAG pipeline can actually parse.
-// pdf-parse, mammoth, and plain text are the supported readers.
+// pdf.js, mammoth, and plain text are the supported readers.
 const ALLOWED_DOC_MIMES = new Set([
   'application/pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
   'text/plain',
   'text/markdown',
 ]);
+// By extension too: a browser on Windows sends a .md file as
+// application/octet-stream or with no type at all, and it was refused
+// although its reader is right here. The reader still checks the content.
+const DOC_EXTENSIONS = new Set(['pdf', 'docx', 'txt', 'md', 'markdown']);
+const DOC_SIZE_MB = 10;
+const UNSUPPORTED_DOC = 'نوع الملف غير مدعوم. الأنواع المدعومة: PDF وWord (DOCX) والنص (TXT وMD). ملفات Word القديمة (DOC) وExcel تُحفظ أولاً بصيغة PDF أو DOCX.';
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits : { fileSize: 10 * 1024 * 1024, files: 1 },
+  limits : { fileSize: DOC_SIZE_MB * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) => {
-    if (!ALLOWED_DOC_MIMES.has(file.mimetype)) {
-      return cb(new Error('Unsupported file type. Allowed: PDF, DOCX, TXT, MD.'));
+    const ext = String(file.originalname || '').toLowerCase().split('.').pop();
+    if (!ALLOWED_DOC_MIMES.has(file.mimetype) && !DOC_EXTENSIONS.has(ext)) {
+      return cb(Object.assign(new Error(UNSUPPORTED_DOC), { status: 400 }));
     }
     cb(null, true);
   },
 });
+// The document upload, with its refusals said in Arabic: the people uploading
+// are the company's staff, and "File too large" told them nothing.
+function uploadDocument(req, res, next) {
+  upload.single('file')(req, res, (err) => {
+    if (!err) return next();
+    const msg = err.code === 'LIMIT_FILE_SIZE' ? `حجم الملف أكبر من ${DOC_SIZE_MB} ميجابايت. قسّمه إلى ملفات أصغر أو احذف الصور منه.`
+      : err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE' ? 'ارفع ملفاً واحداً في كل مرة.'
+      : err.status === 400 ? err.message
+      : null;
+    if (!msg) return next(err);
+    res.status(400).json({ error: msg });
+  });
+}
 
 // Separate multer instance for audio (Playground mic upload). Capped lower
 // than docs (4MB ≈ 60s of opus webm) and limited to webm/ogg/wav/mp4 audio.
@@ -1818,10 +1838,10 @@ app.post('/api/companies/:id/import-phone', requireCompanyAdmin, async (req, res
 });
 
 // ─── RAG: documents CRUD + retrieval test ────────────────────────
-app.post('/api/companies/:id/documents', requireCompanyAccess, upload.single('file'), async (req, res) => {
+app.post('/api/companies/:id/documents', requireCompanyAccess, uploadDocument, async (req, res) => {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
-  if (!req.file) return res.status(400).json({ error: 'no file uploaded' });
+  if (!req.file) return res.status(400).json({ error: 'لم يصل أي ملف. اختر الملف وحاول مرة أخرى.' });
 
   // Multer stores originalname as latin1 bytes; decode to UTF-8 so Arabic /
   // Unicode filenames display correctly instead of appearing as mojibake.

@@ -306,7 +306,7 @@ function RAGTestModal({ open, onClose, companyId, companyName }) {
       <div className="mt-5">
         {!result && !busy && (
           <div className="text-center py-8 text-[12.5px] text-ink-400">
-            اكتب سؤالاً لعرض المقاطع التي ستُدرج في الـ system prompt.
+            اكتب سؤالاً لتظهر المقاطع التي سيعتمد عليها المساعد في الرد.
           </div>
         )}
         {result?.error && (

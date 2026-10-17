@@ -53,6 +53,9 @@ const fetchRecording = (call, opts) => forCall(call).fetchRecording(call.id, opt
 // can assert rather than assume.
 const getAgent = (agentId, company) => driverFor(company).getAgent(agentId);
 const getWorkspaceSettings = (company) => driverFor(company).getWorkspaceSettings();
+// A number id an operator typed, checked against the provider before a
+// company is tied to it: { phoneNumberId, phoneNumber, agentId }, or null.
+const getPhoneNumber = (phoneNumberId, company) => driverFor(company).getPhoneNumber(phoneNumberId);
 
 // ─── Capability tools ─────────────────────────────────────────────
 // Building a tool config from a registry declaration, and removing one when a
@@ -78,6 +81,6 @@ module.exports = {
   DRIVERS, DEFAULT_PROVIDER,
   driverFor, driverByName, forCall, errText,
   syncAgent, bindPhoneNumber, importPhoneNumber, startOutboundCall,
-  fetchCall, fetchRecording, getAgent, getWorkspaceSettings,
+  fetchCall, fetchRecording, getAgent, getWorkspaceSettings, getPhoneNumber,
   buildFeatureTool, deleteTool,
 };

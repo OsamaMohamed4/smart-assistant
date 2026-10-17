@@ -1249,11 +1249,30 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, validate({ params
   // Superadmin-only: it is the binding between a tenant and a real phone line,
   // and a client repointing it would hijack another company's number.
   let elevenlabsPhoneNumberId;
+  let linkedNumber = null;
   if (typeof b.elevenlabsPhoneNumberId === 'string') {
     if (req.user.role !== 'superadmin') {
       return res.status(403).json({ error: 'ربط رقم الهاتف متاح للمسؤول فقط' });
     }
     elevenlabsPhoneNumberId = b.elevenlabsPhoneNumberId.trim().slice(0, 80);
+    // The id is pasted by hand, so it is checked with the provider BEFORE
+    // anything below is written. Unchecked, a mistyped id was saved as it
+    // was and failed only when a call was placed, and the company went on
+    // showing the number it held before -- or none at all. The number the id
+    // names is stored with it, so the company shows the line it really uses.
+    if (elevenlabsPhoneNumberId) {
+      let found;
+      try {
+        found = await voice.getPhoneNumber(elevenlabsPhoneNumberId, { voiceProvider: row.voice_provider });
+      } catch (e) {
+        req.log.error('phone number lookup failed', { err: voice.errText(e), companyId: row.id });
+        return res.status(502).json({ error: 'تعذّر التحقق من الرقم الآن. حاول مرة أخرى بعد قليل.' });
+      }
+      if (!found) {
+        return res.status(400).json({ error: 'لا يوجد رقم بهذا المعرّف. انسخ المعرّف (phnum_…) كما هو.' });
+      }
+      linkedNumber = found.phoneNumber;
+    }
   }
   // Human-transfer number (E.164, e.g. +9665xxxxxxxx). Empty string clears it.
   if (typeof b.transferPhoneNumber === 'string') {
@@ -1287,16 +1306,22 @@ app.patch('/api/companies/:id/settings', requireCompanyAccess, validate({ params
     // Same exclusivity rule as the import path: setting an id another company
     // already holds transfers it rather than creating a duplicate claim.
     const released = await claimPhoneOwnership({
-      companyId: row.id, phoneNumberId: elevenlabsPhoneNumberId || null, log: req.log,
+      companyId: row.id, phoneNumberId: elevenlabsPhoneNumberId || null,
+      phoneNumber: linkedNumber, log: req.log,
     });
     audit(req, 'voice.phone_number_set', `companies/${row.id}`, {
       phoneNumberId: elevenlabsPhoneNumberId,
+      phoneNumber  : linkedNumber || undefined,
       releasedFrom : released.length ? released : undefined,
     });
   }
   invalidateCache();
   audit(req, 'company.settings', `companies/${row.id}`, Object.keys(clean));
-  res.json({ settings: merged, elevenlabsPhoneNumberId: elevenlabsPhoneNumberId ?? row.elevenlabs_phone_number_id ?? null });
+  res.json({
+    settings: merged,
+    elevenlabsPhoneNumberId: elevenlabsPhoneNumberId ?? row.elevenlabs_phone_number_id ?? null,
+    phoneNumber: linkedNumber || row.phone_number || null,
+  });
 });
 
 // ─── Per-company API keys (public Agent API) ─────────────────────
@@ -1842,9 +1867,26 @@ app.post('/api/companies/:id/bind-phone', requireCompanyAdmin, async (req, res) 
 
   try {
     const { phoneNumberId, agentId } = await voice.bindPhoneNumber(c);
-    invalidateCache(c.id);
-    audit(req, 'voice.phone_bind', `companies/${c.id}`, { phoneNumberId, agentId });
-    res.json({ phoneNumber: c.phoneNumber, phoneNumberId, agentId });
+    // The number this id really is, as the provider holds it. A company whose
+    // id was typed in before ids were checked still shows the number it held
+    // earlier, or none; binding puts that right. Only a display fix, so a
+    // failed read leaves the binding -- already done -- standing.
+    let phoneNumber = c.phoneNumber || null;
+    const live = await voice.getPhoneNumber(phoneNumberId, c).catch((e) => {
+      req.log.warn('phone number read-back failed', { err: voice.errText(e), companyId: c.id });
+      return null;
+    });
+    if (live?.phoneNumber && live.phoneNumber !== phoneNumber) {
+      // May take the number from another company's row, so every cached
+      // company goes, not just this one.
+      await claimPhoneOwnership({ companyId: c.id, phoneNumber: live.phoneNumber, phoneNumberId, log: req.log });
+      phoneNumber = live.phoneNumber;
+      invalidateCache();
+    } else {
+      invalidateCache(c.id);
+    }
+    audit(req, 'voice.phone_bind', `companies/${c.id}`, { phoneNumberId, agentId, phoneNumber });
+    res.json({ phoneNumber, phoneNumberId, agentId });
   } catch (e) {
     const detail = voice.errText(e);
     req.log.error('phone bind error', { err: detail, companyId: c.id });

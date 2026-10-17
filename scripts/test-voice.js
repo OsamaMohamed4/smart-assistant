@@ -1069,6 +1069,42 @@ test('a non-409 import failure still propagates rather than being swallowed', as
   });
 });
 
+// ── Reading one number back by id ─────────────────────────────────
+// Operators paste number ids by hand. The id is checked before a company is
+// tied to it, and the number it names is what the company shows.
+test('a number id reads back as the number it names and the agent on it', async () => {
+  await withStubbedHttp(() => ({
+    phone_number_id: 'phnum_W', phone_number: '50115110140', label: '50115110140',
+    assigned_agent: { agent_id: 'agent_W', agent_name: 'smart-assistant:co-w' },
+  }), async (calls) => {
+    const r = await el.getPhoneNumber(' phnum_W ');
+    assert.deepEqual(r, { phoneNumberId: 'phnum_W', phoneNumber: '50115110140', agentId: 'agent_W' });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, 'get');
+    assert.ok(calls[0].url.endsWith('/v1/convai/phone-numbers/phnum_W'), calls[0].url);
+  });
+});
+
+test('an id the provider does not hold reads back as null, not as an error', async () => {
+  // The live API answers 404 for any unknown id, malformed ones included.
+  await withStubbedHttp(() => httpError(404, { detail: { code: 'document_not_found' } }), async () => {
+    assert.equal(await el.getPhoneNumber('phnum_nope'), null);
+  });
+});
+
+test('a failure to ask is thrown, so it is never mistaken for "no such number"', async () => {
+  await withStubbedHttp(() => httpError(503, { detail: 'unavailable' }), async () => {
+    await assert.rejects(() => el.getPhoneNumber('phnum_W'), /503/);
+  });
+});
+
+test('an empty id is null without a request', async () => {
+  await withStubbedHttp(() => { throw new Error('must not be called'); }, async (calls) => {
+    assert.equal(await el.getPhoneNumber('  '), null);
+    assert.equal(calls.length, 0);
+  });
+});
+
 // ── Conversation-initiation webhook authentication ────────────────
 // Verified against the live API on 2026-09-19: this webhook is NOT HMAC-signed.
 // Its config accepts only {url, request_headers}; `secret` and `auth_method`

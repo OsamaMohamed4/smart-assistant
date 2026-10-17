@@ -89,7 +89,7 @@ export function CompanyCard({ company, onEdit, onSync, onBindPhone, onImportPhon
               {synced
                 ? <Badge tone="success" dot>منشور</Badge>
                 : <Badge tone="warning" dot>غير منشور</Badge>}
-              {hasPhone && <Badge tone="brand" dot><Phone className="w-2.5 h-2.5 -mr-0.5" />{c.phoneNumber}</Badge>}
+              {hasPhone && <Badge tone="brand" dot><Phone className="w-2.5 h-2.5 -mr-0.5" /><span dir="ltr">{c.phoneNumber}</span></Badge>}
               {c.hasKB && <Badge tone="info"><BookOpen className="w-2.5 h-2.5 -mr-0.5" />KB</Badge>}
             </div>
           </div>

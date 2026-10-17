@@ -10,6 +10,7 @@
 //   POST   /v1/convai/tools                          create the KB webhook tool
 //   PATCH  /v1/convai/tools/{tool_id}                update it
 //   GET    /v1/convai/phone-numbers                  numbers this workspace owns
+//   GET    /v1/convai/phone-numbers/{id}             one number, to check an id
 //   POST   /v1/convai/phone-numbers                  import a 3CX DID as a SIP trunk
 //   PATCH  /v1/convai/phone-numbers/{id}             bind/update the number
 //   POST   /v1/convai/sip-trunk/outbound-call        place an outbound call
@@ -1086,6 +1087,31 @@ async function findPhoneNumber(phoneNumber) {
   return all.find((p) => String(p?.phone_number || '').trim() === wanted) || null;
 }
 
+/**
+ * One number as the provider holds it, or null when no number has this id.
+ * Operators paste these ids by hand, so an id is checked here before a company
+ * is tied to it, and the number it names is the one the company then shows --
+ * not whatever number its row held before. The API answers 404 for any id it
+ * does not hold, malformed ones included; every other failure is thrown, so a
+ * caller can tell "no such number" from "could not ask".
+ */
+async function getPhoneNumber(phoneNumberId) {
+  const id = String(phoneNumberId || '').trim();
+  if (!id) return null;
+  try {
+    const r = await get(`/v1/convai/phone-numbers/${encodeURIComponent(id)}`);
+    const d = r.data || {};
+    return {
+      phoneNumberId: d.phone_number_id || id,
+      phoneNumber  : String(d.phone_number || '').trim() || null,
+      agentId      : d.assigned_agent?.agent_id || null,
+    };
+  } catch (e) {
+    if (e?.response?.status === 404) return null;
+    throw e;
+  }
+}
+
 /** Point the company's imported number at the agent that should answer it. */
 async function bindPhoneNumber(company) {
   const phoneNumberId = company.phoneNumberId;
@@ -1226,7 +1252,7 @@ module.exports = {
   fetchCall, fetchRecording, listRecentCalls, verifyWebhook, normalizeEvent,
   // provider-specific extras used by the webhook route and the provision script
   resolveCompanyForEvent, uniqueCompanyId, mintCompanyToken, verifyCompanyToken,
-  listPhoneNumbers, findPhoneNumber, verifyInitWebhook, INIT_TOKEN_HEADER,
+  listPhoneNumbers, findPhoneNumber, getPhoneNumber, verifyInitWebhook, INIT_TOKEN_HEADER,
   getAgent, getWorkspaceSettings,
   // exported for tests
   buildAgentConfig, buildKbToolConfig, buildFeatureToolConfig, buildTrunkConfig,

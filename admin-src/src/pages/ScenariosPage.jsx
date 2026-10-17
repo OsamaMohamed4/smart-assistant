@@ -1313,6 +1313,8 @@ function VoiceSettingsCard({ companyId }) {
   // client saving an unrelated slider would trip the superadmin guard.
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [phoneNumberIdSaved, setPhoneNumberIdSaved] = useState('');
+  // The number the saved id names, as the server read it from the provider.
+  const [linkedNumber, setLinkedNumber] = useState('');
   const [voices, setVoices] = useState([]);
 
   useEffect(() => {
@@ -1328,6 +1330,7 @@ function VoiceSettingsCard({ companyId }) {
         setOpened(initial);
         setPhoneNumberId(c.phoneNumberId || '');
         setPhoneNumberIdSaved(c.phoneNumberId || '');
+        setLinkedNumber(c.phoneNumber || '');
       })
       .catch(() => setS({}));
   }, [companyId]);
@@ -1346,9 +1349,10 @@ function VoiceSettingsCard({ companyId }) {
         push('لا يوجد تغيير للحفظ', 'info');
         return;
       }
-      await api.updateCompanySettings(companyId, payload);
+      const r = await api.updateCompanySettings(companyId, payload);
       setOpened(s);
       setPhoneNumberIdSaved(phoneNumberId);
+      if (r && 'phoneNumber' in r) setLinkedNumber(r.phoneNumber || '');
       push('تم حفظ الإعدادات — تظهر بعد النشر', 'success');
     } catch (e) { push(e.message, 'error'); }
     finally { setSaving(false); }
@@ -1382,6 +1386,11 @@ function VoiceSettingsCard({ companyId }) {
               placeholder="phnum_… — يُنشأ عند استيراد رقم الشركة"
               dir="ltr"
             />
+            {phoneNumberIdSaved && linkedNumber && (
+              <p className="mt-1.5 text-[12px] text-ink-700">
+                الرقم المرتبط: <span dir="ltr" className="font-mono">{linkedNumber}</span>
+              </p>
+            )}
             <p className="mt-1 text-[11px] text-ink-500 leading-relaxed">
               رقم الشركة نفسه على 3CX بعد استيراده للمنصة. يُستخدم للمكالمات الواردة والصادرة معاً.
             </p>

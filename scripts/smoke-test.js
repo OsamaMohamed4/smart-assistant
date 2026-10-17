@@ -177,11 +177,22 @@ async function waitForBoot() {
   });
   const st2 = await fetch(B + `/api/companies/${companyId}/settings`, {
     method: 'PATCH', headers: { ...XHR, cookie },
-    body: JSON.stringify({ transferPhoneNumber: '+966501234567', elevenlabsPhoneNumberId: 'smoke-pn-1' }),
+    body: JSON.stringify({ transferPhoneNumber: '+966501234567' }),
   });
   const st2B = await st2.json().catch(() => ({}));
   check('settings merge keeps earlier keys',
     st1.status === 200 && st2.status === 200 && st2B.settings?.temperature === 0.3 && st2B.settings?.transferPhoneNumber === '+966501234567');
+  // A number id is checked with the voice provider before anything is saved.
+  // With the fake key here it cannot be checked, so it must be refused and
+  // the rest of the request must not be half-applied.
+  const stPn = await fetch(B + `/api/companies/${companyId}/settings`, {
+    method: 'PATCH', headers: { ...XHR, cookie },
+    body: JSON.stringify({ temperature: 0.4, elevenlabsPhoneNumberId: 'smoke-pn-1' }),
+  });
+  const stPnAfter = await (await fetch(B + `/api/companies/${companyId}`, { headers: { cookie } })).json().catch(() => ({}));
+  check('settings refuses a number id it cannot check, and writes nothing',
+    stPn.status >= 400 && stPnAfter.settings?.temperature === 0.3 && !stPnAfter.phoneNumberId,
+    `status=${stPn.status} temp=${stPnAfter.settings?.temperature} pn=${stPnAfter.phoneNumberId}`);
   const stBad = await fetch(B + `/api/companies/${companyId}/settings`, {
     method: 'PATCH', headers: { ...XHR, cookie }, body: JSON.stringify({ transferPhoneNumber: 'abc' }),
   });

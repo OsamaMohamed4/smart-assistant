@@ -95,7 +95,10 @@ export function CompaniesPage({ onPickCompany, pinnedCompanyId, user }) {
     setBindingId(bindOf.id);
     try {
       const r = await api.bindPhone(bindOf.id);
-      push(`تم ربط الرقم ${r.phoneNumber} بـ ${bindOf.name}`, 'success');
+      // A company can be bound before its number is known; never print "null".
+      push(r.phoneNumber
+        ? `تم ربط الرقم ⁦${r.phoneNumber}⁩ بـ ${bindOf.name}`
+        : `تم ربط رقم ${bindOf.name} بالوكيل`, 'success');
       load();
     } catch (e) { push(e.message, 'error'); }
     finally { setBindingId(null); setBindOf(null); }

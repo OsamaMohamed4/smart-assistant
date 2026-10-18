@@ -63,6 +63,22 @@ test('missing: empty/whitespace instructionPrompt → rejected', () => {
 test('type: customer_phone as number → rejected', () => {
   assert.ok(bad(agentChatBody, { customer_phone: 12345, message: 'hi' }));
 });
+test('agent/chat: a customer_phone that is not a phone number → rejected', () => {
+  // The thread id is built from the digits, so these would share one
+  // conversation with every other customer sent the same way.
+  for (const v of ['CUST-A', 'ahmed@example.sa', 'visitor', '1234', 'ERP-00017']) {
+    assert.ok(bad(agentChatBody, { customer_phone: v, message: 'hi' }), v);
+  }
+});
+test('agent/chat: phone numbers in the usual spellings are accepted', () => {
+  for (const v of ['+966501234567', '0501234567', '+966 50 123 4567', '(011) 511-0141']) {
+    assert.ok(ok(agentChatBody, { customer_phone: v, message: 'hi' }), v);
+  }
+});
+test('agent/chat: variables survive validation instead of being stripped', () => {
+  const out = agentChatBody.parse({ customer_phone: '+966501234567', message: 'hi', variables: { customer_name: 'أحمد', unit: 12 } });
+  assert.deepEqual(out.variables, { customer_name: 'أحمد', unit: 12 });
+});
 test('type: stability as non-numeric string → rejected', () => {
   assert.ok(bad(settingsBody, { stability: 'not-a-number' }));
 });

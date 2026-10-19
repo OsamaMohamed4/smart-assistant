@@ -1991,7 +1991,14 @@ app.post('/api/companies/:id/documents', requireCompanyAccess, uploadDocument, a
     });
   } catch (e) {
     req.log.error('ingest error', { err: e.message, companyId: c.id });
-    res.status(400).json({ error: e.message });
+    // Every refusal meant for the uploader is written in Arabic (lib/rag.js).
+    // Anything else -- a database or provider error -- belongs in the log:
+    // it used to reach the screen as raw English, such as Postgres's
+    // "invalid byte sequence for encoding UTF8".
+    const forUser = /[؀-ۿ]/.test(String(e.message || ''));
+    res.status(forUser ? 400 : 500).json({
+      error: forUser ? e.message : 'تعذّر حفظ الملف. حاول مرة أخرى، وإذا تكرر أبلغ الدعم الفني.',
+    });
   }
 });
 

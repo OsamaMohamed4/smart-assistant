@@ -145,6 +145,36 @@ test('an unsupported type is refused in Arabic', async () => {
     (e) => ARABIC.test(e.message) && !/Unsupported/i.test(e.message));
 });
 
+// ─── Text Postgres can store ──────────────────────────────────────
+// Postgres refuses a NUL anywhere in a text value, so one stray 0x00 from a
+// PDF's font map failed the whole upload ("invalid byte sequence for
+// encoding UTF8: 0x00"). Control characters carry no text and go; tab and
+// line breaks stay.
+test('NUL and other control characters are taken out of extracted text', async () => {
+  const text = await rag.extractText(Buffer.from('مشروع\u0000 الواحة\u0007\tشمال\r\nالرياض\u001F'), 'text/plain', 'a.txt');
+  assert.equal(text, 'مشروع الواحة\tشمال\r\nالرياض');
+});
+
+test('a text file saved as "Unicode" (UTF-16) is read, not turned into NULs', async () => {
+  const s = 'مشروع الواحة، شمال الرياض';
+  const le = Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from(s, 'utf16le')]);
+  assert.equal(await rag.extractText(le, 'text/plain', 'le.txt'), s);
+  const be = Buffer.from(le); be[0] = 0xFE; be[1] = 0xFF;
+  for (let i = 2; i + 1 < be.length; i += 2) { const t = be[i]; be[i] = be[i + 1]; be[i + 1] = t; }
+  assert.equal(await rag.extractText(be, 'text/plain', 'be.txt'), s);
+  assert.equal(await rag.extractText(Buffer.from('﻿' + s, 'utf8'), 'text/plain', 'bom.txt'), s, 'a UTF-8 byte-order mark is dropped');
+});
+
+test('what is stored has no NUL in it', async () => {
+  const body = 'مشروع الواحة السكني في شمال الرياض، شقق وفلل جاهزة للسكن.\u0000 '.repeat(4);
+  const r = await rag.ingestDocument({ companyId: 'kb-co', filename: 'nul.txt', mime: 'text/plain', buffer: Buffer.from(body) });
+  const doc = db.prepare('SELECT raw_text FROM kb_documents WHERE id = ?').get(r.documentId);
+  assert.ok(!doc.raw_text.includes('\u0000'));
+  for (const c of db.prepare('SELECT text FROM kb_chunks WHERE document_id = ?').all(r.documentId)) {
+    assert.ok(!c.text.includes('\u0000'));
+  }
+});
+
 test('a file with too little text says why, in Arabic', async () => {
   await assert.rejects(rag.ingestDocument({ companyId: 'kb-co', filename: 'scan.pdf', mime: 'application/pdf', buffer: makePdf(['x']) }),
     (e) => ARABIC.test(e.message));

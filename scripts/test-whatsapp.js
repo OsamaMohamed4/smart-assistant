@@ -120,6 +120,36 @@ test('a number no company uses is ignored, and nothing is recorded', async () =>
   assert.equal(sent.length, 0);
 });
 
+// As seen live: account channel 184 arrived in the webhook as channel 182.
+test('an event under the id LoopChat\'s webhook uses is answered from the account channel', async () => {
+  setSettings('maheer', { whatsappChannelId: 6, whatsappInboundChannelId: 182, whatsappAutoReply: true });
+  try {
+    const phone = '966507777777';
+    assert.deepEqual(await wa.handleEvent(incoming('هلا', { channel: 182, phone }), deps()), { sent: true });
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].body.account_channel_id, 6);
+    const rows = messages().slice(-2);
+    assert.equal(rows[0].direction, 'in'); assert.equal(rows[0].channel_id, 182); assert.equal(rows[0].company_id, 'maheer');
+    assert.equal(rows[1].direction, 'out'); assert.equal(rows[1].channel_id, 6); assert.equal(rows[1].status, 'sent');
+    // An employee taking over arrives under the same webhook id, and holds.
+    const handover = { event_type: 'message_integration.stopped', event_id: `h-${++eventSeq}`, contact: { phone }, channel: { id: 182 }, stopped_by: { name: 'سارة' } };
+    assert.deepEqual(await wa.handleEvent(handover, deps()), { paused: true });
+    assert.deepEqual(await wa.handleEvent(incoming('أبي موظف', { channel: 182, phone }), deps()), { skipped: 'taken over by staff' });
+    // The account channel id still finds the company too.
+    assert.equal((await wa.companyForChannel(6, deps())).id, 'maheer');
+    assert.equal((await wa.companyForChannel(182, deps())).id, 'maheer');
+  } finally { setSettings('maheer', { whatsappChannelId: 6, whatsappAutoReply: true }); }
+});
+
+test('an incoming channel is linked only alongside the number replies go out from', () => {
+  assert.match(wa.validateSettings({ inboundChannelId: 182 }).error, /رقم واتساب الشركة/);
+  assert.match(wa.validateSettings({ channelId: 6, inboundChannelId: 'x' }).error, /الرسائل الواردة/);
+  assert.equal(wa.validateSettings({ channelId: 6, inboundChannelId: 182 }).settings.whatsappInboundChannelId, 182);
+  assert.equal(wa.validateSettings({ channelId: 6, inboundChannelId: null }).settings.whatsappInboundChannelId, null);
+  assert.equal(wa.validateSettings({ channelId: 6 }).settings.whatsappInboundChannelId, null);
+  assert.equal(wa.describeOutcome({ ignored: 'unmapped channel' }).unmapped, true);
+});
+
 test('with replies switched off the message is counted but not answered', async () => {
   setSettings('maheer', { whatsappChannelId: 6, whatsappAutoReply: false });
   try {
@@ -166,6 +196,10 @@ test('every outcome of an event reads as a reason on the WhatsApp page', async (
   assert.match(say(await wa.handleEvent(null, deps())).text, /بلا نوع حدث/);
   assert.match(say(await wa.handleEvent({ event_type: 'contact.updated' }, deps())).text, /لا يخص المساعد: contact\.updated/);
   assert.match(say(null).text, /سجل الخادم/);
+  assert.equal(say({ failed: 'no scenario' }).text, 'لا يوجد سيناريو مفعّل للشركة');
+  const noScenario = { ...deps(), askReply: async () => { throw Object.assign(new Error('x'), { code: 'NO_ACTIVE_SCENARIO' }); } };
+  assert.deepEqual(await wa.handleEvent(incoming('هلا', { phone: '966506666666' }), noScenario), { failed: 'no scenario' });
+  assert.equal(messages().at(-1).detail, 'لا يوجد سيناريو مفعّل للشركة');
   assert.equal(say({ paused: true }).ok, true);
   for (const r of [{ skipped: 'auto-reply off' }, { ignored: 'unmapped channel' }, { failed: 'reply' }]) assert.equal(say(r).ok, false);
 });

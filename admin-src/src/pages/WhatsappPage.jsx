@@ -57,6 +57,7 @@ export function WhatsappPage() {
   const loadCompany = (id) => api.companyWhatsapp(id).then((r) => {
     setForm({
       channelId: r.channelId || '',
+      inboundChannelId: r.inboundChannelId || '',
       autoReply: !!r.autoReply,
       trigger  : r.followup?.trigger || 'off',
       templateId: r.followup?.templateId || '',
@@ -88,21 +89,25 @@ export function WhatsappPage() {
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
   const setVar = (i, k, v) => setForm((f) => ({ ...f, variables: f.variables.map((x, j) => (j === i ? { ...x, [k]: v } : x)) }));
 
-  const save = async () => {
+  // `over` changes a field just for this save (linking or unlinking the
+  // incoming channel), the rest of the form going with it as it stands.
+  const save = async (over = {}, done = 'تم حفظ إعدادات واتساب') => {
+    const f = { ...form, ...over };
     setSaving(true);
     try {
       await api.saveCompanyWhatsapp(companyId, {
-        channelId: form.channelId ? Number(form.channelId) : null,
-        autoReply: form.autoReply,
-        followup : form.trigger === 'off' ? { trigger: 'off' } : {
-          trigger: form.trigger,
-          templateId: form.templateId ? Number(form.templateId) : null,
-          variables: form.variables,
+        channelId: f.channelId ? Number(f.channelId) : null,
+        inboundChannelId: f.inboundChannelId ? Number(f.inboundChannelId) : null,
+        autoReply: f.autoReply,
+        followup : f.trigger === 'off' ? { trigger: 'off' } : {
+          trigger: f.trigger,
+          templateId: f.templateId ? Number(f.templateId) : null,
+          variables: f.variables,
           headerType: template?.headerFormat && template.headerFormat !== 'text' ? template.headerFormat : null,
-          headerUrl: form.headerUrl,
+          headerUrl: f.headerUrl,
         },
       });
-      push('تم حفظ إعدادات واتساب', 'success');
+      push(done, 'success');
       loadCompany(companyId);
     } catch (e) { push(e.message, 'error'); }
     finally { setSaving(false); }
@@ -156,7 +161,14 @@ export function WhatsappPage() {
                     في LoopChat: الإعدادات ← Integrations ← أضف Webhook بهذا الرابط، واختر حدث «Incoming Message» وقناة واتساب.
                     إيقاف التكامل واستئنافه يُرسَلان تلقائياً: إذا استلم موظف محادثة من LoopChat يتوقف المساعد فيها حتى يعيدها.
                   </p>
-                  <RecentEvents events={overview.recentEvents || []} since={overview.recentSince} onRefresh={refreshOverview} />
+                  <RecentEvents events={overview.recentEvents || []} since={overview.recentSince} onRefresh={refreshOverview}
+                    link={company && form ? {
+                      companyName: company.name,
+                      canLink: !!form.channelId,
+                      linkedId: form.inboundChannelId,
+                      busy: saving,
+                      onLink: (id) => save({ inboundChannelId: id }, `تم ربط القناة #${id} بـ${company.name}. أرسل رسالة واتساب جديدة للتجربة.`),
+                    } : null} />
                 </>
               ) : (
                 <p className="text-[12px] text-rose-700">رابط الخادم العام غير مضبوط (PUBLIC_BASE_URL)، فلا يمكن تكوين الرابط.</p>
@@ -184,6 +196,17 @@ export function WhatsappPage() {
                   <option value={form.channelId}>قناة #{form.channelId}</option>
                 )}
               </select>
+              {form.inboundChannelId ? (
+                <p className="mt-1.5 text-[11.5px] text-ink-500">
+                  الرسائل الواردة تصل من LoopChat باسم القناة <span dir="ltr" className="font-mono">#{form.inboundChannelId}</span>، وهي مربوطة بهذه الشركة، والرد يُرسل من الرقم أعلاه.{' '}
+                  <button type="button" className="text-rose-700 underline disabled:opacity-50" disabled={saving}
+                    onClick={() => save({ inboundChannelId: '' }, 'تم فك ربط قناة الرسائل الواردة')}>فك الربط</button>
+                </p>
+              ) : form.channelId ? (
+                <p className="mt-1.5 text-[11.5px] text-ink-500">
+                  قد يرسل LoopChat الرسائل الواردة برقم قناة غير هذا. إذا لم يرد المساعد، فانظر «آخر ما وصل من LoopChat» أعلاه واربط القناة من هناك.
+                </p>
+              ) : null}
               {channels.find((c) => String(c.id) === String(form.channelId))?.hasActiveBot && (
                 <p className="mt-1.5 text-[11.5px] text-amber-700">في LoopChat بوت مفعّل على هذا الرقم. أوقفه هناك قبل تشغيل رد المساعد، حتى لا يرد الاثنان على العميل.</p>
               )}
@@ -256,7 +279,7 @@ export function WhatsappPage() {
             </div>
 
             <div className="flex justify-end">
-              <Button variant="brand" onClick={save} loading={saving}>حفظ</Button>
+              <Button variant="brand" onClick={() => save()} loading={saving}>حفظ</Button>
             </div>
           </Card>
         )}
@@ -307,8 +330,11 @@ const EVENT_TYPES = {
 };
 
 // Every event LoopChat delivered since the server started, and what became of
-// it: an empty list means LoopChat sent nothing to the address above.
-function RecentEvents({ events, since, onRefresh }) {
+// it: an empty list means LoopChat sent nothing to the address above. An event
+// on a channel no company has can be linked to the company on screen: LoopChat
+// names a number one way when sending and another in its webhook, so a real
+// event is the only place the second id can come from.
+function RecentEvents({ events, since, onRefresh, link }) {
   const [busy, setBusy] = useState(false);
   const refresh = () => { setBusy(true); Promise.resolve(onRefresh()).finally(() => setBusy(false)); };
   return (
@@ -334,6 +360,19 @@ function RecentEvents({ events, since, onRefresh }) {
                 <span className="text-ink-500">القناة <span dir="ltr" className="font-mono">#{e.channelId}</span>{e.channelName ? ` (${e.channelName})` : ''}</span>
               )}
               <span className={cn('basis-full', e.ok ? 'text-emerald-700' : 'text-amber-800')}>{e.text}</span>
+              {e.unmapped && e.channelId && link && (
+                <div className="basis-full">
+                  {String(e.channelId) === String(link.linkedId) ? (
+                    <span className="text-[11.5px] text-emerald-700">مربوطة الآن بـ{link.companyName}، فالرسائل الجديدة عليها تصل إليها.</span>
+                  ) : link.canLink ? (
+                    <Button variant="secondary" size="sm" loading={link.busy} onClick={() => link.onLink(e.channelId)}>
+                      اربطها بـ{link.companyName}
+                    </Button>
+                  ) : (
+                    <span className="text-[11.5px] text-ink-500">اختر رقم واتساب الشركة أدناه أولاً، ثم اربطها.</span>
+                  )}
+                </div>
+              )}
             </li>
           ))}
         </ul>

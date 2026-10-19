@@ -11,7 +11,14 @@
 // Configuration lives in the company's settings and only a superadmin sets it
 // (one LoopChat channel identifies one company, the same way one phone number
 // does):
-//   whatsappChannelId   the LoopChat account channel (a WhatsApp number)
+//   whatsappChannelId   the LoopChat account channel (a WhatsApp number): what
+//                       messages and templates are sent from
+//   whatsappInboundChannelId
+//                       the id LoopChat's webhook names that number by. It is
+//                       NOT the account channel id (a live event on account
+//                       channel 184 arrived as channel 182), and no endpoint
+//                       relates the two, so it is learned from a real event:
+//                       the WhatsApp page lists unlinked events with a button
 //   whatsappAutoReply   answer incoming messages — off until switched on
 //   whatsappFollowup    { trigger: 'request' | 'answered', templateId,
 //                         variables: [{ source, text }], headerType, headerUrl }
@@ -61,20 +68,27 @@ function whatsappNumber(raw) {
   return international && d.length >= 10 && d.length <= 15 ? d : null;
 }
 
+const channelIdOf = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : null; };
+
 function settingsOf(company) {
   const s = company?.settings || {};
-  const channelId = Number(s.whatsappChannelId);
   return {
-    channelId: Number.isInteger(channelId) && channelId > 0 ? channelId : null,
+    channelId: channelIdOf(s.whatsappChannelId),
+    inboundChannelId: channelIdOf(s.whatsappInboundChannelId),
     autoReply: s.whatsappAutoReply === true,
     followup : s.whatsappFollowup && typeof s.whatsappFollowup === 'object' ? s.whatsappFollowup : null,
   };
 }
 
+// The company a channel id belongs to, by either id it goes by: the account
+// channel, or the id webhook events carry for it.
 async function companyForChannel(channelId, deps) {
-  const id = Number(channelId);
-  if (!Number.isInteger(id) || id <= 0) return null;
-  return (await deps.listCompanies()).find((c) => settingsOf(c).channelId === id) || null;
+  const id = channelIdOf(channelId);
+  if (!id) return null;
+  return (await deps.listCompanies()).find((c) => {
+    const s = settingsOf(c);
+    return s.channelId === id || s.inboundChannelId === id;
+  }) || null;
 }
 
 async function record(deps, row) {
@@ -138,9 +152,11 @@ async function handleMessage(evt, deps) {
   const thread = await sql.getWhatsappThread.get(channelId, phone);
   if (thread && Number(thread.ai_paused)) return { skipped: 'taken over by staff' };
 
-  return serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps));
+  return serialize(`${channelId}:${phone}`, () => reply({ company, channelId: cfg.channelId, phone, text, contact: evt.contact }, deps));
 }
 
+// channelId here is the account channel the reply goes out from, whichever id
+// the event that prompted it came in under.
 async function reply({ company, channelId, phone, text, contact }, deps) {
   const { sql, logger } = deps;
   const out = (status, detail, body = null, messageId = null) => record(deps, {
@@ -163,8 +179,9 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
     answer = String((await deps.askReply(company, text, history, vars)).reply || '').trim();
   } catch (e) {
     logger.error('whatsapp: reply failed', { err: e.message, companyId: company.id });
-    await out('failed', e.code === 'NO_ACTIVE_SCENARIO' ? 'لا يوجد سيناريو مفعّل للشركة' : 'تعذّر توليد الرد');
-    return { failed: 'reply' };
+    const noScenario = e.code === 'NO_ACTIVE_SCENARIO';
+    await out('failed', noScenario ? NO_SCENARIO : 'تعذّر توليد الرد');
+    return { failed: noScenario ? 'no scenario' : 'reply' };
   }
   if (!answer) {
     await out('skipped', 'رد فارغ من المساعد');
@@ -263,6 +280,7 @@ function buildVariables(list, { company, requests, deps }) {
 // In words for the WhatsApp page, so a message that got no answer shows why:
 // the channel is not linked, replies are off, an employee has the
 // conversation, LoopChat refused the send, …
+const NO_SCENARIO = 'لا يوجد سيناريو مفعّل للشركة';
 const SKIPPED = {
   'unmapped channel'   : 'رقم واتساب هذا غير مربوط بأي شركة على المنصة',
   'not incoming'       : 'رسالة صادرة من الرقم نفسه، لا يُرد عليها',
@@ -279,8 +297,10 @@ function describeOutcome(r) {
   if (r.duplicate) return { ok: true, text: 'وصلت من قبل، فلم تُعالج مرة ثانية' };
   if (r.paused === true) return { ok: true, text: 'استلم موظف المحادثة، فتوقف المساعد فيها' };
   if (r.paused === false) return { ok: true, text: 'أُعيدت المحادثة إلى المساعد' };
+  if (r.failed === 'no scenario') return { ok: false, text: NO_SCENARIO };
   if (r.failed) return { ok: false, text: r.failed === 'reply' ? 'تعذّر توليد الرد' : `لم يُرسل الرد، وسبب LoopChat: ${r.failed}` };
   const why = r.skipped || r.ignored;
+  if (why === 'unmapped channel') return { ok: false, unmapped: true, text: SKIPPED[why] };
   if (SKIPPED[why]) return { ok: false, text: SKIPPED[why] };
   if (why === 'unknown event') return { ok: false, text: 'وصل طلب بلا نوع حدث، وبياناته على غير الشكل الموثّق' };
   return { ok: false, text: `حدث لا يخص المساعد: ${why}` };
@@ -292,6 +312,11 @@ function validateSettings(body) {
   const b = body || {};
   const channelId = b.channelId === null || b.channelId === '' || b.channelId === undefined ? null : Number(b.channelId);
   if (channelId !== null && (!Number.isInteger(channelId) || channelId <= 0)) return { error: 'رقم قناة واتساب غير صالح' };
+  const inbound = b.inboundChannelId === null || b.inboundChannelId === '' || b.inboundChannelId === undefined ? null : channelIdOf(b.inboundChannelId);
+  if (inbound === null && b.inboundChannelId != null && b.inboundChannelId !== '') return { error: 'رقم قناة الرسائل الواردة غير صالح' };
+  // A reply goes out from the account channel, so an incoming channel is
+  // linked only alongside one.
+  if (inbound && !channelId) return { error: 'اختر رقم واتساب الشركة أولاً، فالرد يُرسل منه' };
   const f = b.followup || {};
   const trigger = f.trigger || 'off';
   if (trigger !== 'off' && !TRIGGERS[trigger]) return { error: 'توقيت رسالة المتابعة غير معروف' };
@@ -312,6 +337,7 @@ function validateSettings(body) {
   return {
     settings: {
       whatsappChannelId: channelId,
+      whatsappInboundChannelId: inbound,
       whatsappAutoReply: b.autoReply === true && !!channelId,
       whatsappFollowup : followup,
     },

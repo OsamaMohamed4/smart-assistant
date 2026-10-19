@@ -2205,11 +2205,12 @@ app.get('/api/whatsapp/overview', async (req, res) => {
     recentEvents: loopchatRecent, recentSince: LOOPCHAT_STARTED_AT,
   };
   if (out.configured) {
-    try {
-      [out.channels, out.templates] = await Promise.all([loopchat.listChannels(), loopchat.listTemplates()]);
-    } catch (e) {
-      out.error = loopchat.errText(e);
-    }
+    // Apart, so a slow template list does not also hide the numbers.
+    const [channels, templates] = await Promise.allSettled([loopchat.listChannels(), loopchat.listTemplates()]);
+    if (channels.status === 'fulfilled') out.channels = channels.value;
+    if (templates.status === 'fulfilled') out.templates = templates.value;
+    const failed = channels.status === 'rejected' ? channels.reason : templates.status === 'rejected' ? templates.reason : null;
+    if (failed) out.error = loopchat.errText(failed);
   }
   res.json(out);
 });
@@ -2221,7 +2222,7 @@ app.get('/api/companies/:id/whatsapp', requireCompanyAdmin, async (req, res) => 
   const messages = (await sql.listWhatsappMessages.all(c.id, 40)).map((m) => ({
     ...m, contact_phone: m.contact_phone ? `+${m.contact_phone}` : null,
   }));
-  res.json({ channelId: s.channelId, autoReply: s.autoReply, followup: s.followup, messages });
+  res.json({ channelId: s.channelId, inboundChannelId: s.inboundChannelId, autoReply: s.autoReply, followup: s.followup, messages });
 });
 
 app.put('/api/companies/:id/whatsapp', requireCompanyAdmin, async (req, res) => {
@@ -2230,11 +2231,12 @@ app.put('/api/companies/:id/whatsapp', requireCompanyAdmin, async (req, res) => 
   const v = whatsapp.validateSettings(req.body);
   if (v.error) return res.status(400).json({ error: v.error });
   // One channel, one company: the channel is how an incoming message finds
-  // its tenant, exactly as a phone number is for a call.
-  if (v.settings.whatsappChannelId) {
-    const other = await whatsapp.companyForChannel(v.settings.whatsappChannelId, { listCompanies: listCompaniesFull });
+  // its tenant, exactly as a phone number is for a call. Either id counts.
+  for (const id of [v.settings.whatsappChannelId, v.settings.whatsappInboundChannelId]) {
+    if (!id) continue;
+    const other = await whatsapp.companyForChannel(id, { listCompanies: listCompaniesFull });
     if (other && other.id !== row.id) {
-      return res.status(409).json({ error: `قناة واتساب هذه مربوطة بشركة أخرى: ${other.name}` });
+      return res.status(409).json({ error: `قناة واتساب #${id} مربوطة بشركة أخرى: ${other.name}` });
     }
   }
   let existing = {};
@@ -2243,11 +2245,12 @@ app.put('/api/companies/:id/whatsapp', requireCompanyAdmin, async (req, res) => 
   await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify(merged) });
   invalidateCache();
   audit(req, 'company.whatsapp', `companies/${row.id}`, {
-    channelId: v.settings.whatsappChannelId, autoReply: v.settings.whatsappAutoReply,
+    channelId: v.settings.whatsappChannelId, inboundChannelId: v.settings.whatsappInboundChannelId,
+    autoReply: v.settings.whatsappAutoReply,
     followup: v.settings.whatsappFollowup ? v.settings.whatsappFollowup.trigger : 'off',
   });
   const s = whatsapp.settingsOf({ settings: merged });
-  res.json({ channelId: s.channelId, autoReply: s.autoReply, followup: s.followup });
+  res.json({ channelId: s.channelId, inboundChannelId: s.inboundChannelId, autoReply: s.autoReply, followup: s.followup });
 });
 
 // ─── Invoices ────────────────────────────────────────────────────

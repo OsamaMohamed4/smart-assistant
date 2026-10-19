@@ -866,6 +866,14 @@ if (!db.prepare('SELECT 1 FROM schema_migrations WHERE id = 45').get()) {
   })();
 }
 
+// Migration 46: each company's own LoopChat Integration Token. One token
+// reaches one LoopChat account, and companies keep separate accounts. A column
+// rather than a settings key, because settings are sent to the browser.
+// Postgres: db-pg-schema.js + lib/migrations-pg.js.
+if (!hasColumn('companies', 'loopchat_token')) {
+  runMigration(46, 'companies_add_loopchat_token', 'ALTER TABLE companies ADD COLUMN loopchat_token TEXT');
+}
+
 // ─── Tenant-safety: one company per phone number ──────────────────
 // A DID and an imported provider number each identify exactly ONE tenant.
 // Inbound calls are attributed by those values (services/voice resolves a call
@@ -1247,6 +1255,10 @@ const sql = {
   `),
   updateCompanySettings: db.prepare(
     `UPDATE companies SET settings = @settings, updated_at = datetime('now') WHERE id = @id`
+  ),
+  getCompanyLoopchatToken: db.prepare('SELECT loopchat_token FROM companies WHERE id = ?'),
+  setCompanyLoopchatToken: db.prepare(
+    `UPDATE companies SET loopchat_token = @token, updated_at = datetime('now') WHERE id = @id`
   ),
   updateCompany      : db.prepare(`
     UPDATE companies SET

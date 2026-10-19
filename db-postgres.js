@@ -214,6 +214,11 @@ const sql = {
     `UPDATE companies SET settings = $1, updated_at = ${NOW} WHERE id = $2`,
     ['settings', 'id'],
   ),
+  getCompanyLoopchatToken: stmt('SELECT loopchat_token FROM companies WHERE id = $1'),
+  setCompanyLoopchatToken: stmt(
+    `UPDATE companies SET loopchat_token = $1, updated_at = ${NOW} WHERE id = $2`,
+    ['token', 'id'],
+  ),
   updateCompany: stmt(
     `UPDATE companies SET
        name = $1, language = $2, voice_id = $3, phone_number = $4,

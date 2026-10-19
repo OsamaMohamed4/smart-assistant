@@ -52,10 +52,12 @@ export const api = {
   invoicePreview    : (companyId, month) => request(`/api/companies/${companyId}/invoices/preview?month=${encodeURIComponent(month)}`),
   issueInvoice      : (companyId, month) => request(`/api/companies/${companyId}/invoices`, { method: 'POST', body: JSON.stringify({ month }) }),
   resendInvoice     : (invoiceId) => request(`/api/invoices/${invoiceId}/send`, { method: 'POST', body: '{}' }),
-  // WhatsApp (superadmin): the LoopChat account as it stands, and one company's settings.
-  whatsappOverview  : () => request('/api/whatsapp/overview'),
+  // WhatsApp (superadmin): the company's LoopChat account as it stands, its
+  // settings, and its own LoopChat token (write-only).
+  whatsappOverview  : (companyId) => request(`/api/whatsapp/overview?companyId=${encodeURIComponent(companyId || '')}`),
   companyWhatsapp   : (companyId) => request(`/api/companies/${companyId}/whatsapp`),
   saveCompanyWhatsapp: (companyId, body) => request(`/api/companies/${companyId}/whatsapp`, { method: 'PUT', body: JSON.stringify(body) }),
+  saveCompanyWhatsappToken: (companyId, token) => request(`/api/companies/${companyId}/whatsapp/token`, { method: 'PUT', body: JSON.stringify({ token }) }),
   // Forgotten password: request a link, check it, set the new password.
   forgotPassword    : (email) => request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
   checkResetLink    : (token) => request(`/api/auth/reset-password?token=${encodeURIComponent(token)}`),

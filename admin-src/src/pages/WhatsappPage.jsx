@@ -43,11 +43,15 @@ export function WhatsappPage() {
   const [form, setForm]           = useState(null);
   const [messages, setMessages]   = useState([]);
   const [saving, setSaving]       = useState(false);
+  const [hasOwnToken, setHasOwnToken] = useState(false);
 
-  const refreshOverview = () => api.whatsappOverview().then(setOverview).catch((e) => push(e.message, 'error'));
+  // The overview is the selected company's LoopChat account: its numbers and
+  // templates come through its own token when it has one.
+  const refreshOverview = (id = companyId) => (id
+    ? api.whatsappOverview(id).then(setOverview).catch((e) => push(e.message, 'error'))
+    : Promise.resolve());
 
   useEffect(() => {
-    refreshOverview();
     api.listCompanies().then((cs) => {
       setCompanies(cs || []);
       setCompanyId((cur) => cur || cs?.[0]?.id || null);
@@ -57,17 +61,22 @@ export function WhatsappPage() {
   const loadCompany = (id) => api.companyWhatsapp(id).then((r) => {
     setForm({
       channelId: r.channelId || '',
-      inboundChannelId: r.inboundChannelId || '',
       autoReply: !!r.autoReply,
       trigger  : r.followup?.trigger || 'off',
       templateId: r.followup?.templateId || '',
       variables: r.followup?.variables || [],
       headerUrl: r.followup?.headerUrl || '',
     });
+    setHasOwnToken(!!r.hasOwnToken);
     setMessages(r.messages || []);
   }).catch((e) => push(e.message, 'error'));
 
-  useEffect(() => { if (companyId) loadCompany(companyId); }, [companyId]);
+  useEffect(() => {
+    if (!companyId) return;
+    setOverview(null);
+    refreshOverview(companyId);
+    loadCompany(companyId);
+  }, [companyId]);
 
   const channels = overview?.channels || [];
   const templates = useMemo(
@@ -89,28 +98,35 @@ export function WhatsappPage() {
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
   const setVar = (i, k, v) => setForm((f) => ({ ...f, variables: f.variables.map((x, j) => (j === i ? { ...x, [k]: v } : x)) }));
 
-  // `over` changes a field just for this save (linking or unlinking the
-  // incoming channel), the rest of the form going with it as it stands.
-  const save = async (over = {}, done = 'تم حفظ إعدادات واتساب') => {
-    const f = { ...form, ...over };
+  const save = async () => {
     setSaving(true);
     try {
       await api.saveCompanyWhatsapp(companyId, {
-        channelId: f.channelId ? Number(f.channelId) : null,
-        inboundChannelId: f.inboundChannelId ? Number(f.inboundChannelId) : null,
-        autoReply: f.autoReply,
-        followup : f.trigger === 'off' ? { trigger: 'off' } : {
-          trigger: f.trigger,
-          templateId: f.templateId ? Number(f.templateId) : null,
-          variables: f.variables,
+        channelId: form.channelId ? Number(form.channelId) : null,
+        autoReply: form.autoReply,
+        followup : form.trigger === 'off' ? { trigger: 'off' } : {
+          trigger: form.trigger,
+          templateId: form.templateId ? Number(form.templateId) : null,
+          variables: form.variables,
           headerType: template?.headerFormat && template.headerFormat !== 'text' ? template.headerFormat : null,
-          headerUrl: f.headerUrl,
+          headerUrl: form.headerUrl,
         },
       });
-      push(done, 'success');
+      push('تم حفظ إعدادات واتساب', 'success');
       loadCompany(companyId);
     } catch (e) { push(e.message, 'error'); }
     finally { setSaving(false); }
+  };
+
+  // The token is checked against LoopChat before it is kept; the numbers it
+  // reaches then fill «رقم واتساب الشركة».
+  const saveToken = async (token) => {
+    const r = await api.saveCompanyWhatsappToken(companyId, token);
+    setHasOwnToken(r.hasOwnToken);
+    push(r.hasOwnToken
+      ? `تم حفظ مفتاح الشركة. أرقام واتساب في حسابها: ${r.channels.map((c) => c.phoneNumber || c.name).join('، ') || 'لا يوجد'}`
+      : 'أُزيل مفتاح الشركة، وتعود إلى مفتاح الخادم', 'success');
+    await refreshOverview(companyId);
   };
 
   const copy = (text) => navigator.clipboard.writeText(text).then(() => push('تم نسخ الرابط', 'success'), () => {});
@@ -137,13 +153,15 @@ export function WhatsappPage() {
             <div className="text-[13px] text-ink-400">جارٍ التحقق من الربط…</div>
           ) : !overview.configured ? (
             <Notice tone="amber" icon={AlertTriangle}>
-              مفتاح LoopChat غير مضبوط على الخادم. أضف <span dir="ltr" className="font-mono">LOOPCHAT_API_TOKEN</span> في متغيرات Railway ثم أعد النشر.
+              لا يوجد مفتاح LoopChat لهذه الشركة ولا على الخادم. أدخل مفتاح حساب الشركة أدناه، أو أضف <span dir="ltr" className="font-mono">LOOPCHAT_API_TOKEN</span> في متغيرات Railway.
             </Notice>
           ) : overview.error ? (
             <Notice tone="rose" icon={AlertTriangle}>تعذّر الوصول إلى LoopChat: {overview.error}</Notice>
           ) : (
             <Notice tone="emerald" icon={CheckCircle2}>
-              متصل بـ LoopChat · أرقام واتساب: {channels.length} · قوالب معتمدة: {(overview.templates || []).filter(isApproved).length}
+              متصل بـ LoopChat ({overview.tokenSource === 'company' ? 'بمفتاح الشركة' : 'بمفتاح الخادم'})
+              {' · '}أرقام واتساب: {channels.map((c) => c.phoneNumber || c.name).join('، ') || 'لا يوجد'}
+              {' · '}قوالب معتمدة: {(overview.templates || []).filter(isApproved).length}
             </Notice>
           )}
 
@@ -161,14 +179,7 @@ export function WhatsappPage() {
                     في LoopChat: الإعدادات ← Integrations ← أضف Webhook بهذا الرابط، واختر حدث «Incoming Message» وقناة واتساب.
                     إيقاف التكامل واستئنافه يُرسَلان تلقائياً: إذا استلم موظف محادثة من LoopChat يتوقف المساعد فيها حتى يعيدها.
                   </p>
-                  <RecentEvents events={overview.recentEvents || []} since={overview.recentSince} onRefresh={refreshOverview}
-                    link={company && form ? {
-                      companyName: company.name,
-                      canLink: !!form.channelId,
-                      linkedId: form.inboundChannelId,
-                      busy: saving,
-                      onLink: (id) => save({ inboundChannelId: id }, `تم ربط القناة #${id} بـ${company.name}. أرسل رسالة واتساب جديدة للتجربة.`),
-                    } : null} />
+                  <RecentEvents events={overview.recentEvents || []} since={overview.recentSince} onRefresh={() => refreshOverview()} />
                 </>
               ) : (
                 <p className="text-[12px] text-rose-700">رابط الخادم العام غير مضبوط (PUBLIC_BASE_URL)، فلا يمكن تكوين الرابط.</p>
@@ -181,6 +192,8 @@ export function WhatsappPage() {
         {company && form && (
           <Card className="p-5 space-y-5">
             <div className="text-[14px] font-semibold text-ink-900">{company.name}</div>
+
+            <TokenField key={companyId} hasOwnToken={hasOwnToken} onSave={saveToken} />
 
             <div>
               <Label>رقم واتساب الشركة</Label>
@@ -196,18 +209,11 @@ export function WhatsappPage() {
                   <option value={form.channelId}>قناة #{form.channelId}</option>
                 )}
               </select>
-              {form.inboundChannelId ? (
-                <p className="mt-1.5 text-[11.5px] text-ink-500">
-                  الرسائل الواردة تصل من LoopChat باسم القناة <span dir="ltr" className="font-mono">#{form.inboundChannelId}</span>، وهي مربوطة بهذه الشركة.
-                  يُرسل الرد من القناة التي كتب عليها العميل، وإن لم يقبلها LoopChat فمن الرقم أعلاه.{' '}
-                  <button type="button" className="text-rose-700 underline disabled:opacity-50" disabled={saving}
-                    onClick={() => save({ inboundChannelId: '' }, 'تم فك ربط قناة الرسائل الواردة')}>فك الربط</button>
+              {form.channelId && overview && !overview.error && !channels.some((c) => String(c.id) === String(form.channelId)) && (
+                <p className="mt-1.5 text-[11.5px] text-rose-700">
+                  الرقم المحفوظ (قناة #{form.channelId}) ليس في حساب LoopChat الذي يصل إليه المفتاح الحالي، فلن تُرسل منه الردود. اختر رقم الشركة من القائمة، أو أدخل مفتاح حسابها أعلاه.
                 </p>
-              ) : form.channelId ? (
-                <p className="mt-1.5 text-[11.5px] text-ink-500">
-                  قد يرسل LoopChat الرسائل الواردة برقم قناة غير هذا. إذا لم يرد المساعد، فانظر «آخر ما وصل من LoopChat» أعلاه واربط القناة من هناك.
-                </p>
-              ) : null}
+              )}
               {channels.find((c) => String(c.id) === String(form.channelId))?.hasActiveBot && (
                 <p className="mt-1.5 text-[11.5px] text-amber-700">في LoopChat بوت مفعّل على هذا الرقم. أوقفه هناك قبل تشغيل رد المساعد، حتى لا يرد الاثنان على العميل.</p>
               )}
@@ -331,11 +337,10 @@ const EVENT_TYPES = {
 };
 
 // Every event LoopChat delivered since the server started, and what became of
-// it: an empty list means LoopChat sent nothing to the address above. An event
-// on a channel no company has can be linked to the company on screen: LoopChat
-// names a number one way when sending and another in its webhook, so a real
-// event is the only place the second id can come from.
-function RecentEvents({ events, since, onRefresh, link }) {
+// it: an empty list means LoopChat sent nothing to the address above. Events
+// from every LoopChat account that has the URL arrive here, whichever company
+// is on screen.
+function RecentEvents({ events, since, onRefresh }) {
   const [busy, setBusy] = useState(false);
   const refresh = () => { setBusy(true); Promise.resolve(onRefresh()).finally(() => setBusy(false)); };
   return (
@@ -361,22 +366,51 @@ function RecentEvents({ events, since, onRefresh, link }) {
                 <span className="text-ink-500">القناة <span dir="ltr" className="font-mono">#{e.channelId}</span>{e.channelName ? ` (${e.channelName})` : ''}</span>
               )}
               <span className={cn('basis-full', e.ok ? 'text-emerald-700' : 'text-amber-800')}>{e.text}</span>
-              {e.unmapped && e.channelId && link && (
-                <div className="basis-full">
-                  {String(e.channelId) === String(link.linkedId) ? (
-                    <span className="text-[11.5px] text-emerald-700">مربوطة الآن بـ{link.companyName}، فالرسائل الجديدة عليها تصل إليها.</span>
-                  ) : link.canLink ? (
-                    <Button variant="secondary" size="sm" loading={link.busy} onClick={() => link.onLink(e.channelId)}>
-                      اربطها بـ{link.companyName}
-                    </Button>
-                  ) : (
-                    <span className="text-[11.5px] text-ink-500">اختر رقم واتساب الشركة أدناه أولاً، ثم اربطها.</span>
-                  )}
-                </div>
+              {e.unmapped && (
+                <span className="basis-full text-[11.5px] text-ink-500">
+                  إن كان رقم إحدى الشركات: اخترها من أعلى الصفحة، وأدخل مفتاح حسابها في LoopChat إن كان حساباً آخر، ثم اختر رقمها في «رقم واتساب الشركة».
+                </span>
               )}
             </li>
           ))}
         </ul>
+      )}
+    </div>
+  );
+}
+
+// The company's own LoopChat Integration Token. One token reaches one LoopChat
+// account, so a company with its own account needs its own. Write-only: the
+// screen only knows whether one is set.
+function TokenField({ hasOwnToken, onSave }) {
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const { push } = useToast();
+  const run = async (token) => {
+    setBusy(true);
+    try { await onSave(token); setValue(''); } catch (e) { push(e.message, 'error'); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="rounded-xl border border-ink-100 px-4 py-3 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <Label>مفتاح حساب الشركة في LoopChat</Label>
+        <span className={cn('text-[11.5px] font-semibold', hasOwnToken ? 'text-emerald-700' : 'text-ink-500')}>
+          {hasOwnToken ? 'للشركة مفتاح خاص' : 'تستخدم مفتاح الخادم'}
+        </span>
+      </div>
+      <p className="text-[11.5px] text-ink-500 leading-relaxed">
+        كل حساب في LoopChat له مفتاحه، ولا يصل المفتاح إلا إلى أرقام حسابه. إذا كان للشركة حساب مستقل، فافتح حسابها في LoopChat ← الإعدادات ← Integrations، وانسخ منه الـ Integration Token إلى هنا. يُتحقق منه قبل الحفظ، ولا يُعرض بعده.
+      </p>
+      <div className="flex gap-2">
+        <input type="password" autoComplete="off" value={value} onChange={(e) => setValue(e.target.value)} dir="ltr"
+          placeholder={hasOwnToken ? 'لاستبدال المفتاح الحالي، الصق مفتاحاً جديداً' : 'الصق Integration Token'}
+          className="flex-1 h-10 px-3 rounded-xl border border-ink-200 bg-white font-mono text-[12px] focus-ring" />
+        <Button variant="secondary" disabled={!value.trim()} loading={busy} onClick={() => run(value.trim())}>حفظ المفتاح</Button>
+      </div>
+      {hasOwnToken && (
+        <button type="button" className="text-[11.5px] text-rose-700 underline disabled:opacity-50" disabled={busy}
+          onClick={() => run('')}>إزالة مفتاح الشركة والعودة إلى مفتاح الخادم</button>
       )}
     </div>
   );

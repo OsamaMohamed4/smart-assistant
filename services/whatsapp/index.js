@@ -11,17 +11,17 @@
 // Configuration lives in the company's settings and only a superadmin sets it
 // (one LoopChat channel identifies one company, the same way one phone number
 // does):
-//   whatsappChannelId   the LoopChat account channel (a WhatsApp number): what
-//                       messages and templates are sent from
-//   whatsappInboundChannelId
-//                       the id LoopChat's webhook names that number by. It is
-//                       NOT the account channel id (a live event on account
-//                       channel 184 arrived as channel 182), and no endpoint
-//                       relates the two, so it is learned from a real event:
-//                       the WhatsApp page lists unlinked events with a button
+//   whatsappChannelId   the LoopChat account channel (a WhatsApp number). The
+//                       webhook's channel.id is this same id, and the ids run
+//                       across LoopChat accounts (Wakan's number is 182 in its
+//                       account, Maheer's 184 in another)
 //   whatsappAutoReply   answer incoming messages — off until switched on
 //   whatsappFollowup    { trigger: 'request' | 'answered', templateId,
 //                         variables: [{ source, text }], headerType, headerUrl }
+//
+// Which LoopChat account a company's number lives in is its token's:
+// companies.loopchat_token, or the server's when it has none. A send with another account's token is refused or, worse, goes out
+// from that account's number -- so every call here names the company's token.
 //
 // Nothing here throws at the webhook or the call pipeline: every outcome,
 // including "did not send, and why", is a row in whatsapp_messages.
@@ -74,21 +74,22 @@ function settingsOf(company) {
   const s = company?.settings || {};
   return {
     channelId: channelIdOf(s.whatsappChannelId),
-    inboundChannelId: channelIdOf(s.whatsappInboundChannelId),
     autoReply: s.whatsappAutoReply === true,
     followup : s.whatsappFollowup && typeof s.whatsappFollowup === 'object' ? s.whatsappFollowup : null,
   };
 }
 
-// The company a channel id belongs to, by either id it goes by: the account
-// channel, or the id webhook events carry for it.
 async function companyForChannel(channelId, deps) {
   const id = channelIdOf(channelId);
   if (!id) return null;
-  return (await deps.listCompanies()).find((c) => {
-    const s = settingsOf(c);
-    return s.channelId === id || s.inboundChannelId === id;
-  }) || null;
+  return (await deps.listCompanies()).find((c) => settingsOf(c).channelId === id) || null;
+}
+
+// The company's own LoopChat token, or null for the server's. Read here rather
+// than passed in, so no caller can forget it.
+async function tokenOf(company, deps) {
+  const row = await deps.sql.getCompanyLoopchatToken.get(company.id);
+  return deps.decryptField(row?.loopchat_token) || null;
 }
 
 async function record(deps, row) {
@@ -152,23 +153,14 @@ async function handleMessage(evt, deps) {
   const thread = await sql.getWhatsappThread.get(channelId, phone);
   if (thread && Number(thread.ai_paused)) return { skipped: 'taken over by staff' };
 
-  return serialize(`${channelId}:${phone}`, () => reply({
-    company, from: [channelId, cfg.channelId], phone, text, contact: evt.contact,
-  }, deps));
+  return serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps));
 }
 
-// `from` is where the reply may go out from, in order: the channel the message
-// came in on, then the company's number (its account channel). They can be
-// two ids for one account -- a live message on account channel 184 arrived as
-// 182 -- and LoopChat keeps the 24-hour window where the customer wrote: sent
-// from 184, that reply was refused as outside the window a minute after the
-// customer's message. Whether the send API takes the webhook's id is not
-// documented, so it is tried first and the next used if LoopChat refuses it.
-// Nothing goes out on a refusal, so trying the next never sends twice.
-async function reply({ company, from, phone, text, contact }, deps) {
+// The reply goes out from the number the customer wrote to -- the company's
+// own -- through the company's own LoopChat account.
+async function reply({ company, channelId, phone, text, contact }, deps) {
   const { sql, logger } = deps;
-  const channels = [...new Set(from.filter(Boolean))];
-  const out = (status, detail, body = null, messageId = null, channelId = channels.at(-1)) => record(deps, {
+  const out = (status, detail, body = null, messageId = null) => record(deps, {
     company_id: company.id, channel_id: channelId, contact_phone: phone, direction: 'out', kind: 'text',
     body, status, detail, provider_message_id: messageId != null ? String(messageId) : null,
   });
@@ -197,16 +189,9 @@ async function reply({ company, from, phone, text, contact }, deps) {
     return { skipped: 'empty reply' };
   }
 
-  const attempts = [];
-  let sent = null;
-  for (const channelId of channels) {
-    sent = await loopchat.sendText({ channelId, phone, content: answer });
-    attempts.push({ channelId, sent });
-    if (sent.ok) break;
-  }
-  const sentFrom = sent.ok ? attempts.at(-1).channelId : null;
-  const reason = sent.ok ? null : refusal(attempts, contact);
-  await out(sent.ok ? 'sent' : 'failed', reason, answer, sent.messageId, sentFrom || channels.at(-1));
+  const sent = await loopchat.sendText({ token: await tokenOf(company, deps), channelId, phone, content: answer });
+  const reason = sent.ok ? null : refusal(sent, contact);
+  await out(sent.ok ? 'sent' : 'failed', reason, answer, sent.messageId);
   if (!sent.ok) logger.warn('whatsapp: reply not sent', { companyId: company.id, reason });
   // The conversation the next turn resumes from, and what the dashboard
   // shows. A reply that never reached the customer is kept out of it, so the
@@ -217,18 +202,16 @@ async function reply({ company, from, phone, text, contact }, deps) {
       assistant_reply: sent.ok ? answer : '', channel: 'whatsapp', latency_ms: Date.now() - t0, user_id: null,
     });
   } catch (e) { logger.error('whatsapp: chat insert failed', { err: e.message }); }
-  return sent.ok ? { sent: true, from: sentFrom } : { failed: reason };
+  return sent.ok ? { sent: true } : { failed: reason };
 }
 
-// LoopChat's reason for each channel tried. It finds the customer by number:
-// when the contact it settled on is not the one who wrote, the number is what
-// went wrong, not the window, and the reason says so.
-function refusal(attempts, contact) {
-  let text = attempts.length > 1
-    ? attempts.map((a) => `#${a.channelId}: ${a.sent.reason}`).join(' | ')
-    : attempts[0].sent.reason;
+// LoopChat's reason for not sending. It finds the customer by number: when
+// the contact it settled on is not the one who wrote, the number is what went
+// wrong, not the window, and the reason says so.
+function refusal(sent, contact) {
+  let text = String(sent.reason || 'not sent');
   const wrote = contact?.id != null ? String(contact.id) : null;
-  const matched = attempts.map((a) => a.sent.contactId).find((id) => id != null);
+  const matched = sent.contactId;
   if (wrote && matched != null && String(matched) !== wrote) {
     text += ` (طابق LoopChat الرقم على جهة الاتصال #${matched}، والتي راسلت هي #${wrote})`;
   }
@@ -254,9 +237,9 @@ async function afterCall(company, call, deps) {
   const { sql, logger } = deps;
   const cfg = settingsOf(company);
   const f = cfg.followup;
-  if (!cfg.channelId || !f || !TRIGGERS[f.trigger] || !Number(f.templateId) || !loopchat.isConfigured()) {
-    return { skipped: 'not configured' };
-  }
+  if (!cfg.channelId || !f || !TRIGGERS[f.trigger] || !Number(f.templateId)) return { skipped: 'not configured' };
+  const token = await tokenOf(company, deps);
+  if (!token && !loopchat.isConfigured()) return { skipped: 'not configured' };
   const at = Date.parse(`${String(call.created_at || call.started_at || '').replace(' ', 'T')}Z`);
   if (!Number.isFinite(at) || Date.now() - at > FOLLOWUP_MAX_AGE_MS) return { skipped: 'call too old' };
 
@@ -287,7 +270,7 @@ async function afterCall(company, call, deps) {
   }
   const variables = buildVariables(f.variables, { company, requests, deps });
   const header = f.headerType && f.headerUrl ? { type: f.headerType, url: f.headerUrl } : null;
-  const sent = await loopchat.sendTemplate({ channelId: cfg.channelId, templateId: f.templateId, phone, variables, header });
+  const sent = await loopchat.sendTemplate({ token, channelId: cfg.channelId, templateId: f.templateId, phone, variables, header });
   await finish(sent.ok ? 'sent' : 'failed', sent.reason, sent.messageId);
   if (!sent.ok) logger.warn('whatsapp: follow-up not sent', { companyId: company.id, callId: call.id, reason: sent.reason });
   return sent.ok ? { sent: true } : { failed: sent.reason };
@@ -326,7 +309,7 @@ const SKIPPED = {
 };
 function describeOutcome(r) {
   if (!r) return { ok: false, text: 'تعذّرت معالجة الحدث، والتفاصيل في سجل الخادم' };
-  if (r.sent) return { ok: true, text: `ردّ المساعد ووصل الرد إلى LoopChat${r.from ? `، وأُرسل من القناة #${r.from}` : ''}` };
+  if (r.sent) return { ok: true, text: 'ردّ المساعد ووصل الرد إلى LoopChat' };
   if (r.duplicate) return { ok: true, text: 'وصلت من قبل، فلم تُعالج مرة ثانية' };
   if (r.paused === true) return { ok: true, text: 'استلم موظف المحادثة، فتوقف المساعد فيها' };
   if (r.paused === false) return { ok: true, text: 'أُعيدت المحادثة إلى المساعد' };
@@ -345,11 +328,6 @@ function validateSettings(body) {
   const b = body || {};
   const channelId = b.channelId === null || b.channelId === '' || b.channelId === undefined ? null : Number(b.channelId);
   if (channelId !== null && (!Number.isInteger(channelId) || channelId <= 0)) return { error: 'رقم قناة واتساب غير صالح' };
-  const inbound = b.inboundChannelId === null || b.inboundChannelId === '' || b.inboundChannelId === undefined ? null : channelIdOf(b.inboundChannelId);
-  if (inbound === null && b.inboundChannelId != null && b.inboundChannelId !== '') return { error: 'رقم قناة الرسائل الواردة غير صالح' };
-  // A reply goes out from the account channel, so an incoming channel is
-  // linked only alongside one.
-  if (inbound && !channelId) return { error: 'اختر رقم واتساب الشركة أولاً، فالرد يُرسل منه' };
   const f = b.followup || {};
   const trigger = f.trigger || 'off';
   if (trigger !== 'off' && !TRIGGERS[trigger]) return { error: 'توقيت رسالة المتابعة غير معروف' };
@@ -370,7 +348,6 @@ function validateSettings(body) {
   return {
     settings: {
       whatsappChannelId: channelId,
-      whatsappInboundChannelId: inbound,
       whatsappAutoReply: b.autoReply === true && !!channelId,
       whatsappFollowup : followup,
     },

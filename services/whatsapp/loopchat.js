@@ -7,9 +7,11 @@
 //   POST /v2/integrations/messages/send       a free-form message (24-hour window)
 //   POST /v2/integrations/templates/send      a template (any time)
 //
-// Authentication is one Integration Token, generated in LoopChat under
-// Settings → Integrations and kept in LOOPCHAT_API_TOKEN. It never leaves the
-// server.
+// Authentication is an Integration Token, generated in LoopChat under
+// Settings → Integrations. One token reaches ONE LoopChat account, and each
+// company may keep its own account (Wakan and Maheer do): every call here
+// takes the token of the account it is meant for, falling back to
+// LOOPCHAT_API_TOKEN, the server's own. Tokens never leave the server.
 //
 // A send can be accepted (HTTP 202) and still not go out: the body then says
 // status "failed" with a reason ("The 24-hour window is closed…", "Insufficient
@@ -20,15 +22,16 @@ const axios = require('axios');
 const BASE = (process.env.LOOPCHAT_API_BASE || 'https://developer.loopchat.sa/api').replace(/\/+$/, '');
 const TIMEOUT_MS = 15_000;
 
-const token = () => String(process.env.LOOPCHAT_API_TOKEN || '').trim();
-const isConfigured = () => !!token();
+const serverToken = () => String(process.env.LOOPCHAT_API_TOKEN || '').trim();
+const isConfigured = () => !!serverToken();
 
-function client() {
-  if (!isConfigured()) throw Object.assign(new Error('LOOPCHAT_API_TOKEN غير مضبوط على الخادم'), { code: 'NOT_CONFIGURED' });
+function client(token) {
+  const t = String(token || '').trim() || serverToken();
+  if (!t) throw Object.assign(new Error('لا يوجد مفتاح LoopChat لهذه الشركة ولا على الخادم'), { code: 'NOT_CONFIGURED' });
   return axios.create({
     baseURL: BASE,
     timeout: TIMEOUT_MS,
-    headers: { Authorization: `Bearer ${token()}`, Accept: 'application/json', 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${t}`, Accept: 'application/json', 'Content-Type': 'application/json' },
   });
 }
 
@@ -46,8 +49,8 @@ function errText(e) {
 }
 
 // LoopChat's lists are paginated at up to 100 per page.
-async function listAll(path, key) {
-  const http = client();
+async function listAll(path, key, token) {
+  const http = client(token);
   const out = [];
   for (let page = 1; page <= 20; page++) {
     const r = await http.get(path, { params: { per_page: 100, page } });
@@ -58,16 +61,16 @@ async function listAll(path, key) {
   return out;
 }
 
-async function listChannels() {
-  return (await listAll('/v2/integrations/account-channels', 'account_channels')).map((c) => ({
+async function listChannels(token) {
+  return (await listAll('/v2/integrations/account-channels', 'account_channels', token)).map((c) => ({
     id: Number(c.id), name: c.name || '', phoneNumber: c.phone_number || null, hasActiveBot: !!c.has_active_bot,
   }));
 }
 
 // Only what the platform needs to pick and fill a template. `variables` is
 // the count of {{n}} placeholders in the body, which is what a send must fill.
-async function listTemplates() {
-  return (await listAll('/v2/integrations/templates', 'templates')).map((t) => ({
+async function listTemplates(token) {
+  return (await listAll('/v2/integrations/templates', 'templates', token)).map((t) => ({
     id: Number(t.id),
     channelId: Number(t.channel_id),
     name: t.template_name || '',
@@ -96,9 +99,9 @@ function outcome(data) {
   };
 }
 
-async function sendText({ channelId, phone, content }) {
+async function sendText({ token, channelId, phone, content }) {
   try {
-    const r = await client().post('/v2/integrations/messages/send', {
+    const r = await client(token).post('/v2/integrations/messages/send', {
       account_channel_id: Number(channelId),
       phone_number: String(phone).replace(/\D/g, ''),       // documented as digits: 96650…
       type: 'text',
@@ -112,7 +115,7 @@ async function sendText({ channelId, phone, content }) {
 
 // `variables` is { "1": "…", "2": "…" } — keyed by placeholder number, which
 // is how the provider names a missing one ("This template requires variable '2'").
-async function sendTemplate({ channelId, templateId, phone, variables, header }) {
+async function sendTemplate({ token, channelId, templateId, phone, variables, header }) {
   try {
     const body = {
       channel_id: Number(channelId),
@@ -121,7 +124,7 @@ async function sendTemplate({ channelId, templateId, phone, variables, header })
     };
     if (variables && Object.keys(variables).length) body.variables = variables;
     if (header?.type && header?.url) body.header = { type: header.type, url: header.url };
-    const r = await client().post('/v2/integrations/templates/send', body);
+    const r = await client(token).post('/v2/integrations/templates/send', body);
     return outcome(r.data);
   } catch (e) {
     return { ok: false, status: 'error', messageId: null, reason: errText(e) };

@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS companies (
   -- See lib/business-profile.js. (No backticks in this comment: the DDL is a
   -- JS template literal and a backtick would terminate it.)
   business_profile TEXT,
+  -- The Integration Token of the company's own LoopChat account (encrypted
+  -- when DATA_ENCRYPTION_KEY is set). A column, not a settings key, because
+  -- settings reach the browser and this must not. See services/whatsapp.
+  loopchat_token  TEXT,
   last_synced_at  TEXT,
   created_at      TEXT DEFAULT ${NOW_TEXT},
   updated_at      TEXT DEFAULT ${NOW_TEXT}

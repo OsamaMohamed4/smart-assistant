@@ -1023,6 +1023,11 @@ function loopchatWebhookUrl() {
   const token = loopchatWebhookToken();
   return token && PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/webhook/loopchat/${token}` : null;
 }
+// A company's own LoopChat token, or null when it uses the server's.
+async function companyLoopchatToken(companyId) {
+  const row = await sql.getCompanyLoopchatToken.get(companyId);
+  return decryptField(row?.loopchat_token) || null;
+}
 const whatsappDeps = () => ({
   sql, logger, decryptField, fillGlobals,
   listCompanies: listCompaniesFull,
@@ -2195,18 +2200,21 @@ app.get('/api/dashboard', async (req, res) => {
 });
 
 // ─── WhatsApp settings (superadmin) ──────────────────────────────
-// What the LoopChat account holds, read live so the screen shows LoopChat's
-// own state, and the webhook URL to paste into it.
+// What the company's LoopChat account holds, read live so the screen shows
+// LoopChat's own state, and the webhook URL to paste into it. A company with
+// its own token is read through it; one without, through the server's.
 app.get('/api/whatsapp/overview', async (req, res) => {
   if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  const own = req.query.companyId ? await companyLoopchatToken(String(req.query.companyId)) : null;
   const out = {
-    configured: loopchat.isConfigured(), webhookUrl: loopchatWebhookUrl(),
+    configured: !!own || loopchat.isConfigured(), webhookUrl: loopchatWebhookUrl(),
+    tokenSource: own ? 'company' : loopchat.isConfigured() ? 'server' : null,
     channels: [], templates: [], error: null,
     recentEvents: loopchatRecent, recentSince: LOOPCHAT_STARTED_AT,
   };
   if (out.configured) {
     // Apart, so a slow template list does not also hide the numbers.
-    const [channels, templates] = await Promise.allSettled([loopchat.listChannels(), loopchat.listTemplates()]);
+    const [channels, templates] = await Promise.allSettled([loopchat.listChannels(own), loopchat.listTemplates(own)]);
     if (channels.status === 'fulfilled') out.channels = channels.value;
     if (templates.status === 'fulfilled') out.templates = templates.value;
     const failed = channels.status === 'rejected' ? channels.reason : templates.status === 'rejected' ? templates.reason : null;
@@ -2222,7 +2230,8 @@ app.get('/api/companies/:id/whatsapp', requireCompanyAdmin, async (req, res) => 
   const messages = (await sql.listWhatsappMessages.all(c.id, 40)).map((m) => ({
     ...m, contact_phone: m.contact_phone ? `+${m.contact_phone}` : null,
   }));
-  res.json({ channelId: s.channelId, inboundChannelId: s.inboundChannelId, autoReply: s.autoReply, followup: s.followup, messages });
+  const hasOwnToken = !!(await companyLoopchatToken(c.id));
+  res.json({ channelId: s.channelId, autoReply: s.autoReply, followup: s.followup, hasOwnToken, messages });
 });
 
 app.put('/api/companies/:id/whatsapp', requireCompanyAdmin, async (req, res) => {
@@ -2230,27 +2239,65 @@ app.put('/api/companies/:id/whatsapp', requireCompanyAdmin, async (req, res) => 
   if (!row) return res.status(404).json({ error: 'not found' });
   const v = whatsapp.validateSettings(req.body);
   if (v.error) return res.status(400).json({ error: v.error });
+  const channelId = v.settings.whatsappChannelId;
   // One channel, one company: the channel is how an incoming message finds
-  // its tenant, exactly as a phone number is for a call. Either id counts.
-  for (const id of [v.settings.whatsappChannelId, v.settings.whatsappInboundChannelId]) {
-    if (!id) continue;
-    const other = await whatsapp.companyForChannel(id, { listCompanies: listCompaniesFull });
+  // its tenant, exactly as a phone number is for a call.
+  if (channelId) {
+    const other = await whatsapp.companyForChannel(channelId, { listCompanies: listCompaniesFull });
     if (other && other.id !== row.id) {
-      return res.status(409).json({ error: `قناة واتساب #${id} مربوطة بشركة أخرى: ${other.name}` });
+      return res.status(409).json({ error: `قناة واتساب هذه مربوطة بشركة أخرى: ${other.name}` });
     }
   }
   let existing = {};
   try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
+  // A number newly picked must be one in the company's own LoopChat account:
+  // replies and templates go out through that account's token, and another
+  // account's number would be refused there -- or, under the server's token,
+  // answer one company's customers from another company's number.
+  if (channelId && channelId !== whatsapp.settingsOf({ settings: existing }).channelId) {
+    let channels;
+    try { channels = await loopchat.listChannels(await companyLoopchatToken(row.id)); } catch (e) {
+      return res.status(502).json({ error: `تعذّر التحقق من الرقم في LoopChat الآن: ${loopchat.errText(e)}` });
+    }
+    if (!channels.some((c) => c.id === channelId)) {
+      return res.status(400).json({ error: 'هذا الرقم ليس في حساب LoopChat لهذه الشركة. أدخل مفتاح حسابها أولاً.' });
+    }
+  }
   const merged = { ...existing, ...v.settings };
+  // Left by an earlier version that took the webhook's channel id for a
+  // second name of the same number; it was another LoopChat account's number.
+  delete merged.whatsappInboundChannelId;
   await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify(merged) });
   invalidateCache();
   audit(req, 'company.whatsapp', `companies/${row.id}`, {
-    channelId: v.settings.whatsappChannelId, inboundChannelId: v.settings.whatsappInboundChannelId,
-    autoReply: v.settings.whatsappAutoReply,
+    channelId, autoReply: v.settings.whatsappAutoReply,
     followup: v.settings.whatsappFollowup ? v.settings.whatsappFollowup.trigger : 'off',
   });
   const s = whatsapp.settingsOf({ settings: merged });
-  res.json({ channelId: s.channelId, inboundChannelId: s.inboundChannelId, autoReply: s.autoReply, followup: s.followup });
+  res.json({ channelId: s.channelId, autoReply: s.autoReply, followup: s.followup });
+});
+
+// The company's own LoopChat Integration Token: one token reaches one LoopChat
+// account, and companies keep separate accounts. Write-only -- it is checked
+// against LoopChat, stored (encrypted when DATA_ENCRYPTION_KEY is set) and
+// never sent back. An empty token goes back to the server's.
+app.put('/api/companies/:id/whatsapp/token', async (req, res) => {
+  if (req.user?.role !== 'superadmin') return res.status(403).json({ error: 'forbidden' });
+  const row = await sql.getCompany.get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const token = String(req.body?.token || '').trim();
+  if (token.length > 1000) return res.status(400).json({ error: 'المفتاح أطول من المعتاد. انسخه كما هو من LoopChat.' });
+  let channels = [];
+  if (token) {
+    try { channels = await loopchat.listChannels(token); } catch (e) {
+      const status = e?.response?.status;
+      if (status === 401 || status === 403) return res.status(400).json({ error: 'رفض LoopChat هذا المفتاح. انسخه من جديد من الإعدادات ← Integrations في حساب الشركة.' });
+      return res.status(502).json({ error: `تعذّر التحقق من المفتاح في LoopChat الآن: ${loopchat.errText(e)}` });
+    }
+  }
+  await sql.setCompanyLoopchatToken.run({ id: row.id, token: token ? encryptField(token) : null });
+  audit(req, 'company.whatsapp_token', `companies/${row.id}`, { set: !!token, channels: channels.length });
+  res.json({ hasOwnToken: !!token, channels });
 });
 
 // ─── Invoices ────────────────────────────────────────────────────

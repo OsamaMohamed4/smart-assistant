@@ -179,6 +179,9 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
 }
 .brand { display: inline-flex; align-items: center; color: var(--brand); flex: none; }
 .brand svg { height: 26px; width: auto; display: block; }
+/* The official lock-up (mark over "MASAR"), cut from the client's artwork
+   with its own colour, so it is an image rather than a currentColor glyph. */
+.brand .brand-logo { height: 46px; width: auto; display: block; }
 
 .nav-links {
   display: none;
@@ -501,6 +504,7 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
 }
 .footer-row .brand { color: var(--brand); }
 .footer-row .brand svg { height: 22px; }
+.footer-row .brand .brand-logo { height: 38px; }
 .footer-spacer { flex: 1; }
 .footer-link {
   font-size: 15px; color: var(--ink-2);
@@ -626,6 +630,7 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
 }
 .footer-brand .brand { color: var(--brand); display: inline-flex; }
 .footer-brand .brand svg { height: 26px; width: auto; display: block; }
+.footer-brand .brand .brand-logo { height: 52px; }
 .footer-tagline {
   margin-top: var(--s-4);
   font-size: 15px; color: var(--ink-2); line-height: 1.75;

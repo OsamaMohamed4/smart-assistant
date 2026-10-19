@@ -1,6 +1,6 @@
 import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen, PhoneOutgoing, ShieldCheck, ClipboardList, Zap, Inbox, Gauge, MessageCircle, Receipt } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { MasarMark } from '../ui/MasarMark';
+import { MasarLogo } from '../ui/MasarMark';
 
 // Two-tier nav: "Build" is where you author the assistant; "Monitor" is where
 // you watch it run. Mirrors the structure of larger voice-agent dashboards
@@ -75,12 +75,11 @@ export function Sidebar({ active, onChange, user, onLogout, workspaceMode = fals
       {/* ─── Brand ─── */}
       <div className="px-5 pt-6 pb-5 border-b border-ink-100">
         <div className="flex items-center gap-3">
-          {/* The mark carries the brand on its own — no tile behind it — in
-              the one official colour, which a white ground can show as-is. */}
-          <MasarMark className="h-7 shrink-0 text-brand-600" title="مسار" />
+          {/* The official lock-up carries the brand on its own — no tile
+              behind it, and no name beside it, since it spells MASAR. */}
+          <MasarLogo className="h-11 shrink-0" />
           <div className="flex-1 min-w-0">
-            <div className="text-ink-900 text-[14px] font-semibold leading-tight">مسار</div>
-            <div className="text-ink-500 text-[11px] mt-0.5">لوحة التحكم</div>
+            <div className="text-ink-500 text-[11.5px]">لوحة التحكم</div>
           </div>
           <button onClick={onClose} aria-label="إغلاق القائمة" className="text-ink-400 hover:text-ink-700 w-7 h-7 rounded-md hover:bg-ink-50 flex items-center justify-center transition-colors">
             <ChevronsLeft className="w-3.5 h-3.5" />

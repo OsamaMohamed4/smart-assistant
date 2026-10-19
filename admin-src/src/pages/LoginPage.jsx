@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Mail, Lock, AlertCircle, CheckCircle2, ArrowRight } from 'lucide-react';
 import { Input, Label } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
-import { MasarMark } from '../components/ui/MasarMark';
+import { MasarLogo } from '../components/ui/MasarMark';
 import { api } from '../lib/api';
 
 // The single front door, linked from the public site.
@@ -29,7 +29,7 @@ export function LoginPage() {
     <div className="min-h-screen bg-gradient-to-br from-ink-50 via-white to-brand-50/40 flex items-center justify-center p-6" dir="rtl">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <MasarMark className="h-9 mx-auto text-brand-600" title="مسار" />
+          <MasarLogo className="h-16 mx-auto" />
           <h1 className="mt-5 text-[22px] font-bold text-ink-900 tracking-tight">
             {mode === 'forgot' ? 'استعادة كلمة المرور' : 'تسجيل الدخول'}
           </h1>

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Mail, Lock, User, AlertCircle, Sparkles } from 'lucide-react';
 import { Input, Label } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
-import { MasarMark } from '../components/ui/MasarMark';
+import { MasarLogo } from '../components/ui/MasarMark';
 import { api } from '../lib/api';
 
 export function AuthPage({ onAuthed }) {
@@ -63,7 +63,7 @@ export function AuthPage({ onAuthed }) {
     <div className="min-h-screen bg-gradient-to-br from-ink-50 via-white to-brand-50/40 flex items-center justify-center p-6" dir="rtl">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <MasarMark className="h-9 mx-auto text-brand-600 mb-5" title="مسار" />
+          <MasarLogo className="h-16 mx-auto mb-5" />
           <h1 className="text-[22px] font-bold text-ink-900 tracking-tight">
             {isSignup ? 'إعداد المنصّة' : 'تسجيل الدخول'}
           </h1>

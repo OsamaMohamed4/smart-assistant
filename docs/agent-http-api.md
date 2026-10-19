@@ -122,6 +122,56 @@ X-Api-Key: sa_xxxxxxxxxxxxxxxx
 
 ---
 
+## 5.1) نقاط الربط
+
+| الاتجاه | النقطة | الغرض |
+|---|---|---|
+| نظامكم ← مسار | `POST /api/v1/agent/chat` | إرسال استفسار العميل واستلام رد الـ Agent في نفس الطلب |
+| مسار ← نظامكم | `call.completed` (Webhook) | إشعار بنتيجة كل مكالمة بعد انتهائها |
+
+هاتان نقطتا الربط المتاحتان حالياً. إدارة الحملات وجدولة المكالمات الصادرة من لوحة تحكم مسار.
+
+## 5.2) نتائج المكالمات (Webhook)
+
+بعد انتهاء كل مكالمة للشركة (واردة أو صادرة) يرسل مسار `POST` إلى رابط HTTPS عام على خادمكم. يُضبط من لوحة مسار للشركة («السيناريوهات» ← Configuration ← «رابط الإشعار (Webhook)») مع مفتاح توقيع اختياري يُسلَّم بقناة آمنة.
+
+```
+POST https://your-system.example.sa/masar/calls
+Content-Type: application/json
+X-Signature: <HMAC-SHA256 hex لجسم الطلب الخام، بمفتاح التوقيع>
+```
+
+```json
+{
+  "event": "call.completed",
+  "company_id": "co-xxxxxx",
+  "sent_at": "2026-10-19T13:06:12.512Z",
+  "call": {
+    "id": "conv_xxxxxxxxxxxx",
+    "direction": "outbound",
+    "caller_number": "+966501234567",
+    "duration_sec": 59,
+    "started_at": "2026-10-19 13:05:10",
+    "ended_at": "2026-10-19 13:06:09",
+    "ended_reason": "customer-ended-call",
+    "summary": "…",
+    "transcript": "AI: …\nUser: …",
+    "recording_url": null,
+    "has_recording": true
+  }
+}
+```
+
+- `started_at` و`ended_at` بتوقيت UTC بالصيغة `YYYY-MM-DD HH:MM:SS`.
+- `ended_reason`: مثل `customer-ended-call` و`assistant-ended-call` و`busy` و`sip-480` (لم يرد)، وقد تأتي قيم أخرى بالصيغة نفسها.
+- `summary` قد يكون `null`. و`transcript` سطر لكل دور (`AI:` للوكيل و`User:` للعميل).
+- `recording_url` يأتي `null` حالياً، و`has_recording` يبيّن وجود تسجيل يمكن طلبه.
+- `X-Signature` = HMAC-SHA256 لجسم الطلب كما وصل بالبايت، بصيغة hex. احسبوه على الجسم الخام، وقارنوا بمقارنة ثابتة الزمن.
+- ردّوا بـ `2xx` خلال ٥ ثوانٍ. عند الفشل تُعاد المحاولة مرة واحدة بعد ٥ ثوانٍ. لا تُتبع التحويلات (Redirects).
+- قد يصل الإشعار نفسه مرتين، فاعتمدوا `call.id` لمنع التكرار.
+
+---
+
 ## 6) أمثلة
 
 ### cURL

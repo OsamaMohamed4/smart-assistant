@@ -6,6 +6,13 @@
 // viewBox starts at a non-zero origin because that is where the glyph sits in
 // the source file; normalising it would require re-cutting the path, and a
 // wrong offset puts the artwork off-screen entirely.
+// The full lock-up -- the mark over "MASAR" -- as the client supplied it
+// (2026-10-19), for places with room for it. An image with its own colour,
+// served with the public site's assets; small spots keep the mark above.
+export function MasarLogo({ className = '', alt = 'مسار' }) {
+  return <img src="/site/assets/masar-logo.png" width="488" height="217" alt={alt} className={`w-auto ${className}`} />;
+}
+
 export function MasarMark({ className = '', title }) {
   return (
     <svg

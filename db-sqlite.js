@@ -837,6 +837,35 @@ runMigration(44, 'create_password_resets', `
   CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id, created_at);
 `);
 
+// Migration 45: the male voice is called ناصر now, so a scenario that wrote
+// جداوي (or جدواي) out gets {{agent_name}} in its place -- the same treatment
+// migration 40 gave ناصر -- and the agent says the voice's current name. The
+// text as it was goes into the scenario's history first. Postgres:
+// lib/migrations-pg.js.
+if (!db.prepare('SELECT 1 FROM schema_migrations WHERE id = 45').get()) {
+  const { templateJeddawi } = require('./lib/voices');
+  const FIELDS = ['first_message', 'first_message_inbound', 'instruction_prompt', 'instruction_prompt_inbound'];
+  const snapshot = db.prepare(`
+    INSERT INTO scenario_versions
+      (scenario_id, company_id, name, first_message, first_message_inbound, instruction_prompt, edited_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  const update = db.prepare(`
+    UPDATE scenarios SET first_message = ?, first_message_inbound = ?, instruction_prompt = ?,
+                         instruction_prompt_inbound = ?, updated_at = datetime('now')
+     WHERE id = ?`);
+  db.transaction(() => {
+    for (const s of db.prepare(`SELECT id, company_id, name, ${FIELDS.join(', ')} FROM scenarios`).all()) {
+      const next = FIELDS.map((k) => templateJeddawi(s[k]));
+      if (!next.some((f) => f.count)) continue;
+      snapshot.run(s.id, s.company_id, s.name, s.first_message, s.first_message_inbound || '',
+        s.instruction_prompt, 'النظام: جداوي ← {{agent_name}}');
+      update.run(...next.map((f) => f.text), s.id);
+    }
+    db.prepare('INSERT INTO schema_migrations (id, name) VALUES (45, ?)')
+      .run('replace_jeddawi_with_agent_name');
+  })();
+}
+
 // ─── Tenant-safety: one company per phone number ──────────────────
 // A DID and an imported provider number each identify exactly ONE tenant.
 // Inbound calls are attributed by those values (services/voice resolves a call

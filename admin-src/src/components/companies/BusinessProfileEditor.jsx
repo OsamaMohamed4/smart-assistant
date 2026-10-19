@@ -244,6 +244,15 @@ export function BusinessProfileEditor({ companyId, companyName }) {
               {r.custom && (
                 <span className="text-[11px] text-ink-400">نطاق مخصص</span>
               )}
+              {/* The same time twice is usually 9 p.m. typed as 09:00 in a
+                  24-hour field. The day is left out of what the agent says
+                  until it is fixed (lib/business-profile.js). */}
+              {r.state === DAY_STATE.OPEN && r.from && r.from === r.to && (
+                <span className="text-[11px] text-amber-700 flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5" strokeWidth={2} />
+                  الفتح والإغلاق في الوقت نفسه، فلن يُذكر هذا اليوم. للتاسعة مساءً اكتب 21:00.
+                </span>
+              )}
             </div>
           ))}
         </CardBody>

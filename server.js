@@ -13,6 +13,7 @@ const { loadCompany, listCompaniesFull, invalidateCache, buildSystemPromptWithRA
 const { summarize, chatToTranscript } = require('./summarize');
 const { ingestDocument, retrieve, repairMojibake, invalidateChunkCache } = require('./lib/rag');
 const { END_CALL_TOOL_RULE } = require('./lib/master-prompt');
+const { foldPresentationForms } = require('./lib/pdf-text');
 const { renderFactsBlock, businessProfileSchema, parseBusinessProfile } = require('./lib/business-profile');
 const { lintScenario } = require('./lib/scenario-lint');
 const { TEMPLATES: SCENARIO_TEMPLATES } = require('./lib/scenario-templates');
@@ -663,7 +664,11 @@ function resolveAgentModel(company) {
   return resolveModelSettings(company?.settings);
 }
 async function composeSystemPrompt(company, instructionPrompt) {
-  let systemContent = fillGlobals(instructionPrompt || '', company);
+  // A scenario saved from an earlier composed prompt can carry the hang-up
+  // block already; it is appended once, below, so any copy inside the
+  // operator's text goes. The block is platform wiring, not their wording.
+  const instructions = String(instructionPrompt || '').split(END_CALL_TOOL_RULE.trim()).join('');
+  let systemContent = fillGlobals(instructions, company);
 
   // The company's own FACTS, between the operator's instructions and the bulk
   // knowledge base. Curated and short, so it goes first; the KB is documents,
@@ -696,7 +701,10 @@ async function composeSystemPrompt(company, instructionPrompt) {
     systemContent += kbBlock;
   }
   systemContent += END_CALL_TOOL_RULE;
-  return systemContent;
+  // The facts block and the knowledge base did not pass through fillGlobals;
+  // a company name or a document pasted from a PDF is folded here.
+  // Removing a stray copy can leave two separators with nothing between them.
+  return foldPresentationForms(systemContent.replace(/(\n[ \t]*---[ \t]*)(?:\s*\n[ \t]*---[ \t]*)+(?=\n)/g, '$1'));
 }
 
 function getOrMakeSessionId(req) {

@@ -172,7 +172,7 @@ const JEDDAWI = 'yXEnnEln9armDCyhkXcA';
 test('F-14: the catalogue is exactly the two voices the operator chose', () => {
   assert.deepEqual(VOICES.map((v) => [v.id, v.label, v.gender]), [
     ['o0oG1TnHDWDdKbAeBgCO', 'منى', 'female'],
-    [JEDDAWI, 'جداوي', 'male'],
+    [JEDDAWI, 'ناصر', 'male'],
   ]);
   for (const v of VOICES) assert.equal(isAllowedVoiceId(v.id), true, v.name);
 });

@@ -2,6 +2,7 @@ const { sql } = require('./db');
 const { MASTER_PROMPT } = require('./lib/master-prompt');
 const { parseBusinessProfile } = require('./lib/business-profile');
 const { resolveVoiceId, VOICES, DEFAULT_VOICE_ID } = require('./lib/voices');
+const { foldPresentationForms } = require('./lib/pdf-text');
 
 const cache = new Map();
 
@@ -58,7 +59,7 @@ async function buildSystemPromptWithRAG(company, userQuery, vars, { inbound = fa
     const { retrieve, formatChunksForPrompt } = require('./lib/rag');
     const chunks = await retrieve(company.id, userQuery);
     if (!chunks.length) return base;
-    return base + formatChunksForPrompt(chunks);
+    return foldPresentationForms(base + formatChunksForPrompt(chunks));
   } catch (e) {
     console.error('RAG retrieval error:', e.message);
     return base;
@@ -81,7 +82,7 @@ function localNow(date = new Date()) {
 
 // The agent's spoken name and grammatical gender come from its VOICE, so one
 // scenario serves either voice: "معك {{agent_name}}" says منى in Mona's voice
-// and جداوي in Jeddawi's. It used to be the company's name, which made every
+// and ناصر in the male one. It used to be the company's name, which made every
 // agent introduce itself as its own company ("معك MASAR"). A voice outside the
 // catalogue (EXTRA_VOICE_IDS) has no name of its own and speaks as المساعد.
 function agentIdentity(company, voiceId) {
@@ -97,6 +98,12 @@ function agentIdentity(company, voiceId) {
 
 // `voiceId` names a voice other than the company's own -- the Playground's
 // test call -- so its greeting introduces the voice the caller actually hears.
+//
+// Everything an agent says or reads passes through here, so it is also where
+// Arabic pasted out of a PDF is put right: shaped presentation forms
+// ("ﺷرﻛﺔ وﻛن") and Persian look-alikes (ی، ک) become ordinary letters. Left as
+// they were, the voice could not say the company's own name -- callers asked
+// "وش اسم الشركة؟" after every greeting -- and searches could not match it.
 function fillGlobals(text, company, { voiceId } = {}) {
   if (!text) return text;
   const now = localNow();
@@ -108,9 +115,9 @@ function fillGlobals(text, company, { voiceId } = {}) {
     date       : now.toISOString().slice(0, 10),
     time       : now.toISOString().slice(11, 16),
   };
-  return text.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (m, name) =>
+  return foldPresentationForms(text.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (m, name) =>
     Object.prototype.hasOwnProperty.call(map, name) ? map[name] : m
-  );
+  ));
 }
 
 // Apply per-call variables (customer_name, account_number, ...) supplied by

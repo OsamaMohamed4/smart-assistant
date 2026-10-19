@@ -536,7 +536,7 @@ test('{{agent_name}} is resolved before a first message reaches the provider', (
 
   const filled = fillGlobals('حياك الله في {{company_name}}، معك {{agent_name}}، كيف أقدر أساعدك؟', company);
   assert.ok(!filled.includes('{{'), 'the provider rejects the call if a global survives');
-  assert.equal(filled, 'حياك الله في وكن العقارية، معك جداوي، كيف أقدر أساعدك؟',
+  assert.equal(filled, 'حياك الله في وكن العقارية، معك ناصر، كيف أقدر أساعدك؟',
     'the agent is named after its voice, the company after itself');
 });
 
@@ -547,9 +547,9 @@ test('the agent\'s name and gender follow the company\'s voice', () => {
   const t = 'معك {{agent_name}}، تكلّم بصيغة {{agent_gender}}';
   const mona = { id: 'co-a', name: 'س', settings: { voiceId: 'o0oG1TnHDWDdKbAeBgCO' } };
   assert.equal(fillGlobals(t, mona), 'معك منى، تكلّم بصيغة المؤنث');
-  assert.equal(fillGlobals(t, { id: 'co-b', name: 'س' }), 'معك جداوي، تكلّم بصيغة المذكر', 'no voice chosen: the default');
+  assert.equal(fillGlobals(t, { id: 'co-b', name: 'س' }), 'معك ناصر، تكلّم بصيغة المذكر', 'no voice chosen: the default');
   // A test call on the other voice introduces that voice.
-  assert.equal(fillGlobals(t, mona, { voiceId: 'yXEnnEln9armDCyhkXcA' }), 'معك جداوي، تكلّم بصيغة المذكر');
+  assert.equal(fillGlobals(t, mona, { voiceId: 'yXEnnEln9armDCyhkXcA' }), 'معك ناصر، تكلّم بصيغة المذكر');
   // A voice with no catalogue entry has no name of its own.
   assert.equal(fillGlobals('{{agent_name}}', { id: 'co-c', name: 'س', settings: { voiceId: 'extra123' } }), 'المساعد');
 });
@@ -563,6 +563,25 @@ test('ناصر becomes {{agent_name}} only where it is the whole word', () => {
     assert.deepEqual(templateAgentName(keep), { text: keep, count: 0 }, keep);
   }
   assert.deepEqual(templateAgentName(null), { text: null, count: 0 });
+});
+
+test('جداوي (and جدواي) written out become {{agent_name}}, now that the voice is ناصر', () => {
+  const { templateJeddawi } = require('../lib/voices');
+  assert.deepEqual(templateJeddawi('السلام عليكم، معك جداوي من مسار.'), { text: 'السلام عليكم، معك {{agent_name}} من مسار.', count: 1 });
+  assert.deepEqual(templateJeddawi('أنت جدواي من "مهير العقارية"'), { text: 'أنت {{agent_name}} من "مهير العقارية"', count: 1 });
+  for (const keep of ['الجداوية', 'جداويين', 'لهجة جداوية']) {
+    assert.deepEqual(templateJeddawi(keep), { text: keep, count: 0 }, keep);
+  }
+});
+
+test('Arabic pasted from a PDF is put right before the agent says it', () => {
+  // Wakan's name was stored in shaped presentation forms; callers could not
+  // make out the company the agent named, and asked "وش اسم الشركة؟".
+  const { fillGlobals } = require('../companies');
+  const wakan = { id: 'co-w', name: 'ﺷرﻛﺔ وﻛن ﻟﻠﺗطوﯾر واﻻﺳﺗﺛﻣﺎر اﻟﻌﻘﺎري' };
+  assert.equal(fillGlobals('معك {{agent_name}} من {{company_name}}', wakan), 'معك ناصر من شركة وكن للتطوير والاستثمار العقاري');
+  assert.equal(fillGlobals('من ﺷرﻛﺔ وﻛن، ﯾﺳﻌدﻧﺎ', { id: 'co-x', name: 'س' }), 'من شركة وكن، يسعدنا');
+  assert.equal(fillGlobals('السعر 500 ﷼', { id: 'co-x', name: 'س' }), 'السعر 500 ريال');
 });
 
 test('per-call placeholders SURVIVE that resolution', () => {

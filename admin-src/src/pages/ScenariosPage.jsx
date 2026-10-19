@@ -1273,7 +1273,7 @@ function NameHint() {
   const code = 'px-1 rounded bg-ink-100 text-ink-700 font-mono text-[11px]';
   return (
     <p className="text-[11.5px] text-ink-500 mt-1 max-w-2xl leading-relaxed">
-      اكتب <span dir="ltr" className={code}>{'{{agent_name}}'}</span> مكان اسم الوكيل — يتغيّر تلقائياً مع صوت الشركة (منى أو جداوي) —
+      اكتب <span dir="ltr" className={code}>{'{{agent_name}}'}</span> مكان اسم الوكيل — يتغيّر تلقائياً مع صوت الشركة (منى أو ناصر) —
       و<span dir="ltr" className={code}>{'{{company_name}}'}</span> مكان اسم الشركة.
     </p>
   );

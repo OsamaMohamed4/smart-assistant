@@ -91,6 +91,16 @@ test('an hours entry with no times at all is dropped, not half-rendered', () => 
   assert.ok(out.includes('الأحد: 09:00 - 17:00'));
 });
 
+test('a day that opens and closes at the same minute is left out, not stated', () => {
+  // Seen in production on every day: 9 p.m. typed as 09:00 in a 24-hour field.
+  const out = renderFactsBlock(CO, {
+    description: 'x',
+    workingHours: [{ days: 'الأحد', from: '09:00', to: '09:00' }, { days: 'الاثنين', from: '09:00', to: '21:00' }],
+  });
+  assert.ok(!out.includes('الأحد'), out);
+  assert.ok(out.includes('الاثنين: 09:00 - 21:00'));
+});
+
 test('blank list entries are filtered rather than rendered as empty bullets', () => {
   const out = renderFactsBlock(CO, { services: ['بيع', '   ', '', 'إيجار'] });
   assert.ok(out.includes('- بيع'));

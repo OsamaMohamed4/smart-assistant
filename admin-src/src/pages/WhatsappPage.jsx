@@ -198,7 +198,8 @@ export function WhatsappPage() {
               </select>
               {form.inboundChannelId ? (
                 <p className="mt-1.5 text-[11.5px] text-ink-500">
-                  الرسائل الواردة تصل من LoopChat باسم القناة <span dir="ltr" className="font-mono">#{form.inboundChannelId}</span>، وهي مربوطة بهذه الشركة، والرد يُرسل من الرقم أعلاه.{' '}
+                  الرسائل الواردة تصل من LoopChat باسم القناة <span dir="ltr" className="font-mono">#{form.inboundChannelId}</span>، وهي مربوطة بهذه الشركة.
+                  يُرسل الرد من القناة التي كتب عليها العميل، وإن لم يقبلها LoopChat فمن الرقم أعلاه.{' '}
                   <button type="button" className="text-rose-700 underline disabled:opacity-50" disabled={saving}
                     onClick={() => save({ inboundChannelId: '' }, 'تم فك ربط قناة الرسائل الواردة')}>فك الربط</button>
                 </p>

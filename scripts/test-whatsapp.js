@@ -20,6 +20,13 @@ process.env.LOOPCHAT_API_TOKEN = 'lc-test-token';
 // ─── Fake LoopChat ────────────────────────────────────────────────
 const sent = [];
 let sendResult = 'sent';
+// What the real API was seen to do or documents: a free-form send names an
+// account channel it knows (else 422), the 24-hour window is kept per channel,
+// and the reply says which contact the number was matched to.
+let sendable = new Set([6]);
+let windowOpenOn = null;              // null: open everywhere
+let matchedContact = 101;
+const WINDOW_CLOSED = 'The 24-hour window is closed. Please use a WhatsApp template to contact this customer.';
 const fake = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
@@ -38,8 +45,13 @@ const fake = http.createServer((req, res) => {
     if (req.method === 'POST') {
       const b = JSON.parse(body || '{}');
       sent.push({ path: url.pathname, body: b });
-      if (sendResult === 'sent') return json(202, { data: { status: 'sent', message_id: 900 + sent.length, contact_id: 1, channel_id: 6 } });
-      return json(202, { data: { status: 'failed', message_id: 5, failure_reason: 'The 24-hour window is closed. Please use a WhatsApp template to contact this customer.', contact_id: 1, channel_id: 6 } });
+      const ch = b.account_channel_id ?? b.channel_id;
+      if (url.pathname.endsWith('/messages/send') && !sendable.has(ch)) {
+        return json(422, { message: 'account_channel_id must belong to a WhatsApp Business API channel.', errors: { account_channel_id: ['account_channel_id must belong to a WhatsApp Business API channel.'] } });
+      }
+      const closed = url.pathname.endsWith('/messages/send') && windowOpenOn && !windowOpenOn.has(ch);
+      if (sendResult === 'sent' && !closed) return json(202, { data: { status: 'sent', message_id: 900 + sent.length, contact_id: matchedContact, channel_id: ch } });
+      return json(202, { data: { status: 'failed', message_id: 5, failure_reason: WINDOW_CLOSED, contact_id: matchedContact, channel_id: ch } });
     }
     json(404, {});
   });
@@ -74,7 +86,11 @@ after(() => {
   try { db.close(); } catch {}
   for (const s of ['', '-wal', '-shm']) fs.rmSync(DB + s, { force: true });
 });
-beforeEach(() => { sent.length = 0; replies.length = 0; sendResult = 'sent'; require('../companies').invalidateCache(); });
+beforeEach(() => {
+  sent.length = 0; replies.length = 0; sendResult = 'sent';
+  sendable = new Set([6]); windowOpenOn = null; matchedContact = 101;
+  require('../companies').invalidateCache();
+});
 
 let eventSeq = 0;
 const incoming = (text, { phone = '966501234567', channel = 6, type = 'text', id } = {}) => ({
@@ -90,7 +106,7 @@ const setSettings = (id, s) => { db.prepare('UPDATE companies SET settings = ? W
 // ─── (أ) replies ──────────────────────────────────────────────────
 test('a customer message on the company\'s number is answered through LoopChat', async () => {
   const r = await wa.handleEvent(incoming('كم سعر الشقة؟'), deps());
-  assert.deepEqual(r, { sent: true });
+  assert.deepEqual(r, { sent: true, from: 6 });
   assert.equal(replies.length, 1);
   assert.equal(replies[0].company, 'maheer');
   assert.equal(replies[0].vars.customer_name, 'أبو فهد');
@@ -121,13 +137,13 @@ test('a number no company uses is ignored, and nothing is recorded', async () =>
 });
 
 // As seen live: account channel 184 arrived in the webhook as channel 182.
-test('an event under the id LoopChat\'s webhook uses is answered from the account channel', async () => {
+test('an event under the id LoopChat\'s webhook uses is answered from the account channel when that id cannot send', async () => {
   setSettings('maheer', { whatsappChannelId: 6, whatsappInboundChannelId: 182, whatsappAutoReply: true });
   try {
     const phone = '966507777777';
-    assert.deepEqual(await wa.handleEvent(incoming('هلا', { channel: 182, phone }), deps()), { sent: true });
-    assert.equal(sent.length, 1);
-    assert.equal(sent[0].body.account_channel_id, 6);
+    assert.deepEqual(await wa.handleEvent(incoming('هلا', { channel: 182, phone }), deps()), { sent: true, from: 6 });
+    // Tried where the customer wrote first, refused (nothing sent), then 6.
+    assert.deepEqual(sent.map((s) => s.body.account_channel_id), [182, 6]);
     const rows = messages().slice(-2);
     assert.equal(rows[0].direction, 'in'); assert.equal(rows[0].channel_id, 182); assert.equal(rows[0].company_id, 'maheer');
     assert.equal(rows[1].direction, 'out'); assert.equal(rows[1].channel_id, 6); assert.equal(rows[1].status, 'sent');
@@ -139,6 +155,40 @@ test('an event under the id LoopChat\'s webhook uses is answered from the accoun
     assert.equal((await wa.companyForChannel(6, deps())).id, 'maheer');
     assert.equal((await wa.companyForChannel(182, deps())).id, 'maheer');
   } finally { setSettings('maheer', { whatsappChannelId: 6, whatsappAutoReply: true }); }
+});
+
+// What happened live: sent from 184, refused as outside the 24-hour window a
+// minute after the customer wrote on 182.
+test('a reply goes out on the channel the customer wrote on, where their 24-hour window is', async () => {
+  setSettings('maheer', { whatsappChannelId: 6, whatsappInboundChannelId: 182, whatsappAutoReply: true });
+  try {
+    sendable = new Set([6, 182]); windowOpenOn = new Set([182]);
+    const r = await wa.handleEvent(incoming('السلام عليكم', { channel: 182, phone: '966505555555' }), deps());
+    assert.deepEqual(r, { sent: true, from: 182 });
+    assert.deepEqual(sent.map((s) => s.body.account_channel_id), [182]);
+    assert.equal(messages().at(-1).channel_id, 182);
+    assert.match(wa.describeOutcome(r).text, /من القناة #182/);
+  } finally { setSettings('maheer', { whatsappChannelId: 6, whatsappAutoReply: true }); }
+});
+
+test('when every channel refuses, the page shows each one\'s reason', async () => {
+  setSettings('maheer', { whatsappChannelId: 6, whatsappInboundChannelId: 182, whatsappAutoReply: true });
+  try {
+    windowOpenOn = new Set();
+    const r = await wa.handleEvent(incoming('هلا', { channel: 182, phone: '966504444444' }), deps());
+    assert.match(r.failed, /^#182: account_channel_id must belong.* \| #6: The 24-hour window is closed/);
+    const row = messages().at(-1);
+    assert.equal(row.status, 'failed'); assert.equal(row.channel_id, 6); assert.equal(row.detail, r.failed);
+  } finally { setSettings('maheer', { whatsappChannelId: 6, whatsappAutoReply: true }); }
+});
+
+test('a refusal names it when LoopChat matched the number to someone other than who wrote', async () => {
+  sendResult = 'failed'; matchedContact = 555;
+  const r = await wa.handleEvent(incoming('هلا', { phone: '966503333333' }), deps());
+  assert.match(r.failed, /24-hour window.*جهة الاتصال #555، والتي راسلت هي #101/);
+  matchedContact = 101;
+  const same = await wa.handleEvent(incoming('هلا', { phone: '966503333334' }), deps());
+  assert.doesNotMatch(same.failed, /جهة الاتصال/);
 });
 
 test('an incoming channel is linked only alongside the number replies go out from', () => {
@@ -172,7 +222,7 @@ test('once an employee takes the conversation over, the assistant stays quiet un
   assert.deepEqual(await wa.handleEvent(incoming('أبي موظف', { phone }), deps()), { skipped: 'taken over by staff' });
   assert.equal(sent.length, 0);
   assert.deepEqual(await wa.handleEvent(handover('message_integration.started'), deps()), { paused: false });
-  assert.deepEqual(await wa.handleEvent(incoming('رجعت', { phone }), deps()), { sent: true });
+  assert.deepEqual(await wa.handleEvent(incoming('رجعت', { phone }), deps()), { sent: true, from: 6 });
 });
 
 test('a reply LoopChat refuses is recorded with its reason and kept out of the conversation', async () => {

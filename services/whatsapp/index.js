@@ -152,14 +152,23 @@ async function handleMessage(evt, deps) {
   const thread = await sql.getWhatsappThread.get(channelId, phone);
   if (thread && Number(thread.ai_paused)) return { skipped: 'taken over by staff' };
 
-  return serialize(`${channelId}:${phone}`, () => reply({ company, channelId: cfg.channelId, phone, text, contact: evt.contact }, deps));
+  return serialize(`${channelId}:${phone}`, () => reply({
+    company, from: [channelId, cfg.channelId], phone, text, contact: evt.contact,
+  }, deps));
 }
 
-// channelId here is the account channel the reply goes out from, whichever id
-// the event that prompted it came in under.
-async function reply({ company, channelId, phone, text, contact }, deps) {
+// `from` is where the reply may go out from, in order: the channel the message
+// came in on, then the company's number (its account channel). They can be
+// two ids for one account -- a live message on account channel 184 arrived as
+// 182 -- and LoopChat keeps the 24-hour window where the customer wrote: sent
+// from 184, that reply was refused as outside the window a minute after the
+// customer's message. Whether the send API takes the webhook's id is not
+// documented, so it is tried first and the next used if LoopChat refuses it.
+// Nothing goes out on a refusal, so trying the next never sends twice.
+async function reply({ company, from, phone, text, contact }, deps) {
   const { sql, logger } = deps;
-  const out = (status, detail, body = null, messageId = null) => record(deps, {
+  const channels = [...new Set(from.filter(Boolean))];
+  const out = (status, detail, body = null, messageId = null, channelId = channels.at(-1)) => record(deps, {
     company_id: company.id, channel_id: channelId, contact_phone: phone, direction: 'out', kind: 'text',
     body, status, detail, provider_message_id: messageId != null ? String(messageId) : null,
   });
@@ -188,8 +197,17 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
     return { skipped: 'empty reply' };
   }
 
-  const sent = await loopchat.sendText({ channelId, phone, content: answer });
-  await out(sent.ok ? 'sent' : 'failed', sent.reason, answer, sent.messageId);
+  const attempts = [];
+  let sent = null;
+  for (const channelId of channels) {
+    sent = await loopchat.sendText({ channelId, phone, content: answer });
+    attempts.push({ channelId, sent });
+    if (sent.ok) break;
+  }
+  const sentFrom = sent.ok ? attempts.at(-1).channelId : null;
+  const reason = sent.ok ? null : refusal(attempts, contact);
+  await out(sent.ok ? 'sent' : 'failed', reason, answer, sent.messageId, sentFrom || channels.at(-1));
+  if (!sent.ok) logger.warn('whatsapp: reply not sent', { companyId: company.id, reason });
   // The conversation the next turn resumes from, and what the dashboard
   // shows. A reply that never reached the customer is kept out of it, so the
   // assistant does not later assume they read it.
@@ -199,7 +217,22 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
       assistant_reply: sent.ok ? answer : '', channel: 'whatsapp', latency_ms: Date.now() - t0, user_id: null,
     });
   } catch (e) { logger.error('whatsapp: chat insert failed', { err: e.message }); }
-  return sent.ok ? { sent: true } : { failed: sent.reason };
+  return sent.ok ? { sent: true, from: sentFrom } : { failed: reason };
+}
+
+// LoopChat's reason for each channel tried. It finds the customer by number:
+// when the contact it settled on is not the one who wrote, the number is what
+// went wrong, not the window, and the reason says so.
+function refusal(attempts, contact) {
+  let text = attempts.length > 1
+    ? attempts.map((a) => `#${a.channelId}: ${a.sent.reason}`).join(' | ')
+    : attempts[0].sent.reason;
+  const wrote = contact?.id != null ? String(contact.id) : null;
+  const matched = attempts.map((a) => a.sent.contactId).find((id) => id != null);
+  if (wrote && matched != null && String(matched) !== wrote) {
+    text += ` (طابق LoopChat الرقم على جهة الاتصال #${matched}، والتي راسلت هي #${wrote})`;
+  }
+  return String(text).slice(0, 500);
 }
 
 // An employee took the conversation over in LoopChat, or handed it back.
@@ -293,7 +326,7 @@ const SKIPPED = {
 };
 function describeOutcome(r) {
   if (!r) return { ok: false, text: 'تعذّرت معالجة الحدث، والتفاصيل في سجل الخادم' };
-  if (r.sent) return { ok: true, text: 'ردّ المساعد ووصل الرد إلى LoopChat' };
+  if (r.sent) return { ok: true, text: `ردّ المساعد ووصل الرد إلى LoopChat${r.from ? `، وأُرسل من القناة #${r.from}` : ''}` };
   if (r.duplicate) return { ok: true, text: 'وصلت من قبل، فلم تُعالج مرة ثانية' };
   if (r.paused === true) return { ok: true, text: 'استلم موظف المحادثة، فتوقف المساعد فيها' };
   if (r.paused === false) return { ok: true, text: 'أُعيدت المحادثة إلى المساعد' };

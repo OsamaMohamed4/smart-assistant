@@ -85,11 +85,15 @@ function templateVariableCount(body) {
   return nums.length ? Math.max(...nums) : 0;
 }
 
-// What a send came back with: { ok, status, messageId, reason }.
+// What a send came back with: { ok, status, messageId, reason, contactId }.
+// contactId is the LoopChat contact the number was matched to.
 function outcome(data) {
   const d = data?.data || {};
   const ok = d.status === 'sent';
-  return { ok, status: d.status || 'unknown', messageId: d.message_id ?? null, reason: ok ? null : (d.failure_reason || 'not sent') };
+  return {
+    ok, status: d.status || 'unknown', messageId: d.message_id ?? null,
+    reason: ok ? null : (d.failure_reason || 'not sent'), contactId: d.contact_id ?? null,
+  };
 }
 
 async function sendText({ channelId, phone, content }) {

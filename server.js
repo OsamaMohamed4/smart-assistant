@@ -1031,7 +1031,28 @@ const whatsappDeps = () => ({
   askReply: (company, text, history, vars) => askGPT(company, text, history, vars, { inbound: true }),
 });
 
-app.post('/webhook/loopchat/:token', (req, res) => {
+// The last events LoopChat delivered and what became of each, newest first,
+// shown on the WhatsApp page: "nothing arrived" and "arrived, and here is why
+// it went unanswered" look the same from WhatsApp. Kept in memory, so the
+// list starts empty after each deploy.
+const LOOPCHAT_STARTED_AT = new Date().toISOString();
+const loopchatRecent = [];
+function noteLoopchatEvent(evt, result) {
+  const channel = evt?.channel || {};
+  loopchatRecent.unshift({
+    at: new Date().toISOString(),
+    type: evt?.event_type ? String(evt.event_type).slice(0, 60) : null,
+    channelId: channel.id != null ? String(channel.id).slice(0, 20) : null,
+    channelName: channel.name ? String(channel.name).slice(0, 60) : null,
+    ...whatsapp.describeOutcome(result),
+  });
+  loopchatRecent.length = Math.min(loopchatRecent.length, 20);
+}
+
+// LoopChat's events are JSON, read as such whatever Content-Type they were
+// sent with: the global parser only takes application/json, and anything else
+// would arrive here as an empty body.
+app.post('/webhook/loopchat/:token', express.text({ type: () => true, limit: '2mb' }), (req, res) => {
   const expected = loopchatWebhookToken();
   const given = String(req.params.token || '');
   const ok = !!expected && given.length === expected.length
@@ -1040,10 +1061,11 @@ app.post('/webhook/loopchat/:token', (req, res) => {
   // Acknowledge first: LoopChat must not wait on a model reply. Each event
   // carries its own id, so a redelivery records nothing new.
   res.json({ ok: true });
-  const evt = req.body;
+  let evt = req.body;
+  if (typeof evt === 'string') { try { evt = JSON.parse(evt); } catch { evt = null; } }
   runWithContext({ bypass: true, companyId: null }, () => whatsapp.handleEvent(evt, whatsappDeps()))
-    .then((r) => logger.info('whatsapp event', { type: evt?.event_type, ...r }))
-    .catch((e) => logger.error('whatsapp event failed', { err: e.message, type: evt?.event_type }));
+    .then((r) => { noteLoopchatEvent(evt, r); logger.info('whatsapp event', { type: evt?.event_type, ...r }); })
+    .catch((e) => { noteLoopchatEvent(evt, null); logger.error('whatsapp event failed', { err: e.message, type: evt?.event_type }); });
 });
 startDrainTimer();
 startCampaignWorker();
@@ -2180,6 +2202,7 @@ app.get('/api/whatsapp/overview', async (req, res) => {
   const out = {
     configured: loopchat.isConfigured(), webhookUrl: loopchatWebhookUrl(),
     channels: [], templates: [], error: null,
+    recentEvents: loopchatRecent, recentSince: LOOPCHAT_STARTED_AT,
   };
   if (out.configured) {
     try {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Copy, CheckCircle2, AlertTriangle, ArrowDownLeft, ArrowUpRight } from 'lucide-react';
+import { Copy, CheckCircle2, AlertTriangle, ArrowDownLeft, ArrowUpRight, RefreshCw } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -44,8 +44,10 @@ export function WhatsappPage() {
   const [messages, setMessages]   = useState([]);
   const [saving, setSaving]       = useState(false);
 
+  const refreshOverview = () => api.whatsappOverview().then(setOverview).catch((e) => push(e.message, 'error'));
+
   useEffect(() => {
-    api.whatsappOverview().then(setOverview).catch((e) => push(e.message, 'error'));
+    refreshOverview();
     api.listCompanies().then((cs) => {
       setCompanies(cs || []);
       setCompanyId((cur) => cur || cs?.[0]?.id || null);
@@ -154,6 +156,7 @@ export function WhatsappPage() {
                     في LoopChat: الإعدادات ← Integrations ← أضف Webhook بهذا الرابط، واختر حدث «Incoming Message» وقناة واتساب.
                     إيقاف التكامل واستئنافه يُرسَلان تلقائياً: إذا استلم موظف محادثة من LoopChat يتوقف المساعد فيها حتى يعيدها.
                   </p>
+                  <RecentEvents events={overview.recentEvents || []} since={overview.recentSince} onRefresh={refreshOverview} />
                 </>
               ) : (
                 <p className="text-[12px] text-rose-700">رابط الخادم العام غير مضبوط (PUBLIC_BASE_URL)، فلا يمكن تكوين الرابط.</p>
@@ -293,6 +296,48 @@ export function WhatsappPage() {
           </Card>
         )}
       </div>
+    </div>
+  );
+}
+
+const EVENT_TYPES = {
+  'message.received'           : 'رسالة واردة',
+  'message_integration.stopped': 'موظف استلم محادثة',
+  'message_integration.started': 'محادثة أُعيدت للمساعد',
+};
+
+// Every event LoopChat delivered since the server started, and what became of
+// it: an empty list means LoopChat sent nothing to the address above.
+function RecentEvents({ events, since, onRefresh }) {
+  const [busy, setBusy] = useState(false);
+  const refresh = () => { setBusy(true); Promise.resolve(onRefresh()).finally(() => setBusy(false)); };
+  return (
+    <div className="mt-5">
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <Label>آخر ما وصل من LoopChat</Label>
+        <Button variant="secondary" size="sm" onClick={refresh} loading={busy}>
+          {!busy && <RefreshCw className="w-3.5 h-3.5" />} تحديث
+        </Button>
+      </div>
+      {!events.length ? (
+        <p className="text-[12px] text-ink-500 leading-relaxed">
+          لم يصل أي حدث منذ آخر تشغيل للخادم ({fmtDate(since)}). أرسل رسالة واتساب إلى رقم الشركة ثم اضغط «تحديث»؛
+          إذا بقيت القائمة فارغة فإن LoopChat لم يرسل شيئاً إلى الرابط أعلاه.
+        </p>
+      ) : (
+        <ul className="rounded-xl border border-ink-100 divide-y divide-ink-100">
+          {events.map((e, i) => (
+            <li key={`${e.at}-${i}`} className="px-4 py-2.5 text-[12.5px] flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="text-ink-500 tabular-nums whitespace-nowrap">{fmtDate(e.at)}</span>
+              <span className="font-medium text-ink-800">{EVENT_TYPES[e.type] || e.type || 'بلا نوع'}</span>
+              {e.channelId && (
+                <span className="text-ink-500">القناة <span dir="ltr" className="font-mono">#{e.channelId}</span>{e.channelName ? ` (${e.channelName})` : ''}</span>
+              )}
+              <span className={cn('basis-full', e.ok ? 'text-emerald-700' : 'text-amber-800')}>{e.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

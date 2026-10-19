@@ -156,6 +156,20 @@ test('a reply LoopChat refuses is recorded with its reason and kept out of the c
   assert.equal(chat.assistant_reply, '');
 });
 
+test('every outcome of an event reads as a reason on the WhatsApp page', async () => {
+  const say = (r) => wa.describeOutcome(r);
+  assert.deepEqual(say({ sent: true }).ok, true);
+  assert.match(say(await wa.handleEvent(incoming('هلا', { channel: 99 }), deps())).text, /غير مربوط بأي شركة/);
+  assert.match(say({ skipped: 'auto-reply off' }).text, /غير مفعّل/);
+  assert.match(say({ skipped: 'taken over by staff' }).text, /موظف/);
+  assert.match(say({ failed: 'Insufficient wallet balance.' }).text, /LoopChat: Insufficient wallet balance/);
+  assert.match(say(await wa.handleEvent(null, deps())).text, /بلا نوع حدث/);
+  assert.match(say(await wa.handleEvent({ event_type: 'contact.updated' }, deps())).text, /لا يخص المساعد: contact\.updated/);
+  assert.match(say(null).text, /سجل الخادم/);
+  assert.equal(say({ paused: true }).ok, true);
+  for (const r of [{ skipped: 'auto-reply off' }, { ignored: 'unmapped channel' }, { failed: 'reply' }]) assert.equal(say(r).ok, false);
+});
+
 // ─── (ب) the template after a call ─────────────────────────────────
 const now = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 let callSeq = 0;

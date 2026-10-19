@@ -259,6 +259,33 @@ function buildVariables(list, { company, requests, deps }) {
   return out;
 }
 
+// ─── What became of a webhook event ────────────────────────────────
+// In words for the WhatsApp page, so a message that got no answer shows why:
+// the channel is not linked, replies are off, an employee has the
+// conversation, LoopChat refused the send, …
+const SKIPPED = {
+  'unmapped channel'   : 'رقم واتساب هذا غير مربوط بأي شركة على المنصة',
+  'not incoming'       : 'رسالة صادرة من الرقم نفسه، لا يُرد عليها',
+  'auto-reply off'     : 'رد المساعد غير مفعّل لهذه الشركة',
+  'no phone'           : 'لم يصل رقم العميل مع الرسالة',
+  'not text'           : 'ليست رسالة نصية، فتُترك للفريق',
+  'taken over by staff': 'المحادثة عند موظف في LoopChat',
+  'daily cap'          : 'بلغت الشركة الحد اليومي للرسائل',
+  'empty reply'        : 'رد فارغ من المساعد',
+};
+function describeOutcome(r) {
+  if (!r) return { ok: false, text: 'تعذّرت معالجة الحدث، والتفاصيل في سجل الخادم' };
+  if (r.sent) return { ok: true, text: 'ردّ المساعد ووصل الرد إلى LoopChat' };
+  if (r.duplicate) return { ok: true, text: 'وصلت من قبل، فلم تُعالج مرة ثانية' };
+  if (r.paused === true) return { ok: true, text: 'استلم موظف المحادثة، فتوقف المساعد فيها' };
+  if (r.paused === false) return { ok: true, text: 'أُعيدت المحادثة إلى المساعد' };
+  if (r.failed) return { ok: false, text: r.failed === 'reply' ? 'تعذّر توليد الرد' : `لم يُرسل الرد، وسبب LoopChat: ${r.failed}` };
+  const why = r.skipped || r.ignored;
+  if (SKIPPED[why]) return { ok: false, text: SKIPPED[why] };
+  if (why === 'unknown event') return { ok: false, text: 'وصل طلب بلا نوع حدث، وبياناته على غير الشكل الموثّق' };
+  return { ok: false, text: `حدث لا يخص المساعد: ${why}` };
+}
+
 // ─── Settings, validated ───────────────────────────────────────────
 // Returns { settings } to merge into the company's settings, or { error }.
 function validateSettings(body) {
@@ -292,7 +319,7 @@ function validateSettings(body) {
 }
 
 module.exports = {
-  handleEvent, afterCall, validateSettings, settingsOf, companyForChannel,
+  handleEvent, afterCall, validateSettings, settingsOf, companyForChannel, describeOutcome,
   whatsappNumber, waDigits, buildVariables,
   VARIABLE_SOURCES, TRIGGERS, FOLLOWUP_MAX_AGE_MS,
 };

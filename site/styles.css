@@ -761,7 +761,12 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
   display: flex; align-items: center; justify-content: center;
   /* Logos sit transparent on the page — no card behind them. */
 }
-.marquee-track img { max-height: 52px; width: auto; object-fit: contain; }
+/* The logo files are trimmed to their marks, so the height set here is the
+   logo's own height. A wide lock-up and a stacked one need different
+   heights to look the same size. */
+.marquee-track img { width: auto; max-width: 100%; object-fit: contain; }
+.marquee-track img.logo-wide    { height: 58px; }
+.marquee-track img.logo-stacked { height: 78px; }
 @keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 
 /* ── Showcase: auto-advancing slideshow (PowerPoint-style) ── */

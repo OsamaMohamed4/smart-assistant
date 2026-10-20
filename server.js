@@ -36,6 +36,7 @@ const { startDrainTimer, backfillRecentCalls, refreshCall, recordingLinkFor } = 
 const voice = require('./services/voice');
 const { publishCompany } = require('./services/publish/pipeline');
 const whatsapp = require('./services/whatsapp');
+const estate = require('./services/estate');
 const loopchat = require('./services/whatsapp/loopchat');
 const invoices = require('./services/invoices');
 const mailer = require('./lib/mailer');
@@ -1758,6 +1759,8 @@ app.get('/api/companies/:id/requests', requireCompanyAccess, async (req, res) =>
           .filter((k) => fields[k])
           .map((k) => ({ key: k, label: REQUEST_FIELDS[k]?.labelAr || k, value: fields[k] })),
         staffNotes: r.staff_notes || '',
+        // What became of sending it on to the company's Estate; null if never tried.
+        estate    : r.estate_status ? { status: r.estate_status, detail: r.estate_detail || null, at: r.estate_at } : null,
         createdAt : r.created_at,
         updatedAt : r.updated_at,
       };
@@ -1767,7 +1770,82 @@ app.get('/api/companies/:id/requests', requireCompanyAccess, async (req, res) =>
     requests: out,
     statuses: REQUEST_STATUSES,
     types: Object.fromEntries(Object.entries(REQUEST_TYPES).map(([k, v]) => [k, v.labelAr])),
+    estateReady: (await estate.readiness(c, { sql, decryptField })).ready,
   });
+});
+
+// ─── Estate (superadmin) ─────────────────────────────────────────
+// The company's own Estate: its address, a platform value and an on switch in
+// settings; its API key in its own column, write-only like the LoopChat token.
+// services/estate.js says what is sent and why.
+const requireSuperadmin = (req, res, next) => (req.user?.role === 'superadmin' ? next() : res.status(403).json({ error: 'forbidden' }));
+
+app.get('/api/companies/:id/estate', requireSuperadmin, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  const s = estate.settingsOf(c);
+  const hasToken = !!(await sql.getCompanyEstateToken.get(c.id))?.estate_token;
+  res.json({ url: s.url, platform: s.platform, enabled: s.enabled, hasToken });
+});
+
+app.put('/api/companies/:id/estate', requireSuperadmin, async (req, res) => {
+  const row = await sql.getCompany.get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const hasToken = !!(await sql.getCompanyEstateToken.get(row.id))?.estate_token;
+  const v = estate.validateSettings(req.body, { hasToken });
+  if (v.error) return res.status(400).json({ error: v.error });
+  let existing = {};
+  try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
+  await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify({ ...existing, estate: v.estate }) });
+  invalidateCache();
+  audit(req, 'company.estate', `companies/${row.id}`, { url: v.estate.url, enabled: v.estate.enabled });
+  res.json({ ...v.estate, hasToken });
+});
+
+app.put('/api/companies/:id/estate/token', requireSuperadmin, async (req, res) => {
+  const row = await sql.getCompany.get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const token = String(req.body?.token || '').trim();
+  if (token.length > 2000) return res.status(400).json({ error: 'المفتاح أطول من المعتاد. انسخه كما هو.' });
+  await sql.setCompanyEstateToken.run({ id: row.id, token: token ? encryptField(token) : null });
+  // Without a key nothing can be sent, so switching the key off switches sending off.
+  if (!token) {
+    let existing = {};
+    try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
+    if (existing.estate?.enabled) {
+      await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify({ ...existing, estate: { ...existing.estate, enabled: false } }) });
+      invalidateCache();
+    }
+  }
+  audit(req, 'company.estate_token', `companies/${row.id}`, { set: !!token });
+  res.json({ hasToken: !!token });
+});
+
+// Address and key, checked with a request carrying no fields (see check()).
+app.post('/api/companies/:id/estate/check', requireSuperadmin, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  const token = decryptField((await sql.getCompanyEstateToken.get(c.id))?.estate_token) || null;
+  const url = req.body?.url !== undefined ? req.body.url : estate.settingsOf(c).url;
+  const r = await estate.check({ url, token });
+  audit(req, 'company.estate_check', `companies/${c.id}`, { ok: r.ok });
+  res.json(r);
+});
+
+// One request, sent (again) by hand: one that failed or was skipped.
+app.post('/api/companies/:id/requests/:requestId/estate', requireSuperadmin, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  const id = Number(req.params.requestId);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid id' });
+  const request = await sql.getRequestForEstate.get(id, c.id);
+  if (!request) return res.status(404).json({ error: 'not found' });
+  if (request.estate_status === 'sent') return res.status(409).json({ error: 'أُرسل هذا الطلب إلى Estate من قبل' });
+  const r = await estate.pushRequest(c, request, { sql, logger, decryptField }, { retry: true });
+  if (r.skipped === 'not configured') return res.status(400).json({ error: 'ربط Estate غير مكتمل أو غير مفعّل لهذه الشركة' });
+  if (r.duplicate) return res.status(409).json({ error: 'الطلب قيد الإرسال الآن' });
+  audit(req, 'request.estate_send', `companies/${c.id}/requests/${id}`, { sent: !!r.sent });
+  res.json(r);
 });
 
 app.patch('/api/companies/:id/requests/:requestId', requireCompanyAccess, async (req, res) => {

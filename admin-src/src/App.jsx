@@ -216,7 +216,7 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         {activeTab === 'clients'   && isSuper && !isWorkspace && <ClientsPage />}
         {activeTab === 'whatsapp'  && isSuper && !isWorkspace && <WhatsappPage />}
         {activeTab === 'sessions'  && <SessionsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
-        {activeTab === 'requests'  && <RequestsPage pinnedCompanyId={pinnedCompanyId} />}
+        {activeTab === 'requests'  && <RequestsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'campaigns' && <CampaignsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'usage'     && <UsagePage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'invoices'  && <InvoicesPage user={user} pinnedCompanyId={pinnedCompanyId} />}

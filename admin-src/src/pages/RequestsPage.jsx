@@ -3,6 +3,7 @@ import { Inbox, Phone, ChevronDown, ChevronUp } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Card } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
 import { useToast } from '../components/ui/Toast';
 import { cn, relTime } from '../lib/utils';
 import { api } from '../lib/api';
@@ -22,7 +23,21 @@ const STATUS_TONE = {
   closed   : 'bg-ink-100 text-ink-600',
 };
 
-function RequestRow({ r, statuses, onUpdate, busy }) {
+// What became of sending a request on to the company's Estate.
+const ESTATE_TONE = {
+  sent   : 'text-emerald-700',
+  pending: 'text-sky-700',
+  failed : 'text-rose-700',
+  skipped: 'text-amber-800',
+};
+function estateLine(e) {
+  if (e.status === 'sent') return 'أُرسل إلى Estate';
+  if (e.status === 'pending') return 'قيد الإرسال إلى Estate';
+  if (e.status === 'failed') return `لم يُرسل إلى Estate: ${e.detail || 'سبب غير معروف'}`;
+  return e.detail || 'لم يُرسل إلى Estate';
+}
+
+function RequestRow({ r, statuses, onUpdate, busy, canSendToEstate, onSendToEstate }) {
   const [open, setOpen] = useState(false);
   const [notes, setNotes] = useState(r.staffNotes || '');
   useEffect(() => { setNotes(r.staffNotes || ''); }, [r.staffNotes]);
@@ -53,6 +68,9 @@ function RequestRow({ r, statuses, onUpdate, busy }) {
               )}
               <span>{relTime(r.createdAt)}</span>
             </div>
+            {r.estate && (
+              <div className={cn('mt-0.5 text-[11.5px]', ESTATE_TONE[r.estate.status] || 'text-ink-500')}>{estateLine(r.estate)}</div>
+            )}
           </div>
           {open
             ? <ChevronUp className="w-4 h-4 text-ink-400 shrink-0" />
@@ -96,7 +114,17 @@ function RequestRow({ r, statuses, onUpdate, busy }) {
               maxLength={2000}
               className="w-full px-3 py-2 bg-white border border-ink-200 rounded-lg text-[13px] focus-ring resize-y"
             />
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-2">
+              {canSendToEstate && (!r.estate || ['failed', 'skipped'].includes(r.estate.status)) && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onSendToEstate(r)}
+                  className="h-8 px-3.5 rounded-lg border border-ink-200 bg-white text-ink-800 text-[12px] disabled:opacity-40"
+                >
+                  {r.estate ? 'إعادة الإرسال إلى Estate' : 'إرسال إلى Estate'}
+                </button>
+              )}
               <button
                 type="button"
                 disabled={busy || notes === (r.staffNotes || '')}
@@ -113,7 +141,8 @@ function RequestRow({ r, statuses, onUpdate, busy }) {
   );
 }
 
-export function RequestsPage({ pinnedCompanyId }) {
+export function RequestsPage({ user, pinnedCompanyId }) {
+  const isSuper = user?.role === 'superadmin';
   const { push } = useToast();
   const [companies, setCompanies] = useState([]);
   const [companyId, setCompanyId] = useState(pinnedCompanyId || null);
@@ -153,6 +182,20 @@ export function RequestsPage({ pinnedCompanyId }) {
     }
   };
 
+  const onSendToEstate = async (r) => {
+    setBusyId(r.id);
+    try {
+      const out = await api.sendRequestToEstate(companyId, r.id);
+      if (out.sent) push('أُرسل الطلب إلى Estate', 'success');
+      else push(out.failed ? `لم يقبله Estate: ${out.failed}` : (out.skipped || 'لم يُرسل'), 'error');
+      load();
+    } catch (e) {
+      push(e.message, 'error');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const isWorkspace = !!pinnedCompanyId;
   const active = companies.find((c) => c.id === companyId);
   const counts = data.requests.reduce((m, r) => ({ ...m, [r.status]: (m[r.status] || 0) + 1 }), {});
@@ -180,6 +223,8 @@ export function RequestsPage({ pinnedCompanyId }) {
       />
 
       <div className="px-8 py-7 max-w-4xl space-y-4">
+        {isSuper && companyId && <EstateCard key={companyId} companyId={companyId} onChange={load} />}
+
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={status}
@@ -214,11 +259,134 @@ export function RequestsPage({ pinnedCompanyId }) {
         ) : (
           <Card className="overflow-hidden">
             {data.requests.map((r) => (
-              <RequestRow key={r.id} r={r} statuses={data.statuses} onUpdate={onUpdate} busy={busyId === r.id} />
+              <RequestRow key={r.id} r={r} statuses={data.statuses} onUpdate={onUpdate} busy={busyId === r.id}
+                canSendToEstate={isSuper && data.estateReady} onSendToEstate={onSendToEstate} />
             ))}
           </Card>
         )}
       </div>
     </div>
+  );
+}
+
+// The company's own Estate (its ERP), superadmin only. Its API key is
+// write-only: the screen only learns whether one is saved. Nothing is sent
+// until it is switched on, and "فحص الاتصال" asks Estate which fields it
+// enforces before any real request goes. See services/estate.js.
+function EstateCard({ companyId, onChange }) {
+  const { push } = useToast();
+  const [s, setS] = useState(null);
+  const [form, setForm] = useState({ url: '', platform: '', enabled: false });
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState('');
+  const [check, setCheck] = useState(null);
+  const [open, setOpen] = useState(false);
+
+  const load = () => api.companyEstate(companyId).then((r) => {
+    setS(r);
+    setForm({ url: r.url || '', platform: r.platform || '', enabled: !!r.enabled });
+    if (!r.enabled) setOpen(true);
+  }).catch((e) => push(e.message, 'error'));
+  useEffect(() => { load(); }, [companyId]);
+
+  const run = async (what, fn) => {
+    setBusy(what);
+    try { await fn(); } catch (e) { push(e.message, 'error'); } finally { setBusy(''); }
+  };
+  const save = () => run('save', async () => {
+    await api.saveCompanyEstate(companyId, form);
+    push('تم حفظ إعدادات Estate', 'success');
+    await load(); onChange?.();
+  });
+  const saveToken = (value) => run('token', async () => {
+    const r = await api.saveCompanyEstateToken(companyId, value);
+    setToken('');
+    push(r.hasToken ? 'تم حفظ مفتاح Estate' : 'أُزيل مفتاح Estate، وأُوقف الإرسال', 'success');
+    await load(); onChange?.();
+  });
+  const runCheck = () => run('check', async () => {
+    setCheck(await api.checkCompanyEstate(companyId, form.url));
+  });
+
+  if (!s) return null;
+  const input = 'w-full h-10 px-3 rounded-xl border border-ink-200 bg-white text-[13px] focus-ring';
+  return (
+    <Card className="p-5 space-y-4">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between gap-3 text-right">
+        <span className="text-[14px] font-semibold text-ink-900">ربط Estate</span>
+        <span className="flex items-center gap-2">
+          <span className={cn('text-[12px] font-medium', s.enabled ? 'text-emerald-700' : 'text-ink-500')}>
+            {s.enabled ? 'يعمل: تُرسل طلبات الاهتمام بعد كل مكالمة' : 'غير مفعّل'}
+          </span>
+          {open ? <ChevronUp className="w-4 h-4 text-ink-400" /> : <ChevronDown className="w-4 h-4 text-ink-400" />}
+        </span>
+      </button>
+
+      {open && (
+        <>
+          <p className="text-[12px] text-ink-500 leading-relaxed">
+            يُرسل كل «طلب اهتمام» يسجّله الوكيل إلى نظام Estate الخاص بالشركة بعد انتهاء المكالمة: اسم العميل، ورقمه من المكالمة، وقيمة المصدر، وملاحظة فيها كل إجابات العميل.
+            طلبات التأجير لا تُرسل، فلها في Estate واجهة أخرى. ويظهر بجانب كل طلب ما جرى له.
+          </p>
+
+          <div>
+            <label className="block text-[12px] font-medium text-ink-700 mb-1">عنوان Estate الخاص بالشركة</label>
+            <input dir="ltr" value={form.url} onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
+              placeholder="https://maher.e-statee.com" className={cn(input, 'font-mono text-[12px]')} />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between gap-3 mb-1">
+              <label className="block text-[12px] font-medium text-ink-700">مفتاح Estate (API)</label>
+              <span className={cn('text-[11.5px] font-semibold', s.hasToken ? 'text-emerald-700' : 'text-ink-500')}>
+                {s.hasToken ? 'المفتاح محفوظ' : 'لا يوجد مفتاح'}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <input type="password" autoComplete="off" dir="ltr" value={token} onChange={(e) => setToken(e.target.value)}
+                placeholder={s.hasToken ? 'لاستبدال المفتاح، الصق مفتاحاً جديداً' : 'الصق المفتاح الذي أعطاك إياه Estate'}
+                className={cn(input, 'flex-1 font-mono text-[12px]')} />
+              <Button variant="secondary" disabled={!token.trim()} loading={busy === 'token'} onClick={() => saveToken(token.trim())}>حفظ المفتاح</Button>
+            </div>
+            <p className="mt-1 text-[11.5px] text-ink-500">لا يُعرض بعد الحفظ، ولا يصل إلى المتصفح.</p>
+            {s.hasToken && (
+              <button type="button" className="mt-1 text-[11.5px] text-rose-700 underline disabled:opacity-50" disabled={!!busy}
+                onClick={() => saveToken('')}>إزالة المفتاح</button>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-[12px] font-medium text-ink-700 mb-1">قيمة المصدر (platform)</label>
+            <input dir="ltr" value={form.platform} maxLength={60} onChange={(e) => setForm((f) => ({ ...f, platform: e.target.value }))}
+              className={cn(input, 'font-mono text-[12px]')} />
+            <p className="mt-1 text-[11.5px] text-ink-500">القيمة التي يريدها Estate لمصدر الطلبات القادمة من المكالمات. اسأل Estate عنها، ولا تُخمَّن.</p>
+          </div>
+
+          <label className="flex items-start gap-3 rounded-xl border border-ink-100 px-4 py-3 cursor-pointer">
+            <input type="checkbox" className="mt-1 w-4 h-4 accent-brand-600" checked={form.enabled}
+              onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))} />
+            <span>
+              <span className="block text-[13px] font-medium text-ink-900">إرسال طلبات الاهتمام إلى Estate بعد كل مكالمة</span>
+              <span className="block text-[12px] text-ink-500 mt-0.5">يحتاج العنوان والمفتاح وقيمة المصدر.</span>
+            </span>
+          </label>
+
+          {check && (
+            <div className={cn('rounded-xl border px-4 py-3 text-[12.5px] leading-relaxed',
+              check.ok ? (check.warn ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-emerald-50 border-emerald-200 text-emerald-800') : 'bg-rose-50 border-rose-200 text-rose-800')}>
+              {check.text}
+            </div>
+          )}
+
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="secondary" disabled={!s.hasToken || !form.url.trim()} loading={busy === 'check'} onClick={runCheck}>فحص الاتصال</Button>
+            <Button variant="brand" loading={busy === 'save'} onClick={save}>حفظ</Button>
+          </div>
+          <p className="text-[11.5px] text-ink-500 leading-relaxed">
+            «فحص الاتصال» يرسل إلى Estate طلباً بلا بيانات، والمتوقع أن يرفضه ويذكر الحقول التي يشترطها. وإن قبله، فستظهر رسالة تطلب حذفه من Estate.
+          </p>
+        </>
+      )}
+    </Card>
   );
 }

@@ -104,6 +104,11 @@ async function processCallEvent(ev, log) {
         // replayed event is harmless; it never throws into this pipeline.
         require('./whatsapp').afterCall(company, finalRow, { sql, logger, decryptField, fillGlobals })
           .catch((e) => logger.warn('whatsapp follow-up failed', { err: e.message, callId: finalRow.id }));
+        // Requests filed on the call go on to the company's Estate, now that
+        // the call record carries the customer's number. Each request is sent
+        // once; a replayed event finds them claimed.
+        require('./estate').afterCall(company, finalRow, { sql, logger, decryptField })
+          .catch((e) => logger.warn('estate push failed', { err: e.message, callId: finalRow.id }));
       }
     } catch (e) {
       logger.warn('outbound webhook dispatch skipped', { err: e.message });

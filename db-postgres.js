@@ -219,6 +219,11 @@ const sql = {
     `UPDATE companies SET loopchat_token = $1, updated_at = ${NOW} WHERE id = $2`,
     ['token', 'id'],
   ),
+  getCompanyEstateToken: stmt('SELECT estate_token FROM companies WHERE id = $1'),
+  setCompanyEstateToken: stmt(
+    `UPDATE companies SET estate_token = $1, updated_at = ${NOW} WHERE id = $2`,
+    ['token', 'id'],
+  ),
   updateCompany: stmt(
     `UPDATE companies SET
        name = $1, language = $2, voice_id = $3, phone_number = $4,
@@ -334,6 +339,7 @@ const sql = {
   listCustomerRequests: stmt(
     `SELECT r.id, r.conversation_id, r.request_type, r.status, r.customer_name,
             r.fields, r.staff_notes, r.created_at, r.updated_at,
+            r.estate_status, r.estate_detail, r.estate_at,
             c.caller_number
        FROM customer_requests r
        LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
@@ -349,6 +355,32 @@ const sql = {
         SET status = $1, staff_notes = $2, updated_at = ${NOW}
       WHERE id = $3 AND company_id = $4`,
     ['status', 'staff_notes', 'id', 'company_id'],
+  ),
+  // Estate -- see db-sqlite.js.
+  listRequestsForEstate: stmt(
+    `SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, c.caller_number
+       FROM customer_requests r
+       LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
+      WHERE r.company_id = $1 AND r.conversation_id = $2 ORDER BY r.id`,
+  ),
+  getRequestForEstate: stmt(
+    `SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, c.caller_number
+       FROM customer_requests r
+       LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
+      WHERE r.id = $1 AND r.company_id = $2`,
+  ),
+  claimRequestEstate: stmt(
+    `UPDATE customer_requests
+        SET estate_status = 'pending', estate_detail = NULL, estate_at = ${NOW}
+      WHERE id = $1 AND company_id = $2
+        AND (estate_status IS NULL OR ($3::int = 1 AND estate_status IN ('failed', 'skipped')))`,
+    ['id', 'company_id', 'retry'],
+  ),
+  finishRequestEstate: stmt(
+    `UPDATE customer_requests
+        SET estate_status = $1, estate_detail = $2, estate_at = ${NOW}
+      WHERE id = $3 AND company_id = $4`,
+    ['status', 'detail', 'id', 'company_id'],
   ),
 
   // ─── Publish pipeline ───────────────────────────────────────────

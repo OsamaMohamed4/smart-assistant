@@ -874,6 +874,19 @@ if (!hasColumn('companies', 'loopchat_token')) {
   runMigration(46, 'companies_add_loopchat_token', 'ALTER TABLE companies ADD COLUMN loopchat_token TEXT');
 }
 
+// Migration 47: requests go on to the company's own Estate (its ERP). The key
+// is a column for the same reason as loopchat_token; each request keeps what
+// became of its sending, shown beside it on the requests page.
+// Postgres: db-pg-schema.js + lib/migrations-pg.js.
+if (!hasColumn('companies', 'estate_token')) {
+  runMigration(47, 'estate_integration', `
+    ALTER TABLE companies ADD COLUMN estate_token TEXT;
+    ALTER TABLE customer_requests ADD COLUMN estate_status TEXT;
+    ALTER TABLE customer_requests ADD COLUMN estate_detail TEXT;
+    ALTER TABLE customer_requests ADD COLUMN estate_at TEXT;
+  `);
+}
+
 // ─── Tenant-safety: one company per phone number ──────────────────
 // A DID and an imported provider number each identify exactly ONE tenant.
 // Inbound calls are attributed by those values (services/voice resolves a call
@@ -1152,6 +1165,7 @@ const sql = {
   listCustomerRequests: db.prepare(`
     SELECT r.id, r.conversation_id, r.request_type, r.status, r.customer_name,
            r.fields, r.staff_notes, r.created_at, r.updated_at,
+           r.estate_status, r.estate_detail, r.estate_at,
            c.caller_number
       FROM customer_requests r
       LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
@@ -1165,6 +1179,34 @@ const sql = {
   updateCustomerRequestStatus: db.prepare(`
     UPDATE customer_requests
        SET status = @status, staff_notes = @staff_notes, updated_at = datetime('now')
+     WHERE id = @id AND company_id = @company_id
+  `),
+  // Sending requests on to the company's Estate (services/estate.js). The
+  // customer's number comes from the call, as on the requests page.
+  listRequestsForEstate: db.prepare(`
+    SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, c.caller_number
+      FROM customer_requests r
+      LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
+     WHERE r.company_id = ? AND r.conversation_id = ? ORDER BY r.id
+  `),
+  getRequestForEstate: db.prepare(`
+    SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, c.caller_number
+      FROM customer_requests r
+      LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
+     WHERE r.id = ? AND r.company_id = ?
+  `),
+  // Claimed before sending, so a replayed call or a second click sends nothing
+  // twice. A retry may take one back that failed or was skipped -- never one
+  // sent, nor one in flight.
+  claimRequestEstate: db.prepare(`
+    UPDATE customer_requests
+       SET estate_status = 'pending', estate_detail = NULL, estate_at = datetime('now')
+     WHERE id = @id AND company_id = @company_id
+       AND (estate_status IS NULL OR (@retry = 1 AND estate_status IN ('failed', 'skipped')))
+  `),
+  finishRequestEstate: db.prepare(`
+    UPDATE customer_requests
+       SET estate_status = @status, estate_detail = @detail, estate_at = datetime('now')
      WHERE id = @id AND company_id = @company_id
   `),
 
@@ -1259,6 +1301,10 @@ const sql = {
   getCompanyLoopchatToken: db.prepare('SELECT loopchat_token FROM companies WHERE id = ?'),
   setCompanyLoopchatToken: db.prepare(
     `UPDATE companies SET loopchat_token = @token, updated_at = datetime('now') WHERE id = @id`
+  ),
+  getCompanyEstateToken: db.prepare('SELECT estate_token FROM companies WHERE id = ?'),
+  setCompanyEstateToken: db.prepare(
+    `UPDATE companies SET estate_token = @token, updated_at = datetime('now') WHERE id = @id`
   ),
   updateCompany      : db.prepare(`
     UPDATE companies SET

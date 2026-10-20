@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS companies (
   -- when DATA_ENCRYPTION_KEY is set). A column, not a settings key, because
   -- settings reach the browser and this must not. See services/whatsapp.
   loopchat_token  TEXT,
+  -- The API key of the company's own Estate (its ERP), the same way:
+  -- encrypted when the key is set, never sent to the browser. services/estate.js.
+  estate_token    TEXT,
   last_synced_at  TEXT,
   created_at      TEXT DEFAULT ${NOW_TEXT},
   updated_at      TEXT DEFAULT ${NOW_TEXT}
@@ -317,6 +320,11 @@ CREATE TABLE IF NOT EXISTS customer_requests (
   customer_name   TEXT,
   fields          TEXT,
   staff_notes     TEXT,
+  -- What became of sending it on to the company's Estate: pending, sent,
+  -- failed or skipped, with Estate's own words. NULL: never tried.
+  estate_status   TEXT,
+  estate_detail   TEXT,
+  estate_at       TEXT,
   created_at      TEXT NOT NULL DEFAULT ${NOW_TEXT},
   updated_at      TEXT NOT NULL DEFAULT ${NOW_TEXT}
 );

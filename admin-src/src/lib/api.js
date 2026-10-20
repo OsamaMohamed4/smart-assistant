@@ -291,4 +291,11 @@ export const api = {
     request(`/api/companies/${companyId}/requests/${requestId}`, {
       method: 'PATCH', body: JSON.stringify(body),
     }),
+  // The company's own Estate (superadmin): settings, its key (write-only), a
+  // check of both, and sending one request by hand.
+  companyEstate     : (companyId) => request(`/api/companies/${companyId}/estate`),
+  saveCompanyEstate : (companyId, body) => request(`/api/companies/${companyId}/estate`, { method: 'PUT', body: JSON.stringify(body) }),
+  saveCompanyEstateToken: (companyId, token) => request(`/api/companies/${companyId}/estate/token`, { method: 'PUT', body: JSON.stringify({ token }) }),
+  checkCompanyEstate: (companyId, url) => request(`/api/companies/${companyId}/estate/check`, { method: 'POST', body: JSON.stringify({ url }) }),
+  sendRequestToEstate: (companyId, requestId) => request(`/api/companies/${companyId}/requests/${requestId}/estate`, { method: 'POST', body: '{}' }),
 };

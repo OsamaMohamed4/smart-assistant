@@ -150,10 +150,35 @@ async function handleMessage(evt, deps) {
   if (!phone) return { skipped: 'no phone' };
   // Images, voice notes and files are left to the team in LoopChat.
   if (!isText) return { skipped: 'not text' };
+  // A pause here is a copy of LoopChat's switch, kept from its events. One
+  // missed -- the hand-back sent while the webhook could not be reached --
+  // would leave the assistant silent in that conversation for good, so
+  // LoopChat is asked before staying quiet, and its answer is what counts.
+  // Unreachable or no answer: stay quiet, as the last event said.
   const thread = await sql.getWhatsappThread.get(channelId, phone);
-  if (thread && Number(thread.ai_paused)) return { skipped: 'taken over by staff', by: thread.paused_by || null };
+  let resumed = false;
+  if (thread && Number(thread.ai_paused)) {
+    const live = await integrationIsOn(company, phone, deps);
+    if (live !== true) return { skipped: 'taken over by staff', by: thread.paused_by || null, live };
+    await sql.upsertWhatsappThread.run({ company_id: company.id, channel_id: channelId, contact_phone: phone, ai_paused: 0, paused_by: null });
+    logger.info('whatsapp: pause lifted, LoopChat has the integration on', { companyId: company.id, channelId });
+    resumed = true;
+  }
 
-  return serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps));
+  const r = await serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps));
+  return resumed ? { ...r, resumed } : r;
+}
+
+// LoopChat's switch for this customer's conversation: true, false, or null
+// when it cannot say (no such contact, or LoopChat unreachable).
+async function integrationIsOn(company, phone, deps) {
+  try {
+    const c = await loopchat.findContact(phone, await tokenOf(company, deps));
+    return typeof c?.messageIntegration === 'boolean' ? c.messageIntegration : null;
+  } catch (e) {
+    deps.logger.warn('whatsapp: could not ask LoopChat about a paused conversation', { err: loopchat.errText(e) });
+    return null;
+  }
 }
 
 // The reply goes out from the number the customer wrote to -- the company's
@@ -310,7 +335,9 @@ const SKIPPED = {
 };
 function describeOutcome(r) {
   if (!r) return { ok: false, text: 'تعذّرت معالجة الحدث، والتفاصيل في سجل الخادم' };
-  if (r.sent) return { ok: true, text: 'ردّ المساعد ووصل الرد إلى LoopChat' };
+  if (r.sent) {
+    return { ok: true, text: `ردّ المساعد ووصل الرد إلى LoopChat${r.resumed ? '. كانت المحادثة موقوفة عندنا، وLoopChat يقول إن التكامل يعمل لها، فعاد المساعد إليها' : ''}` };
+  }
   if (r.duplicate) return { ok: true, text: 'وصلت من قبل، فلم تُعالج مرة ثانية' };
   // Who, from LoopChat's own event, so a pause nobody remembers making can be
   // traced -- and how it ends, since only LoopChat can end it.
@@ -318,7 +345,8 @@ function describeOutcome(r) {
   if (r.paused === true) return { ok: true, text: `أوقف موظف${by} المساعد في هذه المحادثة من LoopChat، ولا يرد فيها حتى يعيد الموظف تشغيل التكامل لها من LoopChat` };
   if (r.paused === false) return { ok: true, text: `أعاد موظف${by} المحادثة إلى المساعد` };
   if (r.skipped === 'taken over by staff') {
-    return { ok: false, text: `المحادثة متوقفة عند موظف${by} في LoopChat، فلم يرد المساعد. لإعادتها: افتح المحادثة في LoopChat وأعد تشغيل التكامل لها` };
+    const confirmed = r.live === false ? '، وLoopChat يؤكد أن التكامل متوقف لها' : '';
+    return { ok: false, text: `المحادثة متوقفة عند موظف${by} في LoopChat${confirmed}، فلم يرد المساعد. لإعادتها: افتح المحادثة في LoopChat وأعد تشغيل التكامل لها` };
   }
   if (r.failed === 'no scenario') return { ok: false, text: NO_SCENARIO };
   if (r.failed) return { ok: false, text: r.failed === 'reply' ? 'تعذّر توليد الرد' : `لم يُرسل الرد، وسبب LoopChat: ${r.failed}` };

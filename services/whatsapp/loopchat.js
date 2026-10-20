@@ -88,6 +88,17 @@ function templateVariableCount(body) {
   return nums.length ? Math.max(...nums) : 0;
 }
 
+// The contact this account holds for a number, or null. Its
+// message_integration is LoopChat's own per-conversation switch: on, the
+// integration answers; off, an employee has taken the conversation over.
+async function findContact(phone, token) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return null;
+  const r = await client(token).get('/v2/integrations/contacts', { params: { 'filter[phone_number]': digits, per_page: 10 } });
+  const c = (r.data?.data?.contacts || []).find((x) => String(x.phone_number || '').replace(/\D/g, '') === digits);
+  return c ? { id: Number(c.id), name: c.name || null, messageIntegration: c.message_integration ?? null } : null;
+}
+
 // What a send came back with: { ok, status, messageId, reason, contactId }.
 // contactId is the LoopChat contact the number was matched to.
 function outcome(data) {
@@ -131,4 +142,4 @@ async function sendTemplate({ token, channelId, templateId, phone, variables, he
   }
 }
 
-module.exports = { isConfigured, listChannels, listTemplates, sendText, sendTemplate, templateVariableCount, errText, BASE };
+module.exports = { isConfigured, listChannels, listTemplates, findContact, sendText, sendTemplate, templateVariableCount, errText, BASE };

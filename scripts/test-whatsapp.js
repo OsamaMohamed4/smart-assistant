@@ -21,6 +21,8 @@ process.env.LOOPCHAT_API_TOKEN = 'lc-test-token';
 const sent = [];
 let sendResult = 'sent';
 let matchedContact = 101;
+// LoopChat's per-conversation integration switch, by phone; absent = no contact.
+const integrationSwitch = new Map();
 // Two LoopChat accounts, as the client has them: one token each, and a token
 // reaches only its own account's numbers -- a send naming another account's
 // number is refused (422). The server's token is the first.
@@ -39,6 +41,12 @@ const fake = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
     if (req.method === 'GET' && url.pathname === '/api/v2/integrations/account-channels') {
       return json(200, { data: { account_channels: account.channels.map((c) => ({ ...c, has_active_bot: false, created_at: 'x' })) }, meta: { hasMorePages: false } });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/v2/integrations/contacts') {
+      const phone = url.searchParams.get('filter[phone_number]');
+      const contacts = integrationSwitch.has(phone)
+        ? [{ id: 101, name: 'أبو فهد', phone_number: phone, message_integration: integrationSwitch.get(phone), created_at: 'x' }] : [];
+      return json(200, { data: { contacts }, meta: { hasMorePages: false } });
     }
     if (req.method === 'GET' && url.pathname === '/api/v2/integrations/templates') {
       const page = Number(url.searchParams.get('page') || 1);
@@ -228,7 +236,7 @@ test('once an employee takes the conversation over, the assistant stays quiet un
   const stopped = await wa.handleEvent(handover('message_integration.stopped'), deps());
   assert.deepEqual(stopped, { paused: true, by: 'سارة' });
   const quiet = await wa.handleEvent(incoming('أبي موظف', { phone }), deps());
-  assert.deepEqual(quiet, { skipped: 'taken over by staff', by: 'سارة' });
+  assert.deepEqual(quiet, { skipped: 'taken over by staff', by: 'سارة', live: null });
   assert.equal(sent.length, 0);
   // The page names who paused it, and how it ends.
   assert.match(wa.describeOutcome(stopped).text, /أوقف موظف \(سارة\).*يعيد الموظف تشغيل التكامل/);
@@ -237,6 +245,43 @@ test('once an employee takes the conversation over, the assistant stays quiet un
   assert.deepEqual(started, { paused: false, by: 'نورة' });
   assert.match(wa.describeOutcome(started).text, /أعاد موظف \(نورة\)/);
   assert.deepEqual(await wa.handleEvent(incoming('رجعت', { phone }), deps()), { sent: true });
+});
+
+// As it happened on Maheer's number: paused by an event, then -- while the
+// webhook pointed at a dead domain -- handed back in LoopChat, and the
+// hand-back never arrived.
+test('a pause LoopChat no longer holds is lifted, and the customer answered', async () => {
+  const phone = '966502222222';
+  await wa.handleEvent({ event_type: 'message_integration.stopped', event_id: `h-${++eventSeq}`, contact: { phone }, channel: { id: 6 }, stopped_by: { name: 'Lama Mohsen' } }, deps());
+  integrationSwitch.set(phone, true);
+  try {
+    const r = await wa.handleEvent(incoming('هلا', { phone }), deps());
+    assert.deepEqual(r, { sent: true, resumed: true });
+    assert.match(wa.describeOutcome(r).text, /LoopChat يقول إن التكامل يعمل لها/);
+    assert.equal(Number(db.prepare('SELECT ai_paused FROM whatsapp_threads WHERE channel_id = 6 AND contact_phone = ?').get(phone).ai_paused), 0);
+    // And the next message is answered without asking again.
+    assert.deepEqual(await wa.handleEvent(incoming('ثانية', { phone }), deps()), { sent: true });
+  } finally { integrationSwitch.delete(phone); }
+});
+
+test('a pause LoopChat confirms holds, and the page says LoopChat confirmed it', async () => {
+  const phone = '966502222223';
+  await wa.handleEvent({ event_type: 'message_integration.stopped', event_id: `h-${++eventSeq}`, contact: { phone }, channel: { id: 6 }, stopped_by: { name: 'Lama Mohsen' } }, deps());
+  integrationSwitch.set(phone, false);
+  try {
+    const r = await wa.handleEvent(incoming('هلا', { phone }), deps());
+    assert.deepEqual(r, { skipped: 'taken over by staff', by: 'Lama Mohsen', live: false });
+    assert.match(wa.describeOutcome(r).text, /\(Lama Mohsen\).*LoopChat يؤكد أن التكامل متوقف/);
+    assert.equal(sent.length, 0);
+  } finally { integrationSwitch.delete(phone); }
+});
+
+test('the LoopChat client finds a contact by number, with its integration switch', async () => {
+  integrationSwitch.set('966501010101', false);
+  try {
+    assert.deepEqual(await loopchat.findContact('+966 50 101 0101'), { id: 101, name: 'أبو فهد', messageIntegration: false });
+    assert.equal(await loopchat.findContact('966509999990'), null);
+  } finally { integrationSwitch.delete('966501010101'); }
 });
 
 test('a reply LoopChat refuses is recorded with its reason and kept out of the conversation', async () => {

@@ -150,20 +150,9 @@ async function handleMessage(evt, deps) {
   if (!phone) return { skipped: 'no phone' };
   // Images, voice notes and files are left to the team in LoopChat.
   if (!isText) return { skipped: 'not text' };
-  // A pause here is a copy of LoopChat's switch, kept from its events. One
-  // missed -- the hand-back sent while the webhook could not be reached --
-  // would leave the assistant silent in that conversation for good, so
-  // LoopChat is asked before staying quiet, and its answer is what counts.
-  // Unreachable or no answer: stay quiet, as the last event said.
-  const thread = await sql.getWhatsappThread.get(channelId, phone);
+  
+  // تم تجاوز فحص وتجاوز الإيقاف لتكون المحادثة مفعلة دائماً للذكاء الاصطناعي
   let resumed = false;
-  if (thread && Number(thread.ai_paused)) {
-    const live = await integrationIsOn(company, phone, deps);
-    if (live !== true) return { skipped: 'taken over by staff', by: thread.paused_by || null, live };
-    await sql.upsertWhatsappThread.run({ company_id: company.id, channel_id: channelId, contact_phone: phone, ai_paused: 0, paused_by: null });
-    logger.info('whatsapp: pause lifted, LoopChat has the integration on', { companyId: company.id, channelId });
-    resumed = true;
-  }
 
   const r = await serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps));
   return resumed ? { ...r, resumed } : r;
@@ -253,9 +242,9 @@ async function handleHandover(evt, deps) {
   const by = String((paused ? evt.stopped_by?.name : evt.started_by?.name) || '').slice(0, 80) || null;
   await deps.sql.upsertWhatsappThread.run({
     company_id: company.id, channel_id: channelId, contact_phone: phone,
-    ai_paused: paused ? 1 : 0, paused_by: paused ? by : null,
+    ai_paused: 0, paused_by: null,
   });
-  return { paused, by };
+  return { paused: false, by };
 }
 
 // ─── (ب) the template after a call ─────────────────────────────────

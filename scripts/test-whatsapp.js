@@ -221,11 +221,21 @@ test('a picture or a voice note is left to the team', async () => {
 
 test('once an employee takes the conversation over, the assistant stays quiet until it is handed back', async () => {
   const phone = '966509999999';
-  const handover = (type) => ({ event_type: type, event_id: `h-${++eventSeq}`, conversation: { id: 1 }, contact: { id: 2, phone }, channel: { id: 6 }, stopped_by: { id: 12, name: 'سارة' } });
-  assert.deepEqual(await wa.handleEvent(handover('message_integration.stopped'), deps()), { paused: true });
-  assert.deepEqual(await wa.handleEvent(incoming('أبي موظف', { phone }), deps()), { skipped: 'taken over by staff' });
+  const handover = (type) => ({
+    event_type: type, event_id: `h-${++eventSeq}`, conversation: { id: 1 }, contact: { id: 2, phone }, channel: { id: 6 },
+    ...(type.endsWith('stopped') ? { stopped_by: { id: 12, name: 'سارة' } } : { started_by: { id: 13, name: 'نورة' } }),
+  });
+  const stopped = await wa.handleEvent(handover('message_integration.stopped'), deps());
+  assert.deepEqual(stopped, { paused: true, by: 'سارة' });
+  const quiet = await wa.handleEvent(incoming('أبي موظف', { phone }), deps());
+  assert.deepEqual(quiet, { skipped: 'taken over by staff', by: 'سارة' });
   assert.equal(sent.length, 0);
-  assert.deepEqual(await wa.handleEvent(handover('message_integration.started'), deps()), { paused: false });
+  // The page names who paused it, and how it ends.
+  assert.match(wa.describeOutcome(stopped).text, /أوقف موظف \(سارة\).*يعيد الموظف تشغيل التكامل/);
+  assert.match(wa.describeOutcome(quiet).text, /متوقفة عند موظف \(سارة\).*أعد تشغيل التكامل/);
+  const started = await wa.handleEvent(handover('message_integration.started'), deps());
+  assert.deepEqual(started, { paused: false, by: 'نورة' });
+  assert.match(wa.describeOutcome(started).text, /أعاد موظف \(نورة\)/);
   assert.deepEqual(await wa.handleEvent(incoming('رجعت', { phone }), deps()), { sent: true });
 });
 

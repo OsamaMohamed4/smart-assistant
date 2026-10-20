@@ -151,7 +151,7 @@ async function handleMessage(evt, deps) {
   // Images, voice notes and files are left to the team in LoopChat.
   if (!isText) return { skipped: 'not text' };
   const thread = await sql.getWhatsappThread.get(channelId, phone);
-  if (thread && Number(thread.ai_paused)) return { skipped: 'taken over by staff' };
+  if (thread && Number(thread.ai_paused)) return { skipped: 'taken over by staff', by: thread.paused_by || null };
 
   return serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps));
 }
@@ -225,11 +225,12 @@ async function handleHandover(evt, deps) {
   const company = await companyForChannel(channelId, deps);
   if (!company || !phone) return { ignored: 'unmapped channel' };
   const paused = evt.event_type === 'message_integration.stopped';
+  const by = String((paused ? evt.stopped_by?.name : evt.started_by?.name) || '').slice(0, 80) || null;
   await deps.sql.upsertWhatsappThread.run({
     company_id: company.id, channel_id: channelId, contact_phone: phone,
-    ai_paused: paused ? 1 : 0, paused_by: paused ? String(evt.stopped_by?.name || '').slice(0, 80) || null : null,
+    ai_paused: paused ? 1 : 0, paused_by: paused ? by : null,
   });
-  return { paused };
+  return { paused, by };
 }
 
 // ─── (ب) the template after a call ─────────────────────────────────
@@ -311,8 +312,14 @@ function describeOutcome(r) {
   if (!r) return { ok: false, text: 'تعذّرت معالجة الحدث، والتفاصيل في سجل الخادم' };
   if (r.sent) return { ok: true, text: 'ردّ المساعد ووصل الرد إلى LoopChat' };
   if (r.duplicate) return { ok: true, text: 'وصلت من قبل، فلم تُعالج مرة ثانية' };
-  if (r.paused === true) return { ok: true, text: 'استلم موظف المحادثة، فتوقف المساعد فيها' };
-  if (r.paused === false) return { ok: true, text: 'أُعيدت المحادثة إلى المساعد' };
+  // Who, from LoopChat's own event, so a pause nobody remembers making can be
+  // traced -- and how it ends, since only LoopChat can end it.
+  const by = r.by ? ` (${r.by})` : '';
+  if (r.paused === true) return { ok: true, text: `أوقف موظف${by} المساعد في هذه المحادثة من LoopChat، ولا يرد فيها حتى يعيد الموظف تشغيل التكامل لها من LoopChat` };
+  if (r.paused === false) return { ok: true, text: `أعاد موظف${by} المحادثة إلى المساعد` };
+  if (r.skipped === 'taken over by staff') {
+    return { ok: false, text: `المحادثة متوقفة عند موظف${by} في LoopChat، فلم يرد المساعد. لإعادتها: افتح المحادثة في LoopChat وأعد تشغيل التكامل لها` };
+  }
   if (r.failed === 'no scenario') return { ok: false, text: NO_SCENARIO };
   if (r.failed) return { ok: false, text: r.failed === 'reply' ? 'تعذّر توليد الرد' : `لم يُرسل الرد، وسبب LoopChat: ${r.failed}` };
   const why = r.skipped || r.ignored;

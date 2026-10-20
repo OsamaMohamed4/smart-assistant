@@ -365,6 +365,9 @@ function RecentEvents({ events, since, onRefresh }) {
               {e.channelId && (
                 <span className="text-ink-500">القناة <span dir="ltr" className="font-mono">#{e.channelId}</span>{e.channelName ? ` (${e.channelName})` : ''}</span>
               )}
+              {e.contact && (
+                <span className="text-ink-500">العميل <span dir="ltr" className="font-mono">{e.contact}</span></span>
+              )}
               <span className={cn('basis-full', e.ok ? 'text-emerald-700' : 'text-amber-800')}>{e.text}</span>
               {e.unmapped && (
                 <span className="basis-full text-[11.5px] text-ink-500">

@@ -96,7 +96,7 @@ async function findContact(phone, token) {
   if (!digits) return null;
   const r = await client(token).get('/v2/integrations/contacts', { params: { 'filter[phone_number]': digits, per_page: 10 } });
   const c = (r.data?.data?.contacts || []).find((x) => String(x.phone_number || '').replace(/\D/g, '') === digits);
-  return c ? { id: Number(c.id), name: c.name || null, messageIntegration: c.message_integration ?? null } : null;
+  return c ? { id: Number(c.id), name: c.name || null, messageIntegration: true } : null;
 }
 
 // What a send came back with: { ok, status, messageId, reason, contactId }.

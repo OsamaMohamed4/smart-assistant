@@ -1,235 +1,351 @@
-// Estate (e-statee.com): the real-estate ERP the client's companies run their
-// sales in, each on its own address (Maheer's is maher.e-statee.com). A
-// request the agent files on a call goes on to the company's Estate as a new
-// attention request -- a lead -- through the endpoint Estate documents for
-// Make & Zapier (https://api-docs.e-statee.com/new-attention-request-19392637e0):
-//
-//   POST {company's Estate}/api/v1/make/attention-request/attention-request-store
-//   Authorization: Bearer {the company's Estate API key}
-//   form-encoded body
-//
-// What goes, and what does not:
-//   - Purchase-interest requests only. That endpoint makes sales leads; Estate
-//     keeps rental requests in a module of their own, not linked here.
-//   - name, phone (from the call record, never from the model), platform, and
-//     note: every answer the customer gave, labelled as on the requests page.
-//     `platform` is a value per company, set by a superadmin, because Estate
-//     has not said what it should be for a lead from a call.
-//   - Estate's docs mark more fields required -- email, ad and campaign names,
-//     project, rooms, block, price and size ranges -- that a call does not
-//     collect and that are not made up here. The docs are marked "developing";
-//     whatever Estate does enforce comes back in its refusal, which is kept on
-//     the request and can be checked beforehand with check().
-//   - After the call ends: the customer's number is attached from the call
-//     record, which exists only then.
-//
-// Nothing is sent until a superadmin has set the address, the key and the
-// platform value and switched it on. Every attempt, and why one did not go,
-// is kept on the request (estate_status / estate_detail).
-//
-// deps.post (and check's `send`) replace the HTTP call in tests; production
-// always uses post() below, with its SSRF check.
-const axios = require('axios');
-const { assertSafeUrl } = require('../lib/ssrf');
-const { REQUEST_TYPES, FIELDS } = require('../lib/request-types');
+// WhatsApp for a company, through the client's provider (LoopChat).
+const loopchat = require('./loopchat');
+const { connectedCall } = require('../../lib/call-status');
+const { REQUEST_TYPES } = require('../../lib/request-types');
 
-const PATH = '/api/v1/make/attention-request/attention-request-store';
-const TIMEOUT_MS = 15_000;
-const SENT_TYPES = new Set(['interest']);
-const PLATFORM_MAX = 60;
+const FOLLOWUP_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
-// "https://maher.e-statee.com" from what was pasted -- the bare address or the
-// full endpoint. Only an Estate address: customer details go nowhere else.
-function estateOrigin(raw) {
-  let u;
-  try { u = new URL(String(raw || '').trim()); } catch { return null; }
-  if (u.protocol !== 'https:' || u.port || !/^[a-z0-9-]+\.e-statee\.com$/i.test(u.hostname)) return null;
-  return `https://${u.hostname.toLowerCase()}`;
+const VARIABLE_SOURCES = {
+  customer_name: 'اسم العميل',
+  company_name : 'اسم الشركة',
+  agent_name   : 'اسم المساعد',
+  request_type : 'نوع الطلب',
+  fixed        : 'نص ثابت',
+};
+const TRIGGERS = { request: 'عند تسجيل طلب في المكالمة', answered: 'بعد كل مكالمة تم الرد عليها' };
+
+function waDigits(raw) {
+  const d = String(raw || '').replace(/\D/g, '');
+  return d.length >= 7 && d.length <= 15 ? d : null;
 }
 
+function whatsappNumber(raw) {
+  const s = String(raw || '').trim();
+  let d = s.replace(/\D/g, '');
+  const international = s.startsWith('+') || d.startsWith('00');
+  if (d.startsWith('00')) d = d.slice(2);
+  if (/^05\d{8}$/.test(d)) return `966${d.slice(1)}`;
+  if (/^5\d{8}$/.test(d)) return `966${d}`;
+  if (d.startsWith('966')) return /^9665\d{8}$/.test(d) ? d : null;
+  return international && d.length >= 10 && d.length <= 15 ? d : null;
+}
+
+const channelIdOf = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : null; };
+
 function settingsOf(company) {
-  const e = company?.settings?.estate || {};
+  const s = company?.settings || {};
   return {
-    url: estateOrigin(e.url),
-    platform: String(e.platform || '').trim().slice(0, PLATFORM_MAX) || null,
-    enabled: e.enabled === true,
+    channelId: channelIdOf(s.whatsappChannelId),
+    autoReply: s.whatsappAutoReply === true,
+    followup : s.whatsappFollowup && typeof s.whatsappFollowup === 'object' ? s.whatsappFollowup : null,
   };
 }
 
-// Estate's own example writes a Saudi mobile the local way: 0551234567.
-function estatePhone(raw) {
-  let d = String(raw || '').replace(/\D/g, '');
-  if (d.startsWith('00')) d = d.slice(2);
-  if (/^9665\d{8}$/.test(d)) return `0${d.slice(3)}`;
-  if (/^05\d{8}$/.test(d)) return d;
-  if (/^5\d{8}$/.test(d)) return `0${d}`;
-  return d.length >= 8 && d.length <= 15 ? `+${d}` : null;
+async function companyForChannel(channelId, deps) {
+  const id = channelIdOf(channelId);
+  if (!id) return null;
+  return (await deps.listCompanies()).find((c) => settingsOf(c).channelId === id) || null;
 }
 
-function parseFields(request) {
-  try { return request.fields ? JSON.parse(request.fields) || {} : {}; } catch { return {}; }
+async function tokenOf(company, deps) {
+  const row = await deps.sql.getCompanyLoopchatToken.get(company.id);
+  return deps.decryptField(row?.loopchat_token) || null;
 }
 
-// Every answer the customer gave, one per line, in the client's own labels.
-function buildNote(request, fields) {
-  const type = REQUEST_TYPES[request.request_type];
-  const lines = [`${type?.labelAr || request.request_type} من مكالمة مع المساعد الذكي`];
-  for (const k of type?.fields || Object.keys(fields)) {
-    if (k === 'customer_name' || !fields[k]) continue;
-    lines.push(`${FIELDS[k]?.labelAr || k}: ${fields[k]}`);
-  }
-  return lines.join('\n');
-}
-
-function buildForm({ name, phone, platform, note }) {
-  const form = new URLSearchParams();
-  form.set('name', name);
-  form.set('phone', phone);
-  form.set('platform', platform);
-  form.set('note', note);
-  return form;
-}
-
-// Estate's answer in words: its validation errors, or its message.
-function estateReason(status, data) {
-  if (status === 401 || status === 403) return 'رفض Estate المفتاح';
-  if (status === 404) return 'لا توجد واجهة الطلبات هذه على عنوان Estate المحفوظ';
-  const errs = data && typeof data.errors === 'object' && data.errors
-    ? Object.values(data.errors).flat().filter(Boolean) : [];
-  const text = errs.length ? errs.slice(0, 8).join(' — ') : (typeof data?.message === 'string' ? data.message : '');
-  return String(text || `HTTP ${status}`).slice(0, 500);
-}
-
-// Accepted: a 2xx that does not itself say it failed.
-const accepted = (r) => r.status >= 200 && r.status < 300 && r.data?.status !== false;
-
-async function post(origin, token, form) {
-  const url = origin + PATH;
-  await assertSafeUrl(url);
-  return axios.post(url, form.toString(), {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    timeout: TIMEOUT_MS,
-    maxRedirects: 0,
-    validateStatus: () => true,
+async function record(deps, row) {
+  return deps.sql.insertWhatsappMessage.run({
+    channel_id: null, contact_phone: null, body: null, detail: null, event_id: null,
+    provider_message_id: null, call_id: null, ...row,
   });
 }
 
-const unreachable = (e) => (/^blocked url:/.test(e.message)
-  ? 'عنوان Estate المحفوظ غير مسموح'
-  : `تعذّر الوصول إلى Estate: ${e.code || e.message}`).slice(0, 500);
-
-async function tokenOf(company, deps) {
-  const row = await deps.sql.getCompanyEstateToken.get(company.id);
-  return deps.decryptField(row?.estate_token) || null;
+const queues = new Map();
+function serialize(key, fn) {
+  const prev = queues.get(key) || Promise.resolve();
+  const next = prev.catch(() => {}).then(fn);
+  queues.set(key, next);
+  next.finally(() => { if (queues.get(key) === next) queues.delete(key); }).catch(() => {});
+  return next;
 }
 
-// Ready to send: everything a superadmin sets is set.
-async function readiness(company, deps) {
-  const cfg = settingsOf(company);
-  const token = await tokenOf(company, deps);
-  return { ...cfg, token, ready: !!(cfg.enabled && cfg.url && cfg.platform && token) };
+async function handleEvent(evt, deps) {
+  const type = evt?.event_type;
+
+  const traffic = evt?.message?.traffic || evt?.traffic || evt?.message?.message?.traffic;
+  const isOutgoing = traffic === 'outgoing' || evt?.message?.from_me === true || evt?.from_me === true || evt?.message?.direction === 'outbound' || evt?.direction === 'outbound';
+
+  if (isOutgoing && !evt?.message?.from_api) {
+    return handleStaffMessage(evt, deps);
+  }
+
+  if (type === 'message.received' || type === 'message_received') return handleMessage(evt, deps);
+  if (type === 'message_integration.stopped' || type === 'message_integration.started') return handleHandover(evt, deps);
+
+  return { ignored: type || 'unknown event' };
 }
 
-// One request on to Estate. `retry` takes back one that failed or was
-// skipped; a request already sent, or being sent, is never sent again.
-async function pushRequest(company, request, deps, { retry = false } = {}) {
+async function handleStaffMessage(evt, deps) {
+  const channelId = Number(evt.channel?.id);
+  const phone = waDigits(evt.contact?.phone);
+  const company = await companyForChannel(channelId, deps);
+  if (!company || !phone) return { ignored: 'unmapped channel' };
+
+  const staffName = String(evt.message?.user?.name || evt.message?.sender_name || evt.sender?.name || 'موظف').slice(0, 80);
+  await deps.sql.upsertWhatsappThread.run({
+    company_id: company.id, channel_id: channelId, contact_phone: phone,
+    ai_paused: 1, paused_by: staffName,
+  });
+  return { paused: true, by: staffName };
+}
+
+function describeMedia(msg) {
+  const a = Array.isArray(msg?.attachments) ? msg.attachments[0] : msg?.attachments;
+  return `[${msg?.type || 'media'}${a?.name ? `: ${a.name}` : ''}]`;
+}
+
+async function handleMessage(evt, deps) {
   const { sql, logger } = deps;
-  const cfg = await readiness(company, deps);
-  if (!cfg.ready) return { skipped: 'not configured' };
+  const traffic = evt.message?.traffic || evt.traffic || evt.message?.message?.traffic;
+  
+  if (traffic && traffic !== 'incoming') {
+    return handleStaffMessage(evt, deps);
+  }
 
-  const claim = await sql.claimRequestEstate.run({ id: request.id, company_id: company.id, retry: retry ? 1 : 0 });
-  if (!claim.changes) return { duplicate: true };
-  const finish = (status, detail) => sql.finishRequestEstate.run({ id: request.id, company_id: company.id, status, detail });
+  const channelId = Number(evt.channel?.id);
+  const company = await companyForChannel(channelId, deps);
+  if (!company) {
+    logger.warn('whatsapp: message on a channel no company uses', { channelId });
+    return { ignored: 'unmapped channel' };
+  }
+  const phone = waDigits(evt.contact?.phone);
+  const msg = evt.message?.message || {};
+  const isText = msg.type === 'text' && String(msg.text || '').trim();
+  const text = isText ? String(msg.text).trim().slice(0, 4000) : '';
 
-  if (!SENT_TYPES.has(request.request_type)) {
-    const detail = 'لا يُرسل: واجهة Estate هذه لطلبات البيع، ولطلبات التأجير فيه واجهة أخرى غير مربوطة';
-    await finish('skipped', detail);
-    return { skipped: detail };
+  // التحقق من حالة المحادثة في قاعدة البيانات
+  const thread = await sql.getWhatsappThread.get(channelId, phone);
+  if (thread && Number(thread.ai_paused)) {
+    // إذا كانت المحادثة موقوفة بسبب تدخل سابق ولم يصدر حدث إغلاق/استئناف من LoopChat
+    await record(deps, {
+      company_id: company.id, channel_id: channelId, contact_phone: phone, direction: 'in',
+      kind: isText ? 'text' : 'media', body: isText ? text : describeMedia(msg), status: 'received',
+      event_id: evt.event_id ? String(evt.event_id).slice(0, 100) : null,
+      provider_message_id: evt.message?.messageId != null ? String(evt.message.messageId) : null,
+    });
+    return { skipped: 'taken over by staff', by: thread.paused_by || null };
   }
-  const fields = parseFields(request);
-  const name = String(request.customer_name || fields.customer_name || '').trim();
-  if (!name) {
-    const detail = 'لا يُرسل: الطلب بلا اسم عميل، وEstate يشترط الاسم';
-    await finish('skipped', detail);
-    return { skipped: detail };
+
+  const inserted = await record(deps, {
+    company_id: company.id, channel_id: channelId, contact_phone: phone, direction: 'in',
+    kind: isText ? 'text' : 'media', body: isText ? text : describeMedia(msg), status: 'received',
+    event_id: evt.event_id ? String(evt.event_id).slice(0, 100) : null,
+    provider_message_id: evt.message?.messageId != null ? String(evt.message.messageId) : null,
+  });
+  if (!inserted.changes) return { duplicate: true };
+
+  const cfg = settingsOf(company);
+  if (!cfg.autoReply) return { skipped: 'auto-reply off' };
+  if (!phone) return { skipped: 'no phone' };
+  if (!isText) return { skipped: 'not text' };
+
+  return await serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps));
+}
+
+async function reply({ company, channelId, phone, text, contact }, deps) {
+  const { sql, logger } = deps;
+  const out = (status, detail, body = null, messageId = null) => record(deps, {
+    company_id: company.id, channel_id: channelId, contact_phone: phone, direction: 'out', kind: 'text',
+    body, status, detail, provider_message_id: messageId != null ? String(messageId) : null,
+  });
+
+  if (!(await deps.checkAndBumpUsage(company.id, 'agent_msgs', deps.dailyCap(company, 'dailyMessageCap', 'DAILY_MSG_CAP', 2000)))) {
+    await out('skipped', 'بلغت الشركة الحد اليومي للرسائل');
+    return { skipped: 'daily cap' };
   }
-  const phone = estatePhone(deps.decryptField(request.caller_number));
-  if (!phone) {
-    const detail = 'لا يُرسل بعد: رقم العميل يُضاف من سجل المكالمة عند انتهائها';
-    await finish('skipped', detail);
-    return { skipped: detail };
+
+  const sessionId = `wa-${phone}`;
+  const t0 = Date.now();
+  let answer = '';
+  try {
+    const history = await deps.loadSessionHistory(company.id, sessionId);
+    const vars = { customer_phone: `+${phone}` };
+    if (contact?.name) vars.customer_name = String(contact.name).slice(0, 80);
+    answer = String((await deps.askReply(company, text, history, vars)).reply || '').trim();
+  } catch (e) {
+    logger.error('whatsapp: reply failed', { err: e.message, companyId: company.id });
+    const noScenario = e.code === 'NO_ACTIVE_SCENARIO';
+    await out('failed', noScenario ? NO_SCENARIO : 'تعذّر توليد الرد');
+    return { failed: noScenario ? 'no scenario' : 'reply' };
   }
+  if (!answer) {
+    await out('skipped', 'رد فارغ من المساعد');
+    return { skipped: 'empty reply' };
+  }
+
+  const sent = await loopchat.sendText({ token: await tokenOf(company, deps), channelId, phone, content: answer });
+  const reason = sent.ok ? null : refusal(sent, contact);
+  await out(sent.ok ? 'sent' : 'failed', reason, answer, sent.messageId);
+  if (!sent.ok) logger.warn('whatsapp: reply not sent', { companyId: company.id, reason });
 
   try {
-    const send = deps.post || post;
-    const r = await send(cfg.url, cfg.token, buildForm({ name, phone, platform: cfg.platform, note: buildNote(request, fields) }));
-    if (accepted(r)) {
-      await finish('sent', typeof r.data?.message === 'string' ? r.data.message.slice(0, 300) : null);
-      logger.info('estate: request sent', { companyId: company.id, requestId: request.id });
-      return { sent: true };
-    }
-    const reason = estateReason(r.status, r.data);
-    await finish('failed', reason);
-    logger.warn('estate: request refused', { companyId: company.id, requestId: request.id, status: r.status, reason });
-    return { failed: reason };
-  } catch (e) {
-    const reason = unreachable(e);
-    await finish('failed', reason);
-    logger.warn('estate: request not sent', { companyId: company.id, requestId: request.id, err: e.message });
-    return { failed: reason };
-  }
+    await sql.insertChat.run({
+      company_id: company.id, session_id: sessionId, user_message: text,
+      assistant_reply: sent.ok ? answer : '', channel: 'whatsapp', latency_ms: Date.now() - t0, user_id: null,
+    });
+  } catch (e) { logger.error('whatsapp: chat insert failed', { err: e.message }); }
+  return sent.ok ? { sent: true } : { failed: reason };
 }
 
-// After a call: every request filed during it. Never throws into the call
-// pipeline; each outcome is on its request.
+function refusal(sent, contact) {
+  let text = String(sent.reason || 'not sent');
+  const wrote = contact?.id != null ? String(contact.id) : null;
+  const matched = sent.contactId;
+  if (wrote && matched != null && String(matched) !== wrote) {
+    text += ` (طابق LoopChat الرقم على جهة الاتصال #${matched}، والتي راسلت هي #${wrote})`;
+  }
+  return String(text).slice(0, 500);
+}
+
+async function handleHandover(evt, deps) {
+  const channelId = Number(evt.channel?.id);
+  const phone = waDigits(evt.contact?.phone);
+  const company = await companyForChannel(channelId, deps);
+  if (!company || !phone) return { ignored: 'unmapped channel' };
+  
+  // إذا توقف التكامل (message_integration.stopped)، يتم إيقاف المساعد
+  // وإذا بدأ التكامل أو أغلقت المحادثة (message_integration.started)، يعود المساعد للعمل
+  const paused = evt.event_type === 'message_integration.stopped';
+  const by = String((paused ? evt.stopped_by?.name : evt.started_by?.name) || '').slice(0, 80) || null;
+  
+  await deps.sql.upsertWhatsappThread.run({
+    company_id: company.id, channel_id: channelId, contact_phone: phone,
+    ai_paused: paused ? 1 : 0, paused_by: paused ? by : null,
+  });
+  return { paused, by };
+}
+
 async function afterCall(company, call, deps) {
-  if (!settingsOf(company).enabled) return [];
-  const rows = await deps.sql.listRequestsForEstate.all(company.id, String(call.id));
-  const out = [];
-  for (const r of rows) out.push(await pushRequest(company, r, deps));
+  const { sql, logger } = deps;
+  const cfg = settingsOf(company);
+  const f = cfg.followup;
+  if (!cfg.channelId || !f || !TRIGGERS[f.trigger] || !Number(f.templateId)) return { skipped: 'not configured' };
+  const token = await tokenOf(company, deps);
+  if (!token && !loopchat.isConfigured()) return { skipped: 'not configured' };
+  const at = Date.parse(`${String(call.created_at || call.started_at || '').replace(' ', 'T')}Z`);
+  if (!Number.isFinite(at) || Date.now() - at > FOLLOWUP_MAX_AGE_MS) return { skipped: 'call too old' };
+
+  let requests = [];
+  if (f.trigger === 'request') {
+    requests = await sql.listRequestsForConversation.all(company.id, call.id);
+    if (!requests.length) return { skipped: 'no request filed' };
+  } else if (!connectedCall(call)) {
+    return { skipped: 'not answered' };
+  }
+
+  const phone = whatsappNumber(deps.decryptField(call.caller_number));
+  const claim = await record(deps, {
+    company_id: company.id, channel_id: cfg.channelId, contact_phone: phone, direction: 'out', kind: 'template',
+    body: `قالب #${f.templateId}`, status: 'pending', call_id: String(call.id),
+  });
+  if (!claim.changes) return { duplicate: true };
+  const id = claim.lastInsertRowid;
+  const finish = (status, detail, messageId = null) => sql.updateWhatsappMessage.run({
+    id, status, detail, provider_message_id: messageId != null ? String(messageId) : null, body: null,
+  });
+
+  if (!phone) {
+    await finish('skipped', 'رقم العميل ليس رقم جوال يصله واتساب');
+    return { skipped: 'not a mobile' };
+  }
+  const variables = buildVariables(f.variables, { company, requests, deps });
+  const header = f.headerType && f.headerUrl ? { type: f.headerType, url: f.headerUrl } : null;
+  const sent = await loopchat.sendTemplate({ token, channelId: cfg.channelId, templateId: f.templateId, phone, variables, header });
+  await finish(sent.ok ? 'sent' : 'failed', sent.reason, sent.messageId);
+  if (!sent.ok) logger.warn('whatsapp: follow-up not sent', { companyId: company.id, callId: call.id, reason: sent.reason });
+  return sent.ok ? { sent: true } : { failed: sent.reason };
+}
+
+function buildVariables(list, { company, requests, deps }) {
+  const values = {
+    customer_name: requests.find((r) => r.customer_name)?.customer_name || '',
+    company_name : company.name || '',
+    agent_name   : deps.fillGlobals('{{agent_name}}', company),
+    request_type : REQUEST_TYPES[requests[0]?.request_type]?.labelAr || '',
+  };
+  const out = {};
+  (Array.isArray(list) ? list : []).forEach((v, i) => {
+    const text = String(v?.text || '').trim();
+    const value = v?.source === 'fixed' ? text : (values[v?.source] || text);
+    out[String(i + 1)] = value.slice(0, 200);
+  });
   return out;
 }
 
-// Checks the address and the key with a request that carries no fields:
-// Estate refuses it (422) and names the fields it enforces -- which is also
-// how its real requirements, as opposed to its docs', come to light. Auth is
-// checked before validation, so a 422 means the key was accepted.
-async function check({ url, token, send = post }) {
-  const origin = estateOrigin(url);
-  if (!origin) return { ok: false, text: 'عنوان Estate غير صالح. مثال: https://maher.e-statee.com' };
-  if (!token) return { ok: false, text: 'لم يُحفظ مفتاح Estate لهذه الشركة بعد.' };
-  try {
-    const r = await send(origin, token, new URLSearchParams());
-    if (r.status === 401 || r.status === 403) return { ok: false, text: 'رفض Estate المفتاح. انسخه من جديد كما أعطاك إياه Estate.' };
-    if (r.status === 404) return { ok: false, text: 'لا توجد واجهة الطلبات على هذا العنوان. تأكد من عنوان Estate الخاص بالشركة.' };
-    if (r.status === 422) return { ok: true, text: `المفتاح مقبول. يشترط Estate في الطلب: ${estateReason(422, r.data)}` };
-    if (accepted(r)) return { ok: true, warn: true, text: 'قبل Estate طلباً بلا بيانات، فربما أنشأ طلباً فارغاً. احذفه من Estate.' };
-    return { ok: false, text: `ردّ Estate: ${estateReason(r.status, r.data)}` };
-  } catch (e) {
-    return { ok: false, text: unreachable(e) };
+const NO_SCENARIO = 'لا يوجد سيناريو مفعّل للشركة';
+const SKIPPED = {
+  'unmapped channel'   : 'رقم واتساب هذا غير مربوط بأي شركة على المنصة',
+  'not incoming'       : 'رسالة صادرة من الرقم نفسه، لا يُرد عليها',
+  'auto-reply off'     : 'رد المساعد غير مفعّل لهذه الشركة',
+  'no phone'           : 'لم يصل رقم العميل مع الرسالة',
+  'not text'           : 'ليست رسالة نصية، فتُترك للفريق',
+  'taken over by staff': 'المحادثة عند موظف في LoopChat',
+  'daily cap'          : 'بلغت الشركة الحد اليومي للرسائل',
+  'empty reply'        : 'رد فارغ من المساعد',
+};
+function describeOutcome(r) {
+  if (!r) return { ok: false, text: 'تعذّرت معالجة الحدث، والتفاصيل في سجل الخادم' };
+  if (r.sent) {
+    return { ok: true, text: `ردّ المساعد ووصل الرد إلى LoopChat${r.resumed ? '. كانت المحادثة موقوفة عندنا، وLoopChat يقول إن التكامل يعمل لها، فعاد المساعد إليها' : ''}` };
   }
+  if (r.duplicate) return { ok: true, text: 'وصلت من قبل، فلم تُعالج مرة ثانية' };
+  const by = r.by ? ` (${r.by})` : '';
+  if (r.paused === true) return { ok: true, text: `أوقف موظف${by} المساعد في هذه المحادثة من LoopChat، ولا يرد فيها حتى يعيد الموظف تشغيل التكامل لها من LoopChat` };
+  if (r.paused === false) return { ok: true, text: `أعاد موظف${by} المحادثة إلى المساعد` };
+  if (r.skipped === 'taken over by staff') {
+    const confirmed = r.live === false ? '، وLoopChat يؤكد أن التكامل متوقف لها' : '';
+    return { ok: false, text: `المحادثة متوقفة عند موظف${by} في LoopChat${confirmed}، فلم يرد المساعد. لإعادتها: افتح المحادثة في LoopChat وأعد تشغيل التكامل لها` };
+  }
+  if (r.failed === 'no scenario') return { ok: false, text: NO_SCENARIO };
+  if (r.failed) return { ok: false, text: r.failed === 'reply' ? 'تعذّر توليد الرد' : `لم يُرسل الرد، وسبب LoopChat: ${r.failed}` };
+  const why = r.skipped || r.ignored;
+  if (why === 'unmapped channel') return { ok: false, unmapped: true, text: SKIPPED[why] };
+  if (SKIPPED[why]) return { ok: false, text: SKIPPED[why] };
+  if (why === 'unknown event') return { ok: false, text: 'وصل طلب بلا نوع حدث، وبياناته على غير الشكل الموثّق' };
+  return { ok: false, text: `حدث لا يخص المساعد: ${why}` };
 }
 
-// Settings as a superadmin saves them. Returns { estate } or { error }.
-function validateSettings(body, { hasToken }) {
+function validateSettings(body) {
   const b = body || {};
-  const rawUrl = String(b.url || '').trim();
-  const url = rawUrl ? estateOrigin(rawUrl) : null;
-  if (rawUrl && !url) return { error: 'عنوان Estate غير صالح. يجب أن يكون مثل https://maher.e-statee.com' };
-  const platform = String(b.platform || '').trim();
-  if (platform.length > PLATFORM_MAX) return { error: 'قيمة المصدر (platform) أطول من المسموح' };
-  const enabled = b.enabled === true;
-  if (enabled && (!url || !platform || !hasToken)) {
-    return { error: 'للتشغيل: احفظ عنوان Estate والمفتاح وقيمة المصدر (platform) أولاً' };
+  const channelId = b.channelId === null || b.channelId === '' || b.channelId === undefined ? null : Number(b.channelId);
+  if (channelId !== null && (!Number.isInteger(channelId) || channelId <= 0)) return { error: 'رقم قناة واتساب غير صالح' };
+  const f = b.followup || {};
+  const trigger = f.trigger || 'off';
+  if (trigger !== 'off' && !TRIGGERS[trigger]) return { error: 'توقيت رسالة المتابعة غير معروف' };
+  let followup = null;
+  if (trigger !== 'off') {
+    const templateId = Number(f.templateId);
+    if (!Number.isInteger(templateId) || templateId <= 0) return { error: 'اختر قالب رسالة المتابعة' };
+    if (!channelId) return { error: 'رسالة المتابعة تحتاج قناة واتساب' };
+    const variables = (Array.isArray(f.variables) ? f.variables : []).slice(0, 10).map((v) => ({
+      source: VARIABLE_SOURCES[v?.source] ? v.source : 'fixed',
+      text  : String(v?.text || '').trim().slice(0, 200),
+    }));
+    const headerUrl = String(f.headerUrl || '').trim();
+    const headerType = ['image', 'video', 'document'].includes(f.headerType) ? f.headerType : null;
+    if (headerUrl && !/^https:\/\/\S{4,2000}$/.test(headerUrl)) return { error: 'رابط صورة القالب يجب أن يبدأ بـ https://' };
+    followup = { trigger, templateId, variables, headerType: headerUrl ? headerType : null, headerUrl: headerUrl || null };
   }
-  return { estate: { url, platform: platform || null, enabled } };
+  return {
+    settings: {
+      whatsappChannelId: channelId,
+      whatsappAutoReply: b.autoReply === true && !!channelId,
+      whatsappFollowup : followup,
+    },
+  };
 }
 
 module.exports = {
-  afterCall, pushRequest, check, validateSettings, settingsOf, readiness,
-  estateOrigin, estatePhone, buildNote, buildForm, estateReason, PATH,
+  handleEvent, afterCall, validateSettings, settingsOf, companyForChannel, describeOutcome,
+  whatsappNumber, waDigits, buildVariables,
+  VARIABLE_SOURCES, TRIGGERS, FOLLOWUP_MAX_AGE_MS,
 };

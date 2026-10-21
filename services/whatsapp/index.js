@@ -113,13 +113,17 @@ function serialize(key, fn) {
 // ─── (أ) incoming & outgoing messages ──────────────────────────────
 async function handleEvent(evt, deps) {
   const type = evt?.event_type;
-  if (type === 'message.received') return handleMessage(evt, deps);
-  if (type === 'message_integration.stopped' || type === 'message_integration.started') return handleHandover(evt, deps);
-  
-  // إذا أرسل موظف رسالة من LoopChat (traffic === 'outgoing')، يتم إيقاف الأيزنت تلقائياً
-  if (evt.message?.traffic === 'outgoing' && !evt.message?.from_api) {
+
+  // فحص ما إذا كانت الرسالة صادرة من موظف عبر LoopChat
+  const traffic = evt?.message?.traffic || evt?.traffic || evt?.message?.message?.traffic;
+  const isOutgoing = traffic === 'outgoing' || evt?.message?.from_me === true || evt?.from_me === true;
+
+  if (isOutgoing && !evt?.message?.from_api) {
     return handleOutgoingStaffMessage(evt, deps);
   }
+
+  if (type === 'message.received' || type === 'message_received') return handleMessage(evt, deps);
+  if (type === 'message_integration.stopped' || type === 'message_integration.started') return handleHandover(evt, deps);
   
   return { ignored: type || 'unknown event' };
 }
@@ -130,7 +134,7 @@ async function handleOutgoingStaffMessage(evt, deps) {
   const company = await companyForChannel(channelId, deps);
   if (!company || !phone) return { ignored: 'unmapped channel' };
 
-  const staffName = String(evt.message?.user?.name || evt.message?.sender_name || 'موظف').slice(0, 80);
+  const staffName = String(evt.message?.user?.name || evt.message?.sender_name || evt.sender?.name || 'موظف').slice(0, 80);
   await deps.sql.upsertWhatsappThread.run({
     company_id: company.id, channel_id: channelId, contact_phone: phone,
     ai_paused: 1, paused_by: staffName,
@@ -146,7 +150,11 @@ function describeMedia(msg) {
 
 async function handleMessage(evt, deps) {
   const { sql, logger } = deps;
-  if (evt.message?.traffic && evt.message.traffic !== 'incoming') return { ignored: 'not incoming' };
+  const traffic = evt.message?.traffic || evt.traffic || evt.message?.message?.traffic;
+  if (traffic && traffic !== 'incoming') {
+    return handleOutgoingStaffMessage(evt, deps);
+  }
+
   const channelId = Number(evt.channel?.id);
   const company = await companyForChannel(channelId, deps);
   if (!company) {

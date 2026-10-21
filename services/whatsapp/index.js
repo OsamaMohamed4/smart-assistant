@@ -125,11 +125,9 @@ async function handleMessage(evt, deps) {
   const isText = msg.type === 'text' && String(msg.text || '').trim();
   const text = isText ? String(msg.text).trim().slice(0, 4000) : '';
 
-  // التحقق من حالة المოსف: إذا أغلق المحادثة أو عادت من LoopChat كنقاط تكامل تعمل، نعيد تفعيل الأيزنت
   const thread = await sql.getWhatsappThread.get(channelId, phone);
   if (thread && Number(thread.ai_paused)) {
     const live = await integrationIsOn(company, phone, deps);
-    // إذا قام الموظف بإغلاق المحادثة أو إعادة تفعيل التكامل في LoopChat، يعود الأيزنت للعمل فوراً
     if (live === true || !live) {
       await sql.upsertWhatsappThread.run({ company_id: company.id, channel_id: channelId, contact_phone: phone, ai_paused: 0, paused_by: null });
     } else {
@@ -341,24 +339,4 @@ function validateSettings(body) {
     if (!channelId) return { error: 'رسالة المتابعة تحتاج قناة واتساب' };
     const variables = (Array.isArray(f.variables) ? f.variables : []).slice(0, 10).map((v) => ({
       source: VARIABLE_SOURCES[v?.source] ? v.source : 'fixed',
-      text  : String(v?.text || '').trim().slice(0, 200),
-    }));
-    const headerUrl = String(f.headerUrl || '').trim();
-    const headerType = ['image', 'video', 'document'].includes(f.headerType) ? f.headerType : null;
-    if (headerUrl && !/^https:\/\/\S{4,2000}$/.test(headerUrl)) return { error: 'رابط صورة القالب يجب أن يبدأ بـ https://' };
-    followup = { trigger, templateId, variables, headerType: headerUrl ? headerType : null, headerUrl: headerUrl || null };
-  }
-  return {
-    settings: {
-      whatsappChannelId: channelId,
-      whatsappAutoReply: b.autoReply === true && !!channelId,
-      whatsappFollowup : followup,
-    },
-  };
-}
-
-module.exports, {
-  handleEvent, afterCall, validateSettings, settingsOf, companyForChannel, describeOutcome,
-  whatsappNumber, waDigits, buildVariables,
-  VARIABLE_SOURCES, TRIGGERS, FOLLOWUP_MAX_AGE_MS,
-};
+      text  : String(v?.text || '').trim().slice(0, 2

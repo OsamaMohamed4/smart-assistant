@@ -1,6 +1,4 @@
 // Estate integration: send the agent's purchase/rental leads on to the company's own Estate instance.
-const fetch = require('node-fetch');
-
 // Map internal request_type to Estate's label expected by their API.
 const ESTATE_TYPES = {
   buy_villa     : 'فيلا',

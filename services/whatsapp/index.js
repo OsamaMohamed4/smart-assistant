@@ -114,9 +114,9 @@ function serialize(key, fn) {
 async function handleEvent(evt, deps) {
   const type = evt?.event_type;
 
-  // فحص ما إذا كانت الرسالة صادرة من موظف عبر LoopChat
+  // التعرف على الرسائل الصادرة من الموظفين
   const traffic = evt?.message?.traffic || evt?.traffic || evt?.message?.message?.traffic;
-  const isOutgoing = traffic === 'outgoing' || evt?.message?.from_me === true || evt?.from_me === true;
+  const isOutgoing = traffic === 'outgoing' || evt?.message?.from_me === true || evt?.from_me === true || evt?.message?.direction === 'outbound';
 
   if (isOutgoing && !evt?.message?.from_api) {
     return handleOutgoingStaffMessage(evt, deps);
@@ -139,7 +139,7 @@ async function handleOutgoingStaffMessage(evt, deps) {
     company_id: company.id, channel_id: channelId, contact_phone: phone,
     ai_paused: 1, paused_by: staffName,
   });
-  deps.logger.info('whatsapp: staff replied, ai paused', { companyId: company.id, channelId, phone, staffName });
+  deps.logger.info('whatsapp: staff replied, ai paused permanently until closed', { companyId: company.id, channelId, phone, staffName });
   return { paused: true, by: staffName };
 }
 
@@ -151,6 +151,8 @@ function describeMedia(msg) {
 async function handleMessage(evt, deps) {
   const { sql, logger } = deps;
   const traffic = evt.message?.traffic || evt.traffic || evt.message?.message?.traffic;
+  
+  // إذا كانت الرسالة صادرة من السيرفر/الموظف
   if (traffic && traffic !== 'incoming') {
     return handleOutgoingStaffMessage(evt, deps);
   }
@@ -179,29 +181,13 @@ async function handleMessage(evt, deps) {
   if (!phone) return { skipped: 'no phone' };
   if (!isText) return { skipped: 'not text' };
 
-  // فحص هل المحادثة موقوفة عند موظف
+  // فحص حازم: إذا كانت المحادثة موقوفة عند موظف، يتوقف الذكاء الاصطناعي فوراً دون إعادة فتح تلقائية
   const thread = await sql.getWhatsappThread.get(channelId, phone);
-  let resumed = false;
   if (thread && Number(thread.ai_paused)) {
-    const live = await integrationIsOn(company, phone, deps);
-    if (live !== true) return { skipped: 'taken over by staff', by: thread.paused_by || null, live };
-    await sql.upsertWhatsappThread.run({ company_id: company.id, channel_id: channelId, contact_phone: phone, ai_paused: 0, paused_by: null });
-    logger.info('whatsapp: pause lifted, integration resumed', { companyId: company.id, channelId });
-    resumed = true;
+    return { skipped: 'taken over by staff', by: thread.paused_by || null };
   }
 
-  const r = await serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps));
-  return resumed ? { ...r, resumed } : r;
-}
-
-async function integrationIsOn(company, phone, deps) {
-  try {
-    const c = await loopchat.findContact(phone, await tokenOf(company, deps));
-    return typeof c?.messageIntegration === 'boolean' ? c.messageIntegration : null;
-  } catch (e) {
-    deps.logger.warn('whatsapp: could not ask LoopChat about a paused conversation', { err: loopchat.errText(e) });
-    return null;
-  }
+  return await serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps));
 }
 
 async function reply({ company, channelId, phone, text, contact }, deps) {
@@ -351,7 +337,7 @@ function describeOutcome(r) {
   if (r.paused === true) return { ok: true, text: `أوقف موظف${by} المساعد في هذه المحادثة من LoopChat، ولا يرد فيها حتى يعيد الموظف تشغيل التكامل لها من LoopChat` };
   if (r.paused === false) return { ok: true, text: `أعاد موظف${by} المحادثة إلى المساعد` };
   if (r.skipped === 'taken over by staff') {
-    const confirmed = r.live === false ? '، وLoopChat يؤكد أن التكامل متوقف لها' : '';
+    const confirmed = r.live === false ? '، وLoopChat تؤكد أن التكامل متوقف لها' : '';
     return { ok: false, text: `المحادثة متوقفة عند موظف${by} في LoopChat${confirmed}، فلم يرد المساعد. لإعادتها: افتح المحادثة في LoopChat وأعد تشغيل التكامل لها` };
   }
   if (r.failed === 'no scenario') return { ok: false, text: NO_SCENARIO };

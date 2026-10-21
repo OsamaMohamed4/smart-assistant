@@ -71,8 +71,9 @@ function serialize(key, fn) {
 async function handleEvent(evt, deps) {
   const type = evt?.event_type;
 
+  // التعرف على الرسائل الصادرة من الموظف/النظام بجميع الأشكال الممكنة
   const traffic = evt?.message?.traffic || evt?.traffic || evt?.message?.message?.traffic;
-  const isOutgoing = traffic === 'outgoing' || evt?.message?.from_me === true || evt?.from_me === true || evt?.message?.direction === 'outbound' || evt?.direction === 'outbound';
+  const isOutgoing = traffic === 'outgoing' || evt?.message?.from_me === true || evt?.from_me === true || evt?.message?.direction === 'outbound' || evt?.direction === 'outbound' || evt?.message?.direction === 'out';
 
   if (isOutgoing && !evt?.message?.from_api) {
     return handleStaffMessage(evt, deps);
@@ -80,10 +81,6 @@ async function handleEvent(evt, deps) {
 
   if (type === 'message.received' || type === 'message_received') return handleMessage(evt, deps);
   if (type === 'message_integration.stopped' || type === 'message_integration.started') return handleHandover(evt, deps);
-  
-  if (evt?.message?.direction === 'out' || evt?.direction === 'out') {
-    return handleStaffMessage(evt, deps);
-  }
 
   return { ignored: type || 'unknown event' };
 }
@@ -99,6 +96,7 @@ async function handleStaffMessage(evt, deps) {
     company_id: company.id, channel_id: channelId, contact_phone: phone,
     ai_paused: 1, paused_by: staffName,
   });
+  deps.logger.info('whatsapp: staff message detected, AI paused', { companyId: company.id, channelId, phone, staffName });
   return { paused: true, by: staffName };
 }
 
@@ -110,6 +108,7 @@ function describeMedia(msg) {
 async function handleMessage(evt, deps) {
   const { sql, logger } = deps;
   const traffic = evt.message?.traffic || evt.traffic || evt.message?.message?.traffic;
+  
   if (traffic && traffic !== 'incoming') {
     return handleStaffMessage(evt, deps);
   }
@@ -125,20 +124,17 @@ async function handleMessage(evt, deps) {
   const isText = msg.type === 'text' && String(msg.text || '').trim();
   const text = isText ? String(msg.text).trim().slice(0, 4000) : '';
 
+  // فحص مباشر وصارم من قاعدة البيانات المحلية
   const thread = await sql.getWhatsappThread.get(channelId, phone);
   if (thread && Number(thread.ai_paused)) {
-    const live = await integrationIsOn(company, phone, deps);
-    if (live === true || !live) {
-      await sql.upsertWhatsappThread.run({ company_id: company.id, channel_id: channelId, contact_phone: phone, ai_paused: 0, paused_by: null });
-    } else {
-      await record(deps, {
-        company_id: company.id, channel_id: channelId, contact_phone: phone, direction: 'in',
-        kind: isText ? 'text' : 'media', body: isText ? text : describeMedia(msg), status: 'received',
-        event_id: evt.event_id ? String(evt.event_id).slice(0, 100) : null,
-        provider_message_id: evt.message?.messageId != null ? String(evt.message.messageId) : null,
-      });
-      return { skipped: 'taken over by staff', by: thread.paused_by || null };
-    }
+    // تسجيل الرسالة الواردة فقط والتوقف عن الرد نهائياً
+    await record(deps, {
+      company_id: company.id, channel_id: channelId, contact_phone: phone, direction: 'in',
+      kind: isText ? 'text' : 'media', body: isText ? text : describeMedia(msg), status: 'received',
+      event_id: evt.event_id ? String(evt.event_id).slice(0, 100) : null,
+      provider_message_id: evt.message?.messageId != null ? String(evt.message.messageId) : null,
+    });
+    return { skipped: 'taken over by staff', by: thread.paused_by || null };
   }
 
   const inserted = await record(deps, {
@@ -155,15 +151,6 @@ async function handleMessage(evt, deps) {
   if (!isText) return { skipped: 'not text' };
 
   return await serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps));
-}
-
-async function integrationIsOn(company, phone, deps) {
-  try {
-    const c = await loopchat.findContact(phone, await tokenOf(company, deps));
-    return typeof c?.messageIntegration === 'boolean' ? c.messageIntegration : null;
-  } catch (e) {
-    return null;
-  }
 }
 
 async function reply({ company, channelId, phone, text, contact }, deps) {

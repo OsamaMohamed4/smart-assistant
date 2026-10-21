@@ -151,8 +151,16 @@ async function handleMessage(evt, deps) {
   // Images, voice notes and files are left to the team in LoopChat.
   if (!isText) return { skipped: 'not text' };
   
-  // تم تجاوز فحص وتجاوز الإيقاف لتكون المحادثة مفعلة دائماً للذكاء الاصطناعي
+  // فحص حالة الموظف والتكامل: إذا كانت المحادثة موقوفة عند موظف، يتوقف المساعد
+  const thread = await sql.getWhatsappThread.get(channelId, phone);
   let resumed = false;
+  if (thread && Number(thread.ai_paused)) {
+    const live = await integrationIsOn(company, phone, deps);
+    if (live !== true) return { skipped: 'taken over by staff', by: thread.paused_by || null, live };
+    await sql.upsertWhatsappThread.run({ company_id: company.id, channel_id: channelId, contact_phone: phone, ai_paused: 0, paused_by: null });
+    logger.info('whatsapp: pause lifted, LoopChat has the integration on', { companyId: company.id, channelId });
+    resumed = true;
+  }
 
   const r = await serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps));
   return resumed ? { ...r, resumed } : r;
@@ -242,9 +250,9 @@ async function handleHandover(evt, deps) {
   const by = String((paused ? evt.stopped_by?.name : evt.started_by?.name) || '').slice(0, 80) || null;
   await deps.sql.upsertWhatsappThread.run({
     company_id: company.id, channel_id: channelId, contact_phone: phone,
-    ai_paused: 0, paused_by: null,
+    ai_paused: paused ? 1 : 0, paused_by: paused ? by : null,
   });
-  return { paused: false, by };
+  return { paused, by };
 }
 
 // ─── (ب) the template after a call ─────────────────────────────────

@@ -110,12 +110,33 @@ function serialize(key, fn) {
   return next;
 }
 
-// ─── (أ) incoming messages ─────────────────────────────────────────
+// ─── (أ) incoming & outgoing messages ──────────────────────────────
 async function handleEvent(evt, deps) {
   const type = evt?.event_type;
   if (type === 'message.received') return handleMessage(evt, deps);
   if (type === 'message_integration.stopped' || type === 'message_integration.started') return handleHandover(evt, deps);
+  
+  // إذا أرسل موظف رسالة من LoopChat (traffic === 'outgoing')، يتم إيقاف الأيزنت تلقائياً
+  if (evt.message?.traffic === 'outgoing' && !evt.message?.from_api) {
+    return handleOutgoingStaffMessage(evt, deps);
+  }
+  
   return { ignored: type || 'unknown event' };
+}
+
+async function handleOutgoingStaffMessage(evt, deps) {
+  const channelId = Number(evt.channel?.id);
+  const phone = waDigits(evt.contact?.phone);
+  const company = await companyForChannel(channelId, deps);
+  if (!company || !phone) return { ignored: 'unmapped channel' };
+
+  const staffName = String(evt.message?.user?.name || evt.message?.sender_name || 'موظف').slice(0, 80);
+  await deps.sql.upsertWhatsappThread.run({
+    company_id: company.id, channel_id: channelId, contact_phone: phone,
+    ai_paused: 1, paused_by: staffName,
+  });
+  deps.logger.info('whatsapp: staff replied, ai paused', { companyId: company.id, channelId, phone, staffName });
+  return { paused: true, by: staffName };
 }
 
 function describeMedia(msg) {
@@ -148,17 +169,16 @@ async function handleMessage(evt, deps) {
   const cfg = settingsOf(company);
   if (!cfg.autoReply) return { skipped: 'auto-reply off' };
   if (!phone) return { skipped: 'no phone' };
-  // Images, voice notes and files are left to the team in LoopChat.
   if (!isText) return { skipped: 'not text' };
-  
-  // فحص حالة الموظف والتكامل: إذا كانت المحادثة موقوفة عند موظف، يتوقف المساعد
+
+  // فحص هل المحادثة موقوفة عند موظف
   const thread = await sql.getWhatsappThread.get(channelId, phone);
   let resumed = false;
   if (thread && Number(thread.ai_paused)) {
     const live = await integrationIsOn(company, phone, deps);
     if (live !== true) return { skipped: 'taken over by staff', by: thread.paused_by || null, live };
     await sql.upsertWhatsappThread.run({ company_id: company.id, channel_id: channelId, contact_phone: phone, ai_paused: 0, paused_by: null });
-    logger.info('whatsapp: pause lifted, LoopChat has the integration on', { companyId: company.id, channelId });
+    logger.info('whatsapp: pause lifted, integration resumed', { companyId: company.id, channelId });
     resumed = true;
   }
 
@@ -166,8 +186,6 @@ async function handleMessage(evt, deps) {
   return resumed ? { ...r, resumed } : r;
 }
 
-// LoopChat's switch for this customer's conversation: true, false, or null
-// when it cannot say (no such contact, or LoopChat unreachable).
 async function integrationIsOn(company, phone, deps) {
   try {
     const c = await loopchat.findContact(phone, await tokenOf(company, deps));
@@ -178,8 +196,6 @@ async function integrationIsOn(company, phone, deps) {
   }
 }
 
-// The reply goes out from the number the customer wrote to -- the company's
-// own -- through the company's own LoopChat account.
 async function reply({ company, channelId, phone, text, contact }, deps) {
   const { sql, logger } = deps;
   const out = (status, detail, body = null, messageId = null) => record(deps, {
@@ -215,9 +231,7 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
   const reason = sent.ok ? null : refusal(sent, contact);
   await out(sent.ok ? 'sent' : 'failed', reason, answer, sent.messageId);
   if (!sent.ok) logger.warn('whatsapp: reply not sent', { companyId: company.id, reason });
-  // The conversation the next turn resumes from, and what the dashboard
-  // shows. A reply that never reached the customer is kept out of it, so the
-  // assistant does not later assume they read it.
+
   try {
     await sql.insertChat.run({
       company_id: company.id, session_id: sessionId, user_message: text,
@@ -227,9 +241,6 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
   return sent.ok ? { sent: true } : { failed: reason };
 }
 
-// LoopChat's reason for not sending. It finds the customer by number: when
-// the contact it settled on is not the one who wrote, the number is what went
-// wrong, not the window, and the reason says so.
 function refusal(sent, contact) {
   let text = String(sent.reason || 'not sent');
   const wrote = contact?.id != null ? String(contact.id) : null;
@@ -240,7 +251,6 @@ function refusal(sent, contact) {
   return String(text).slice(0, 500);
 }
 
-// An employee took the conversation over in LoopChat, or handed it back.
 async function handleHandover(evt, deps) {
   const channelId = Number(evt.channel?.id);
   const phone = waDigits(evt.contact?.phone);
@@ -255,7 +265,6 @@ async function handleHandover(evt, deps) {
   return { paused, by };
 }
 
-// ─── (ب) the template after a call ─────────────────────────────────
 async function afterCall(company, call, deps) {
   const { sql, logger } = deps;
   const cfg = settingsOf(company);
@@ -275,8 +284,6 @@ async function afterCall(company, call, deps) {
   }
 
   const phone = whatsappNumber(deps.decryptField(call.caller_number));
-  // The call is claimed BEFORE sending: (company_id, call_id) is unique, so a
-  // second pass over the same call (a webhook retry, a refresh) stops here.
   const claim = await record(deps, {
     company_id: company.id, channel_id: cfg.channelId, contact_phone: phone, direction: 'out', kind: 'template',
     body: `قالب #${f.templateId}`, status: 'pending', call_id: String(call.id),
@@ -315,10 +322,6 @@ function buildVariables(list, { company, requests, deps }) {
   return out;
 }
 
-// ─── What became of a webhook event ────────────────────────────────
-// In words for the WhatsApp page, so a message that got no answer shows why:
-// the channel is not linked, replies are off, an employee has the
-// conversation, LoopChat refused the send, …
 const NO_SCENARIO = 'لا يوجد سيناريو مفعّل للشركة';
 const SKIPPED = {
   'unmapped channel'   : 'رقم واتساب هذا غير مربوط بأي شركة على المنصة',
@@ -336,8 +339,6 @@ function describeOutcome(r) {
     return { ok: true, text: `ردّ المساعد ووصل الرد إلى LoopChat${r.resumed ? '. كانت المحادثة موقوفة عندنا، وLoopChat يقول إن التكامل يعمل لها، فعاد المساعد إليها' : ''}` };
   }
   if (r.duplicate) return { ok: true, text: 'وصلت من قبل، فلم تُعالج مرة ثانية' };
-  // Who, from LoopChat's own event, so a pause nobody remembers making can be
-  // traced -- and how it ends, since only LoopChat can end it.
   const by = r.by ? ` (${r.by})` : '';
   if (r.paused === true) return { ok: true, text: `أوقف موظف${by} المساعد في هذه المحادثة من LoopChat، ولا يرد فيها حتى يعيد الموظف تشغيل التكامل لها من LoopChat` };
   if (r.paused === false) return { ok: true, text: `أعاد موظف${by} المحادثة إلى المساعد` };
@@ -354,8 +355,6 @@ function describeOutcome(r) {
   return { ok: false, text: `حدث لا يخص المساعد: ${why}` };
 }
 
-// ─── Settings, validated ───────────────────────────────────────────
-// Returns { settings } to merge into the company's settings, or { error }.
 function validateSettings(body) {
   const b = body || {};
   const channelId = b.channelId === null || b.channelId === '' || b.channelId === undefined ? null : Number(b.channelId);

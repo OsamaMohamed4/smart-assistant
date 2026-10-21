@@ -236,46 +236,45 @@ test('once an employee takes the conversation over, the assistant stays quiet un
   const stopped = await wa.handleEvent(handover('message_integration.stopped'), deps());
   assert.deepEqual(stopped, { paused: true, by: 'سارة' });
   const quiet = await wa.handleEvent(incoming('أبي موظف', { phone }), deps());
-  assert.deepEqual(quiet, { skipped: 'taken over by staff', by: 'سارة', live: null });
+  assert.deepEqual(quiet, { skipped: 'taken over by staff', by: 'سارة' });
   assert.equal(sent.length, 0);
   // The page names who paused it, and how it ends.
   assert.match(wa.describeOutcome(stopped).text, /أوقف موظف \(سارة\).*يعيد الموظف تشغيل التكامل/);
-  assert.match(wa.describeOutcome(quiet).text, /متوقفة عند موظف \(سارة\).*أعد تشغيل التكامل/);
+  assert.match(wa.describeOutcome(quiet).text, /متوقفة عند موظف \(سارة\).*أوقف التكامل لها ثم شغّله/);
   const started = await wa.handleEvent(handover('message_integration.started'), deps());
   assert.deepEqual(started, { paused: false, by: 'نورة' });
   assert.match(wa.describeOutcome(started).text, /أعاد موظف \(نورة\)/);
   assert.deepEqual(await wa.handleEvent(incoming('رجعت', { phone }), deps()), { sent: true });
 });
 
-// As it happened on Maheer's number: paused by an event, then -- while the
-// webhook pointed at a dead domain -- handed back in LoopChat, and the
-// hand-back never arrived.
-test('a pause LoopChat no longer holds is lifted, and the customer answered', async () => {
+// An employee answering from LoopChat by hand: the assistant steps back in
+// that conversation.
+const outgoing = (text, phone) => ({
+  event_type: 'message.received', event_id: `o-${++eventSeq}`,
+  contact: { id: 101, phone },
+  message: { messageId: 1, traffic: 'outgoing', timestamp: Date.now(), message: { type: 'text', text }, user: { name: 'نورة' } },
+  channel: { id: 6, name: 'WhatsApp', source: 'whatsapp' },
+});
+
+test('an employee writing from LoopChat silences the assistant in that conversation', async () => {
   const phone = '966502222222';
-  await wa.handleEvent({ event_type: 'message_integration.stopped', event_id: `h-${++eventSeq}`, contact: { phone }, channel: { id: 6 }, stopped_by: { name: 'Lama Mohsen' } }, deps());
-  integrationSwitch.set(phone, true);
-  try {
-    const r = await wa.handleEvent(incoming('هلا', { phone }), deps());
-    assert.deepEqual(r, { sent: true, resumed: true });
-    assert.match(wa.describeOutcome(r).text, /LoopChat يقول إن التكامل يعمل لها/);
-    assert.equal(Number(db.prepare('SELECT ai_paused FROM whatsapp_threads WHERE channel_id = 6 AND contact_phone = ?').get(phone).ai_paused), 0);
-    // And the next message is answered without asking again.
-    assert.deepEqual(await wa.handleEvent(incoming('ثانية', { phone }), deps()), { sent: true });
-  } finally { integrationSwitch.delete(phone); }
+  assert.deepEqual(await wa.handleEvent(outgoing('أهلاً، معك نورة من المبيعات', phone), deps()), { paused: true, by: 'نورة' });
+  assert.deepEqual(await wa.handleEvent(incoming('هلا نورة', { phone }), deps()), { skipped: 'taken over by staff', by: 'نورة' });
+  assert.equal(sent.length, 0);
 });
 
-test('a pause LoopChat confirms holds, and the page says LoopChat confirmed it', async () => {
+test('the assistant\'s own reply coming back from LoopChat is not taken for an employee', async () => {
   const phone = '966502222223';
-  await wa.handleEvent({ event_type: 'message_integration.stopped', event_id: `h-${++eventSeq}`, contact: { phone }, channel: { id: 6 }, stopped_by: { name: 'Lama Mohsen' } }, deps());
-  integrationSwitch.set(phone, false);
-  try {
-    const r = await wa.handleEvent(incoming('هلا', { phone }), deps());
-    assert.deepEqual(r, { skipped: 'taken over by staff', by: 'Lama Mohsen', live: false });
-    assert.match(wa.describeOutcome(r).text, /\(Lama Mohsen\).*LoopChat يؤكد أن التكامل متوقف/);
-    assert.equal(sent.length, 0);
-  } finally { integrationSwitch.delete(phone); }
+  assert.deepEqual(await wa.handleEvent(incoming('كم سعر الشقة؟', { phone }), deps()), { sent: true });
+  // LoopChat reports the reply just sent as an outgoing message.
+  const echo = await wa.handleEvent(outgoing('رد على: كم سعر الشقة؟', phone), deps());
+  assert.deepEqual(echo, { ignored: 'own reply' });
+  assert.equal(wa.describeOutcome(echo).ok, true);
+  // So the next question is still answered.
+  assert.deepEqual(await wa.handleEvent(incoming('وفيه تقسيط؟', { phone }), deps()), { sent: true });
+  // Different words from the same number are an employee.
+  assert.deepEqual(await wa.handleEvent(outgoing('سأتصل بك الآن', phone), deps()), { paused: true, by: 'نورة' });
 });
-
 test('the LoopChat client finds a contact by number, with its integration switch', async () => {
   integrationSwitch.set('966501010101', false);
   try {

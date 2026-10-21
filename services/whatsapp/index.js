@@ -1,41 +1,10 @@
 // WhatsApp for a company, through the client's provider (LoopChat).
-//
-//   (أ) The assistant answers incoming messages with the company's own scenario
-//       and knowledge base — the same text agent the Agent API runs — unless an
-//       employee has taken that conversation over in LoopChat.
-//   (ب) After a call, a template the company picked goes to the customer's
-//       WhatsApp, once per call: when the agent filed a request during it, or
-//       after every answered call.
-//   (ج) Every message in and out is recorded; that is what the usage page counts.
-//
-// Configuration lives in the company's settings and only a superadmin sets it
-// (one LoopChat channel identifies one company, the same way one phone number
-// does):
-//   whatsappChannelId   the LoopChat account channel (a WhatsApp number). The
-//                       webhook's channel.id is this same id, and the ids run
-//                       across LoopChat accounts (Wakan's number is 182 in its
-//                       account, Maheer's 184 in another)
-//   whatsappAutoReply   answer incoming messages — off until switched on
-//   whatsappFollowup    { trigger: 'request' | 'answered', templateId,
-//                         variables: [{ source, text }], headerType, headerUrl }
-//
-// Which LoopChat account a company's number lives in is its token's:
-// companies.loopchat_token, or the server's when it has none. A send with another account's token is refused or, worse, goes out
-// from that account's number -- so every call here names the company's token.
-//
-// Nothing here throws at the webhook or the call pipeline: every outcome,
-// including "did not send, and why", is a row in whatsapp_messages.
 const loopchat = require('./loopchat');
 const { connectedCall } = require('../../lib/call-status');
 const { REQUEST_TYPES } = require('../../lib/request-types');
 
-// A follow-up belongs to a call that just ended. A provider backfill or a late
-// refresh can replay old calls through the same pipeline, and those must not
-// message customers about a call from last week.
 const FOLLOWUP_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
-// Where a template variable's value comes from. `text` is the fallback when the
-// source is empty, and the whole value for 'fixed'.
 const VARIABLE_SOURCES = {
   customer_name: 'اسم العميل',
   company_name : 'اسم الشركة',
@@ -45,18 +14,11 @@ const VARIABLE_SOURCES = {
 };
 const TRIGGERS = { request: 'عند تسجيل طلب في المكالمة', answered: 'بعد كل مكالمة تم الرد عليها' };
 
-// LoopChat names numbers as international digits (966…).
 function waDigits(raw) {
   const d = String(raw || '').replace(/\D/g, '');
   return d.length >= 7 && d.length <= 15 ? d : null;
 }
 
-// The number a template can reach, from a call's customer number. WhatsApp
-// lives on mobiles: a Saudi landline (011…, 9661…), a unified or toll-free
-// number, or anything malformed is refused with a reason instead of being sent
-// and failing at the provider. A foreign number counts only when it was
-// written internationally (+ or 00), so a local number is never misread as
-// one.
 function whatsappNumber(raw) {
   const s = String(raw || '').trim();
   let d = s.replace(/\D/g, '');
@@ -85,8 +47,6 @@ async function companyForChannel(channelId, deps) {
   return (await deps.listCompanies()).find((c) => settingsOf(c).channelId === id) || null;
 }
 
-// The company's own LoopChat token, or null for the server's. Read here rather
-// than passed in, so no caller can forget it.
 async function tokenOf(company, deps) {
   const row = await deps.sql.getCompanyLoopchatToken.get(company.id);
   return deps.decryptField(row?.loopchat_token) || null;
@@ -99,8 +59,6 @@ async function record(deps, row) {
   });
 }
 
-// One reply at a time per conversation: two messages sent back to back would
-// otherwise be answered in parallel, each without seeing the other.
 const queues = new Map();
 function serialize(key, fn) {
   const prev = queues.get(key) || Promise.resolve();
@@ -110,12 +68,69 @@ function serialize(key, fn) {
   return next;
 }
 
-// ─── (أ) incoming messages ─────────────────────────────────────────
 async function handleEvent(evt, deps) {
-  const type = evt?.event_type;
-  if (type === 'message.received') return handleMessage(evt, deps);
-  if (type === 'message_integration.stopped' || type === 'message_integration.started') return handleHandover(evt, deps);
+  const type = evt?.event_type || evt?.type;
+
+  const traffic = evt?.message?.traffic || evt?.traffic || evt?.message?.message?.traffic;
+  const isOutgoing = traffic === 'outgoing' || 
+                     traffic === 'outbound' || 
+                     evt?.message?.from_me === true || 
+                     evt?.from_me === true || 
+                     evt?.message?.direction === 'outbound' || 
+                     evt?.direction === 'outbound' ||
+                     type === 'message.created' ||
+                     type === 'message.sent' ||
+                     type === 'message_outbound';
+
+  if (isOutgoing && !evt?.message?.from_api) {
+    return handleStaffMessage(evt, deps);
+  }
+
+  if (type === 'message.received' || type === 'message_received') return handleMessage(evt, deps);
+  if (type === 'message_integration.stopped' || type === 'message_integration.started' || type === 'integration.stopped' || type === 'integration.started') return handleHandover(evt, deps);
+
+  if (type === 'message.created' || type === 'message.sent') {
+    return handleStaffMessage(evt, deps);
+  }
+
   return { ignored: type || 'unknown event' };
+}
+
+// What the assistant itself just sent, per conversation. An outgoing message
+// LoopChat reports may be the assistant's own reply coming back, not an
+// employee writing -- and taking it for one would silence the assistant after
+// every answer. Kept in memory: an echo arrives seconds after the send.
+const OWN_ECHO_MS = 2 * 60 * 1000;
+const ownSends = new Map();
+function noteOwnSend(channelId, phone, text) {
+  const key = `${channelId}:${phone}`;
+  const now = Date.now();
+  const list = (ownSends.get(key) || []).filter((s) => now - s.at < OWN_ECHO_MS);
+  list.push({ text: text == null ? null : String(text).trim(), at: now });
+  ownSends.set(key, list.slice(-10));
+  if (ownSends.size > 5000) ownSends.delete(ownSends.keys().next().value);
+}
+// Its own text, or anything shortly after a template (whose text it does not have).
+function isOwnEcho(channelId, phone, text) {
+  const now = Date.now();
+  const t = String(text || '').trim();
+  return (ownSends.get(`${channelId}:${phone}`) || [])
+    .some((s) => now - s.at < OWN_ECHO_MS && (s.text === null || (t && s.text === t)));
+}
+
+async function handleStaffMessage(evt, deps) {
+  const channelId = Number(evt.channel?.id);
+  const phone = waDigits(evt.contact?.phone);
+  const company = await companyForChannel(channelId, deps);
+  if (!company || !phone) return { ignored: 'unmapped channel' };
+  if (isOwnEcho(channelId, phone, evt.message?.message?.text)) return { ignored: 'own reply' };
+
+  const staffName = String(evt.message?.user?.name || evt.message?.sender_name || evt.sender?.name || 'موظف').slice(0, 80);
+  await deps.sql.upsertWhatsappThread.run({
+    company_id: company.id, channel_id: channelId, contact_phone: phone,
+    ai_paused: 1, paused_by: staffName,
+  });
+  return { paused: true, by: staffName };
 }
 
 function describeMedia(msg) {
@@ -125,7 +140,12 @@ function describeMedia(msg) {
 
 async function handleMessage(evt, deps) {
   const { sql, logger } = deps;
-  if (evt.message?.traffic && evt.message.traffic !== 'incoming') return { ignored: 'not incoming' };
+  const traffic = evt.message?.traffic || evt.traffic || evt.message?.message?.traffic;
+  
+  if (traffic && traffic !== 'incoming') {
+    return handleStaffMessage(evt, deps);
+  }
+
   const channelId = Number(evt.channel?.id);
   const company = await companyForChannel(channelId, deps);
   if (!company) {
@@ -136,6 +156,17 @@ async function handleMessage(evt, deps) {
   const msg = evt.message?.message || {};
   const isText = msg.type === 'text' && String(msg.text || '').trim();
   const text = isText ? String(msg.text).trim().slice(0, 4000) : '';
+
+  const thread = await sql.getWhatsappThread.get(channelId, phone);
+  if (thread && Number(thread.ai_paused)) {
+    await record(deps, {
+      company_id: company.id, channel_id: channelId, contact_phone: phone, direction: 'in',
+      kind: isText ? 'text' : 'media', body: isText ? text : describeMedia(msg), status: 'received',
+      event_id: evt.event_id ? String(evt.event_id).slice(0, 100) : null,
+      provider_message_id: evt.message?.messageId != null ? String(evt.message.messageId) : null,
+    });
+    return { skipped: 'taken over by staff', by: thread.paused_by || null };
+  }
 
   const inserted = await record(deps, {
     company_id: company.id, channel_id: channelId, contact_phone: phone, direction: 'in',
@@ -148,41 +179,11 @@ async function handleMessage(evt, deps) {
   const cfg = settingsOf(company);
   if (!cfg.autoReply) return { skipped: 'auto-reply off' };
   if (!phone) return { skipped: 'no phone' };
-  // Images, voice notes and files are left to the team in LoopChat.
   if (!isText) return { skipped: 'not text' };
-  // A pause here is a copy of LoopChat's switch, kept from its events. One
-  // missed -- the hand-back sent while the webhook could not be reached --
-  // would leave the assistant silent in that conversation for good, so
-  // LoopChat is asked before staying quiet, and its answer is what counts.
-  // Unreachable or no answer: stay quiet, as the last event said.
-  const thread = await sql.getWhatsappThread.get(channelId, phone);
-  let resumed = false;
-  if (thread && Number(thread.ai_paused)) {
-    const live = await integrationIsOn(company, phone, deps);
-    if (live !== true) return { skipped: 'taken over by staff', by: thread.paused_by || null, live };
-    await sql.upsertWhatsappThread.run({ company_id: company.id, channel_id: channelId, contact_phone: phone, ai_paused: 0, paused_by: null });
-    logger.info('whatsapp: pause lifted, LoopChat has the integration on', { companyId: company.id, channelId });
-    resumed = true;
-  }
 
-  const r = await serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps));
-  return resumed ? { ...r, resumed } : r;
+  return await serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps));
 }
 
-// LoopChat's switch for this customer's conversation: true, false, or null
-// when it cannot say (no such contact, or LoopChat unreachable).
-async function integrationIsOn(company, phone, deps) {
-  try {
-    const c = await loopchat.findContact(phone, await tokenOf(company, deps));
-    return typeof c?.messageIntegration === 'boolean' ? c.messageIntegration : null;
-  } catch (e) {
-    deps.logger.warn('whatsapp: could not ask LoopChat about a paused conversation', { err: loopchat.errText(e) });
-    return null;
-  }
-}
-
-// The reply goes out from the number the customer wrote to -- the company's
-// own -- through the company's own LoopChat account.
 async function reply({ company, channelId, phone, text, contact }, deps) {
   const { sql, logger } = deps;
   const out = (status, detail, body = null, messageId = null) => record(deps, {
@@ -215,12 +216,11 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
   }
 
   const sent = await loopchat.sendText({ token: await tokenOf(company, deps), channelId, phone, content: answer });
+  if (sent.ok) noteOwnSend(channelId, phone, String(answer).slice(0, 4096));
   const reason = sent.ok ? null : refusal(sent, contact);
   await out(sent.ok ? 'sent' : 'failed', reason, answer, sent.messageId);
   if (!sent.ok) logger.warn('whatsapp: reply not sent', { companyId: company.id, reason });
-  // The conversation the next turn resumes from, and what the dashboard
-  // shows. A reply that never reached the customer is kept out of it, so the
-  // assistant does not later assume they read it.
+
   try {
     await sql.insertChat.run({
       company_id: company.id, session_id: sessionId, user_message: text,
@@ -230,9 +230,6 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
   return sent.ok ? { sent: true } : { failed: reason };
 }
 
-// LoopChat's reason for not sending. It finds the customer by number: when
-// the contact it settled on is not the one who wrote, the number is what went
-// wrong, not the window, and the reason says so.
 function refusal(sent, contact) {
   let text = String(sent.reason || 'not sent');
   const wrote = contact?.id != null ? String(contact.id) : null;
@@ -243,14 +240,15 @@ function refusal(sent, contact) {
   return String(text).slice(0, 500);
 }
 
-// An employee took the conversation over in LoopChat, or handed it back.
 async function handleHandover(evt, deps) {
   const channelId = Number(evt.channel?.id);
   const phone = waDigits(evt.contact?.phone);
   const company = await companyForChannel(channelId, deps);
   if (!company || !phone) return { ignored: 'unmapped channel' };
-  const paused = evt.event_type === 'message_integration.stopped';
-  const by = String((paused ? evt.stopped_by?.name : evt.started_by?.name) || '').slice(0, 80) || null;
+  
+  const paused = evt.event_type === 'message_integration.stopped' || evt.event_type === 'integration.stopped';
+  const by = String((paused ? (evt.stopped_by?.name || evt.user?.name) : (evt.started_by?.name || evt.user?.name)) || '').slice(0, 80) || null;
+  
   await deps.sql.upsertWhatsappThread.run({
     company_id: company.id, channel_id: channelId, contact_phone: phone,
     ai_paused: paused ? 1 : 0, paused_by: paused ? by : null,
@@ -258,7 +256,6 @@ async function handleHandover(evt, deps) {
   return { paused, by };
 }
 
-// ─── (ب) the template after a call ─────────────────────────────────
 async function afterCall(company, call, deps) {
   const { sql, logger } = deps;
   const cfg = settingsOf(company);
@@ -278,8 +275,6 @@ async function afterCall(company, call, deps) {
   }
 
   const phone = whatsappNumber(deps.decryptField(call.caller_number));
-  // The call is claimed BEFORE sending: (company_id, call_id) is unique, so a
-  // second pass over the same call (a webhook retry, a refresh) stops here.
   const claim = await record(deps, {
     company_id: company.id, channel_id: cfg.channelId, contact_phone: phone, direction: 'out', kind: 'template',
     body: `قالب #${f.templateId}`, status: 'pending', call_id: String(call.id),
@@ -297,6 +292,7 @@ async function afterCall(company, call, deps) {
   const variables = buildVariables(f.variables, { company, requests, deps });
   const header = f.headerType && f.headerUrl ? { type: f.headerType, url: f.headerUrl } : null;
   const sent = await loopchat.sendTemplate({ token, channelId: cfg.channelId, templateId: f.templateId, phone, variables, header });
+  if (sent.ok) noteOwnSend(cfg.channelId, phone, null);
   await finish(sent.ok ? 'sent' : 'failed', sent.reason, sent.messageId);
   if (!sent.ok) logger.warn('whatsapp: follow-up not sent', { companyId: company.id, callId: call.id, reason: sent.reason });
   return sent.ok ? { sent: true } : { failed: sent.reason };
@@ -318,10 +314,6 @@ function buildVariables(list, { company, requests, deps }) {
   return out;
 }
 
-// ─── What became of a webhook event ────────────────────────────────
-// In words for the WhatsApp page, so a message that got no answer shows why:
-// the channel is not linked, replies are off, an employee has the
-// conversation, LoopChat refused the send, …
 const NO_SCENARIO = 'لا يوجد سيناريو مفعّل للشركة';
 const SKIPPED = {
   'unmapped channel'   : 'رقم واتساب هذا غير مربوط بأي شركة على المنصة',
@@ -332,6 +324,7 @@ const SKIPPED = {
   'taken over by staff': 'المحادثة عند موظف في LoopChat',
   'daily cap'          : 'بلغت الشركة الحد اليومي للرسائل',
   'empty reply'        : 'رد فارغ من المساعد',
+  'own reply'          : 'رد المساعد نفسه عاد من LoopChat، فلا يُعدّ رد موظف',
 };
 function describeOutcome(r) {
   if (!r) return { ok: false, text: 'تعذّرت معالجة الحدث، والتفاصيل في سجل الخادم' };
@@ -339,26 +332,23 @@ function describeOutcome(r) {
     return { ok: true, text: `ردّ المساعد ووصل الرد إلى LoopChat${r.resumed ? '. كانت المحادثة موقوفة عندنا، وLoopChat يقول إن التكامل يعمل لها، فعاد المساعد إليها' : ''}` };
   }
   if (r.duplicate) return { ok: true, text: 'وصلت من قبل، فلم تُعالج مرة ثانية' };
-  // Who, from LoopChat's own event, so a pause nobody remembers making can be
-  // traced -- and how it ends, since only LoopChat can end it.
   const by = r.by ? ` (${r.by})` : '';
   if (r.paused === true) return { ok: true, text: `أوقف موظف${by} المساعد في هذه المحادثة من LoopChat، ولا يرد فيها حتى يعيد الموظف تشغيل التكامل لها من LoopChat` };
   if (r.paused === false) return { ok: true, text: `أعاد موظف${by} المحادثة إلى المساعد` };
   if (r.skipped === 'taken over by staff') {
     const confirmed = r.live === false ? '، وLoopChat يؤكد أن التكامل متوقف لها' : '';
-    return { ok: false, text: `المحادثة متوقفة عند موظف${by} في LoopChat${confirmed}، فلم يرد المساعد. لإعادتها: افتح المحادثة في LoopChat وأعد تشغيل التكامل لها` };
+    return { ok: false, text: `المحادثة متوقفة عند موظف${by} في LoopChat${confirmed}، فلم يرد المساعد. لإعادتها إليه: افتح المحادثة في LoopChat، وأوقف التكامل لها ثم شغّله (أو شغّله إن كان موقوفاً)` };
   }
   if (r.failed === 'no scenario') return { ok: false, text: NO_SCENARIO };
   if (r.failed) return { ok: false, text: r.failed === 'reply' ? 'تعذّر توليد الرد' : `لم يُرسل الرد، وسبب LoopChat: ${r.failed}` };
   const why = r.skipped || r.ignored;
   if (why === 'unmapped channel') return { ok: false, unmapped: true, text: SKIPPED[why] };
+  if (why === 'own reply') return { ok: true, text: SKIPPED[why] };
   if (SKIPPED[why]) return { ok: false, text: SKIPPED[why] };
   if (why === 'unknown event') return { ok: false, text: 'وصل طلب بلا نوع حدث، وبياناته على غير الشكل الموثّق' };
   return { ok: false, text: `حدث لا يخص المساعد: ${why}` };
 }
 
-// ─── Settings, validated ───────────────────────────────────────────
-// Returns { settings } to merge into the company's settings, or { error }.
 function validateSettings(body) {
   const b = body || {};
   const channelId = b.channelId === null || b.channelId === '' || b.channelId === undefined ? null : Number(b.channelId);

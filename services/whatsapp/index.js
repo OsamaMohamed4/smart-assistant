@@ -71,9 +71,8 @@ function serialize(key, fn) {
 async function handleEvent(evt, deps) {
   const type = evt?.event_type;
 
-  // التعرف على الرسائل الصادرة من الموظف/النظام بجميع الأشكال الممكنة
   const traffic = evt?.message?.traffic || evt?.traffic || evt?.message?.message?.traffic;
-  const isOutgoing = traffic === 'outgoing' || evt?.message?.from_me === true || evt?.from_me === true || evt?.message?.direction === 'outbound' || evt?.direction === 'outbound' || evt?.message?.direction === 'out';
+  const isOutgoing = traffic === 'outgoing' || evt?.message?.from_me === true || evt?.from_me === true || evt?.message?.direction === 'outbound' || evt?.direction === 'outbound';
 
   if (isOutgoing && !evt?.message?.from_api) {
     return handleStaffMessage(evt, deps);
@@ -96,7 +95,6 @@ async function handleStaffMessage(evt, deps) {
     company_id: company.id, channel_id: channelId, contact_phone: phone,
     ai_paused: 1, paused_by: staffName,
   });
-  deps.logger.info('whatsapp: staff message detected, AI paused', { companyId: company.id, channelId, phone, staffName });
   return { paused: true, by: staffName };
 }
 
@@ -124,10 +122,10 @@ async function handleMessage(evt, deps) {
   const isText = msg.type === 'text' && String(msg.text || '').trim();
   const text = isText ? String(msg.text).trim().slice(0, 4000) : '';
 
-  // فحص مباشر وصارم من قاعدة البيانات المحلية
+  // التحقق من حالة المحادثة في قاعدة البيانات
   const thread = await sql.getWhatsappThread.get(channelId, phone);
   if (thread && Number(thread.ai_paused)) {
-    // تسجيل الرسالة الواردة فقط والتوقف عن الرد نهائياً
+    // إذا كانت المحادثة موقوفة بسبب تدخل سابق ولم يصدر حدث إغلاق/استئناف من LoopChat
     await record(deps, {
       company_id: company.id, channel_id: channelId, contact_phone: phone, direction: 'in',
       kind: isText ? 'text' : 'media', body: isText ? text : describeMedia(msg), status: 'received',
@@ -213,8 +211,12 @@ async function handleHandover(evt, deps) {
   const phone = waDigits(evt.contact?.phone);
   const company = await companyForChannel(channelId, deps);
   if (!company || !phone) return { ignored: 'unmapped channel' };
+  
+  // إذا توقف التكامل (message_integration.stopped)، يتم إيقاف المساعد
+  // وإذا بدأ التكامل أو أغلقت المحادثة (message_integration.started)، يعود المساعد للعمل
   const paused = evt.event_type === 'message_integration.stopped';
   const by = String((paused ? evt.stopped_by?.name : evt.started_by?.name) || '').slice(0, 80) || null;
+  
   await deps.sql.upsertWhatsappThread.run({
     company_id: company.id, channel_id: channelId, contact_phone: phone,
     ai_paused: paused ? 1 : 0, paused_by: paused ? by : null,

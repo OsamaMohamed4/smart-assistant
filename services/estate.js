@@ -8,18 +8,26 @@
 //   Authorization: Bearer {the company's Estate API key}
 //   form-encoded body
 //
+// What Estate asked for, in its reply of 2026-10-21 (relayed by the client):
+// the customer's name, phone, the project they are interested in, and their
+// notes; rooms, district, budget and the like when the call has them; no
+// email and no campaign data. `platform` is `ai_chat`. The project goes as
+// its short code in project_codes[0] (M-10 for Maheer, W-38 for Wakan), not
+// as an id. Both companies' projects live on one Estate, Maheer's address,
+// with one key -- told apart by the project code.
+//
 // What goes, and what does not:
 //   - Purchase-interest requests only. That endpoint makes sales leads; Estate
 //     keeps rental requests in a module of their own, not linked here.
-//   - name, phone (from the call record, never from the model), platform, and
-//     note: every answer the customer gave, labelled as on the requests page.
-//     `platform` is a value per company, set by a superadmin, because Estate
-//     has not said what it should be for a lead from a call.
-//   - Estate's docs mark more fields required -- email, ad and campaign names,
-//     project, rooms, block, price and size ranges -- that a call does not
-//     collect and that are not made up here. The docs are marked "developing";
-//     whatever Estate does enforce comes back in its refusal, which is kept on
-//     the request and can be checked beforehand with check().
+//   - name, phone (from the call record, never from the model), platform,
+//     project_codes[0] when the customer named a project on the company's
+//     list, and note: every answer the customer gave, labelled as on the
+//     requests page. The call collects no rooms, district or budget, so none
+//     is sent; whatever the customer said goes in the note.
+//   - The project list -- name as the agent offers it, Estate's code -- is set
+//     per company by a superadmin. The model picks from those names (the
+//     request tool's enum, rebuilt on «نشر»), so a name maps to its code
+//     exactly; nothing is guessed from free text.
 //   - After the call ends: the customer's number is attached from the call
 //     record, which exists only then.
 //
@@ -37,6 +45,11 @@ const PATH = '/api/v1/make/attention-request/attention-request-store';
 const TIMEOUT_MS = 15_000;
 const SENT_TYPES = new Set(['interest']);
 const PLATFORM_MAX = 60;
+// Estate's value for a lead from the assistant (its reply of 2026-10-21).
+const PLATFORM_DEFAULT = 'ai_chat';
+const PROJECTS_MAX = 200;
+const PROJECT_NAME_MAX = 120;
+const PROJECT_CODE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,29}$/;
 
 // "https://maher.e-statee.com" from what was pasted -- the bare address or the
 // full endpoint. Only an Estate address: customer details go nowhere else.
@@ -51,9 +64,50 @@ function settingsOf(company) {
   const e = company?.settings?.estate || {};
   return {
     url: estateOrigin(e.url),
-    platform: String(e.platform || '').trim().slice(0, PLATFORM_MAX) || null,
+    platform: String(e.platform || '').trim().slice(0, PLATFORM_MAX) || PLATFORM_DEFAULT,
     enabled: e.enabled === true,
+    projects: Array.isArray(e.projects) ? e.projects.filter((p) => p?.name && p?.code) : [],
   };
+}
+
+// The project list as pasted: one per line, "name = code" (the code after the
+// last "="). Returns { projects } or { error } naming the line.
+function parseProjects(input) {
+  if (Array.isArray(input)) input = input.map((p) => `${p?.name || ''} = ${p?.code || ''}`).join('\n');
+  const projects = [];
+  const seen = new Set();
+  const lines = String(input || '').split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const at = line.lastIndexOf('=');
+    const name = (at > 0 ? line.slice(0, at) : '').trim().replace(/\s+/g, ' ');
+    const code = (at > 0 ? line.slice(at + 1) : '').trim();
+    if (!name || !code) return { error: `السطر ${i + 1}: اكتبه «اسم المشروع = رمزه في Estate»` };
+    if (name.length > PROJECT_NAME_MAX) return { error: `السطر ${i + 1}: اسم المشروع أطول من المسموح` };
+    if (!PROJECT_CODE.test(code)) return { error: `السطر ${i + 1}: رمز المشروع «${code.slice(0, 30)}» غير صالح، مثل M-10` };
+    const key = normalizeName(name);
+    if (seen.has(key)) return { error: `السطر ${i + 1}: المشروع «${name}» مكرر` };
+    seen.add(key);
+    projects.push({ name, code });
+  }
+  if (projects.length > PROJECTS_MAX) return { error: `الحد الأعلى ${PROJECTS_MAX} مشروعاً` };
+  return { projects };
+}
+
+// For matching what the model sent against the list: the enum makes it the
+// same text, but spacing, diacritics and the kashida are not worth a miss.
+function normalizeName(s) {
+  return String(s || '').normalize('NFKC').replace(/[ً-ٰٟـ]/g, '')
+    .replace(/[‐-―]/g, '-').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+// The Estate code for the project the customer named, or null.
+function projectCode(value, projects) {
+  const v = normalizeName(value);
+  if (!v) return null;
+  const hit = (projects || []).find((p) => normalizeName(p.name) === v || normalizeName(p.code) === v);
+  return hit ? hit.code : null;
 }
 
 // Estate's own example writes a Saudi mobile the local way: 0551234567.
@@ -81,11 +135,12 @@ function buildNote(request, fields) {
   return lines.join('\n');
 }
 
-function buildForm({ name, phone, platform, note }) {
+function buildForm({ name, phone, platform, projectCode: code, note }) {
   const form = new URLSearchParams();
   form.set('name', name);
   form.set('phone', phone);
   form.set('platform', platform);
+  if (code) form.set('project_codes[0]', code);
   form.set('note', note);
   return form;
 }
@@ -166,7 +221,11 @@ async function pushRequest(company, request, deps, { retry = false } = {}) {
 
   try {
     const send = deps.post || post;
-    const r = await send(cfg.url, cfg.token, buildForm({ name, phone, platform: cfg.platform, note: buildNote(request, fields) }));
+    const r = await send(cfg.url, cfg.token, buildForm({
+      name, phone, platform: cfg.platform,
+      projectCode: projectCode(fields.project, cfg.projects),
+      note: buildNote(request, fields),
+    }));
     if (accepted(r)) {
       await finish('sent', typeof r.data?.message === 'string' ? r.data.message.slice(0, 300) : null);
       logger.info('estate: request sent', { companyId: company.id, requestId: request.id });
@@ -222,14 +281,17 @@ function validateSettings(body, { hasToken }) {
   if (rawUrl && !url) return { error: 'عنوان Estate غير صالح. يجب أن يكون مثل https://maher.e-statee.com' };
   const platform = String(b.platform || '').trim();
   if (platform.length > PLATFORM_MAX) return { error: 'قيمة المصدر (platform) أطول من المسموح' };
+  const p = parseProjects(b.projects);
+  if (p.error) return { error: p.error };
   const enabled = b.enabled === true;
-  if (enabled && (!url || !platform || !hasToken)) {
-    return { error: 'للتشغيل: احفظ عنوان Estate والمفتاح وقيمة المصدر (platform) أولاً' };
+  if (enabled && (!url || !hasToken)) {
+    return { error: 'للتشغيل: احفظ عنوان Estate والمفتاح أولاً' };
   }
-  return { estate: { url, platform: platform || null, enabled } };
+  return { estate: { url, platform: platform || null, enabled, projects: p.projects } };
 }
 
 module.exports = {
   afterCall, pushRequest, check, validateSettings, settingsOf, readiness,
-  estateOrigin, estatePhone, buildNote, buildForm, estateReason, PATH,
+  estateOrigin, estatePhone, buildNote, buildForm, estateReason, parseProjects, projectCode,
+  PATH, PLATFORM_DEFAULT,
 };

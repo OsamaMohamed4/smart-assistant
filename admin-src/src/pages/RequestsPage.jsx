@@ -276,16 +276,24 @@ export function RequestsPage({ user, pinnedCompanyId }) {
 function EstateCard({ companyId, onChange }) {
   const { push } = useToast();
   const [s, setS] = useState(null);
-  const [form, setForm] = useState({ url: '', platform: '', enabled: false });
+  const [form, setForm] = useState({ url: '', platform: '', enabled: false, projects: '' });
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState('');
   const [check, setCheck] = useState(null);
   const [open, setOpen] = useState(false);
 
-  const load = () => api.companyEstate(companyId).then((r) => {
+  // `resetForm` false keeps what is being typed (saving the key mid-edit).
+  const load = (resetForm = true) => api.companyEstate(companyId).then((r) => {
     setS(r);
-    setForm({ url: r.url || '', platform: r.platform || '', enabled: !!r.enabled });
-    if (!r.enabled) setOpen(true);
+    if (resetForm) {
+      setForm({
+        url: r.url || '', platform: r.platform || '', enabled: !!r.enabled,
+        projects: (r.projects || []).map((p) => `${p.name} = ${p.code}`).join('\n'),
+      });
+      if (!r.enabled) setOpen(true);
+    } else if (!r.hasToken) {
+      setForm((f) => ({ ...f, enabled: false }));
+    }
   }).catch((e) => push(e.message, 'error'));
   useEffect(() => { load(); }, [companyId]);
 
@@ -302,7 +310,7 @@ function EstateCard({ companyId, onChange }) {
     const r = await api.saveCompanyEstateToken(companyId, value);
     setToken('');
     push(r.hasToken ? 'تم حفظ مفتاح Estate' : 'أُزيل مفتاح Estate، وأُوقف الإرسال', 'success');
-    await load(); onChange?.();
+    await load(false); onChange?.();
   });
   const runCheck = () => run('check', async () => {
     setCheck(await api.checkCompanyEstate(companyId, form.url));
@@ -325,7 +333,8 @@ function EstateCard({ companyId, onChange }) {
       {open && (
         <>
           <p className="text-[12px] text-ink-500 leading-relaxed">
-            يُرسل كل «طلب اهتمام» يسجّله الوكيل إلى نظام Estate الخاص بالشركة بعد انتهاء المكالمة: اسم العميل، ورقمه من المكالمة، وقيمة المصدر، وملاحظة فيها كل إجابات العميل.
+            يُرسل كل «طلب اهتمام» يسجّله الوكيل إلى نظام Estate الخاص بالشركة بعد انتهاء المكالمة: اسم العميل، ورقمه من المكالمة، والمشروع المهتم به برمزه، وملاحظة فيها كل إجابات العميل.
+            مهير ووكن على Estate واحد: العنوان نفسه والمفتاح نفسه، ويُميَّز الطلب برمز المشروع.
             طلبات التأجير لا تُرسل، فلها في Estate واجهة أخرى. ويظهر بجانب كل طلب ما جرى له.
           </p>
 
@@ -359,7 +368,18 @@ function EstateCard({ companyId, onChange }) {
             <label className="block text-[12px] font-medium text-ink-700 mb-1">قيمة المصدر (platform)</label>
             <input dir="ltr" value={form.platform} maxLength={60} onChange={(e) => setForm((f) => ({ ...f, platform: e.target.value }))}
               className={cn(input, 'font-mono text-[12px]')} />
-            <p className="mt-1 text-[11.5px] text-ink-500">القيمة التي يريدها Estate لمصدر الطلبات القادمة من المكالمات. اسأل Estate عنها، ولا تُخمَّن.</p>
+            <p className="mt-1 text-[11.5px] text-ink-500">القيمة التي اعتمدها Estate لطلبات المساعد الذكي هي <span dir="ltr" className="font-mono">ai_chat</span>، وتُستخدم إن تُرك الحقل فارغاً.</p>
+          </div>
+
+          <div>
+            <label className="block text-[12px] font-medium text-ink-700 mb-1">مشاريع الشركة ورموزها في Estate</label>
+            <textarea dir="auto" rows={6} value={form.projects} onChange={(e) => setForm((f) => ({ ...f, projects: e.target.value }))}
+              placeholder={'M-10 — أدوار، حي المغرزات = M-10\nوكن 038 — فلل، حي النهضة = W-38'}
+              className="w-full px-3 py-2 rounded-xl border border-ink-200 bg-white text-[12.5px] leading-relaxed focus-ring resize-y" />
+            <p className="mt-1 text-[11.5px] text-ink-500 leading-relaxed">
+              سطر لكل مشروع: الاسم كما يعرضه الوكيل على العميل، ثم «=»، ثم رمز المشروع في Estate.
+              يختار الوكيل المشروع من هذه الأسماء فقط، ويُرسل رمزه مع الطلب. بعد تعديل القائمة اضغط «نشر» للشركة حتى تصل إلى الوكيل.
+            </p>
           </div>
 
           <label className="flex items-start gap-3 rounded-xl border border-ink-100 px-4 py-3 cursor-pointer">
@@ -367,7 +387,7 @@ function EstateCard({ companyId, onChange }) {
               onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))} />
             <span>
               <span className="block text-[13px] font-medium text-ink-900">إرسال طلبات الاهتمام إلى Estate بعد كل مكالمة</span>
-              <span className="block text-[12px] text-ink-500 mt-0.5">يحتاج العنوان والمفتاح وقيمة المصدر.</span>
+              <span className="block text-[12px] text-ink-500 mt-0.5">يحتاج العنوان والمفتاح.</span>
             </span>
           </label>
 

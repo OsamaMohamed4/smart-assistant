@@ -37,7 +37,7 @@ after(() => {
 beforeEach(() => {
   posts.length = 0;
   answer = () => ({ status: 200, data: { status: true, message: 'تمت العملية بنجاح' } });
-  configure({ url: 'https://maher.e-statee.com', platform: 'masar_ai', enabled: true }, 'estate-key');
+  configure({ url: 'https://maher.e-statee.com', platform: 'ai_chat', enabled: true, projects: PROJECTS }, 'estate-key');
 });
 
 function configure(e, token) {
@@ -59,8 +59,9 @@ function callWith(requests, number = '+966501234567') {
 }
 const requestsOf = (callId) => db.prepare('SELECT * FROM customer_requests WHERE conversation_id = ? ORDER BY id').all(callId);
 
+const PROJECTS = [{ name: 'M-10 — أدوار، حي المغرزات', code: 'M-10' }, { name: 'وكن 038 — فلل، حي النهضة', code: 'W-38' }];
 const INTEREST = {
-  customer_name: 'أبو فهد', interest_status: 'مهتم جداً', interest_reasons: 'الموقع', property_type: 'شقة',
+  customer_name: 'أبو فهد', interest_status: 'مهتم جداً', project: 'M-10 — أدوار، حي المغرزات', interest_reasons: 'الموقع', property_type: 'شقة',
   purchase_reason: 'سكن', payment_method: 'تمويل بنكي', referral_source: 'سناب',
 };
 
@@ -71,13 +72,14 @@ test('a purchase-interest request goes to the company\'s Estate after the call, 
   assert.equal(posts.length, 1);
   assert.equal(posts[0].origin, 'https://maher.e-statee.com');
   assert.equal(posts[0].token, 'estate-key');
-  assert.deepEqual(Object.keys(posts[0].form), ['name', 'phone', 'platform', 'note']);
+  assert.deepEqual(Object.keys(posts[0].form), ['name', 'phone', 'platform', 'project_codes[0]', 'note']);
   assert.equal(posts[0].form.name, 'أبو فهد');
   assert.equal(posts[0].form.phone, '0501234567');          // the local way, as Estate's example
-  assert.equal(posts[0].form.platform, 'masar_ai');
+  assert.equal(posts[0].form.platform, 'ai_chat');
+  assert.equal(posts[0].form['project_codes[0]'], 'M-10');
   assert.equal(posts[0].form.note, [
     'طلب اهتمام من مكالمة مع المساعد الذكي',
-    'حالة الاهتمام: مهتم جداً', 'أبرز أسباب الاهتمام: الموقع', 'نوع العقار: شقة',
+    'حالة الاهتمام: مهتم جداً', 'المشروع المهتم به: M-10 — أدوار، حي المغرزات', 'أبرز أسباب الاهتمام: الموقع', 'نوع العقار: شقة',
     'سبب الشراء: سكن', 'طريقة الدفع: تمويل بنكي', 'كيف سمعت عنا: سناب',
   ].join('\n'));
   const [row] = requestsOf(call.id);
@@ -106,11 +108,10 @@ test('a request without the customer\'s name is not sent with a made-up one', as
   assert.match(requestsOf(call.id)[0].estate_detail, /بلا اسم عميل/);
 });
 
-test('nothing at all goes while it is off, or without the key or the platform value', async () => {
+test('nothing at all goes while it is off, without the key, or to an address that is not Estate', async () => {
   for (const [e, token] of [
     [{ url: 'https://maher.e-statee.com', platform: 'p', enabled: false }, 'k'],
     [{ url: 'https://maher.e-statee.com', platform: 'p', enabled: true }, null],
-    [{ url: 'https://maher.e-statee.com', platform: '', enabled: true }, 'k'],
     [{ url: 'https://evil.example.com', platform: 'p', enabled: true }, 'k'],
   ]) {
     configure(e, token);
@@ -196,13 +197,39 @@ test('numbers are written the local Saudi way, others internationally', () => {
   assert.equal(estate.estatePhone(''), null);
 });
 
-test('switching it on needs the address, the key and the platform value', () => {
-  const ok = { url: 'https://maher.e-statee.com', platform: 'masar_ai', enabled: true };
-  assert.deepEqual(estate.validateSettings(ok, { hasToken: true }).estate, ok);
+test('switching it on needs the address and the key; platform is ai_chat unless set', () => {
+  const ok = { url: 'https://maher.e-statee.com', platform: '', enabled: true, projects: '' };
+  assert.deepEqual(estate.validateSettings(ok, { hasToken: true }).estate, { url: 'https://maher.e-statee.com', platform: null, enabled: true, projects: [] });
+  assert.equal(estate.settingsOf({ settings: { estate: { platform: null } } }).platform, 'ai_chat');
+  assert.equal(estate.settingsOf({ settings: { estate: { platform: 'other' } } }).platform, 'other');
   assert.match(estate.validateSettings(ok, { hasToken: false }).error, /المفتاح/);
-  assert.match(estate.validateSettings({ ...ok, platform: '' }, { hasToken: true }).error, /platform/);
   assert.match(estate.validateSettings({ ...ok, url: 'https://x.com' }, { hasToken: true }).error, /غير صالح/);
-  assert.deepEqual(estate.validateSettings({ url: '', platform: '', enabled: false }, { hasToken: false }).estate, { url: null, platform: null, enabled: false });
+  assert.deepEqual(estate.validateSettings({ url: '', platform: '', enabled: false }, { hasToken: false }).estate, { url: null, platform: null, enabled: false, projects: [] });
+});
+
+test('the project list is pasted as lines of "name = code", and checked line by line', () => {
+  const text = 'M-10 — أدوار، حي المغرزات = M-10\n\n  وكن 038 — فلل، حي النهضة   =   W-38  \n';
+  assert.deepEqual(estate.parseProjects(text).projects, [
+    { name: 'M-10 — أدوار، حي المغرزات', code: 'M-10' }, { name: 'وكن 038 — فلل، حي النهضة', code: 'W-38' },
+  ]);
+  // Saved as a list, read back as one.
+  assert.deepEqual(estate.parseProjects(estate.parseProjects(text).projects).projects, estate.parseProjects(text).projects);
+  assert.match(estate.parseProjects('M-10').error, /السطر 1/);
+  assert.match(estate.parseProjects('أ = M-10\nب = رمز').error, /السطر 2: رمز المشروع «رمز» غير صالح/);
+  assert.match(estate.parseProjects('أ = M-10\nأ = M-11').error, /مكرر/);
+  assert.match(estate.validateSettings({ url: '', projects: 'x =' }, { hasToken: false }).error, /السطر 1/);
+});
+
+test('the code goes only for a project on the list; otherwise the lead goes without one', async () => {
+  assert.equal(estate.projectCode('M-10 — أدوار، حي المغرزات', PROJECTS), 'M-10');
+  assert.equal(estate.projectCode('  وكن 038 — فلل،  حي النهضة ', PROJECTS), 'W-38');   // spacing
+  assert.equal(estate.projectCode('M-10', PROJECTS), 'M-10');                              // its own code
+  assert.equal(estate.projectCode('مشروع لا نعرفه', PROJECTS), null);
+  assert.equal(estate.projectCode('', PROJECTS), null);
+  const call = callWith([['interest', { ...INTEREST, project: 'مشروع لا نعرفه' }]]);
+  await estate.afterCall(await company(), call, deps());
+  assert.equal(posts.at(-1).form['project_codes[0]'], undefined);
+  assert.match(posts.at(-1).form.note, /المشروع المهتم به: مشروع لا نعرفه/);   // still told, in the note
 });
 
 test('the key never rides along with the company, and the requests list carries each outcome', () => {

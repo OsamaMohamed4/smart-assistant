@@ -186,6 +186,21 @@ test('the request schema is generated from the request types, not hand-copied', 
   }
 });
 
+test('a company that lists its projects for Estate has the model pick one of them', () => {
+  const feature = registry.getFeature('request_creation');
+  // No list: the project is free text, as every other field.
+  assert.equal(feature.bodyPropertiesFor({ settings: {} }).project.enum, undefined);
+  const company = { settings: { estate: { projects: [
+    { name: 'M-10 — أدوار، حي المغرزات', code: 'M-10' }, { name: 'M-11 — شقق، حي الحمراء', code: 'M-11' },
+  ] } } };
+  const props = feature.bodyPropertiesFor(company);
+  assert.deepEqual(props.project.enum, ['M-10 — أدوار، حي المغرزات', 'M-11 — شقق، حي الحمراء']);
+  assert.match(props.project.description, /من هذه القائمة فقط/);
+  // Everything else is untouched, and the codes never reach the model.
+  assert.deepEqual(Object.keys(props).sort(), Object.keys(feature.bodyProperties).sort());
+  assert.ok(!JSON.stringify(props).includes('"M-10"'));
+});
+
 test('pickFields keeps only the fields the type defines, bounded', () => {
   const { pickFields, FIELD_MAX } = require('../lib/request-types');
   const out = pickFields('leasing_commercial', {

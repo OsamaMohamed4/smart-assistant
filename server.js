@@ -1785,7 +1785,7 @@ app.get('/api/companies/:id/estate', requireSuperadmin, async (req, res) => {
   if (!c) return res.status(404).json({ error: 'not found' });
   const s = estate.settingsOf(c);
   const hasToken = !!(await sql.getCompanyEstateToken.get(c.id))?.estate_token;
-  res.json({ url: s.url, platform: s.platform, enabled: s.enabled, hasToken });
+  res.json({ url: s.url, platform: s.platform, enabled: s.enabled, projects: s.projects, hasToken });
 });
 
 app.put('/api/companies/:id/estate', requireSuperadmin, async (req, res) => {
@@ -1798,8 +1798,9 @@ app.put('/api/companies/:id/estate', requireSuperadmin, async (req, res) => {
   try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
   await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify({ ...existing, estate: v.estate }) });
   invalidateCache();
-  audit(req, 'company.estate', `companies/${row.id}`, { url: v.estate.url, enabled: v.estate.enabled });
-  res.json({ ...v.estate, hasToken });
+  audit(req, 'company.estate', `companies/${row.id}`, { url: v.estate.url, enabled: v.estate.enabled, projects: v.estate.projects.length });
+  const s = estate.settingsOf({ settings: { estate: v.estate } });
+  res.json({ url: s.url, platform: s.platform, enabled: s.enabled, projects: s.projects, hasToken });
 });
 
 app.put('/api/companies/:id/estate/token', requireSuperadmin, async (req, res) => {

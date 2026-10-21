@@ -32,7 +32,7 @@ const { REQUEST_TYPES, FIELDS } = require('../../lib/request-types');
  * the provider fills from the line itself, so the model can neither be asked
  * for it nor supply a different one.
  */
-function requestBodyProperties() {
+function requestBodyProperties(projects = []) {
   const types = Object.keys(REQUEST_TYPES);
   const props = {
     request_type: {
@@ -49,8 +49,22 @@ function requestBodyProperties() {
   for (const key of all) {
     props[key] = { type: 'string', description: FIELDS[key].descriptionAr };
   }
+  // A company that lists its projects (for Estate) has the model pick one by
+  // name, so the name maps to the project's code exactly; never one off the list.
+  const names = [...new Set((projects || []).map((p) => p.name).filter(Boolean))];
+  if (props.project && names.length) {
+    props.project = {
+      type: 'string',
+      enum: names,
+      description: 'المشروع الذي يهتم به العميل، من هذه القائمة فقط. إن لم يحدد العميل مشروعاً منها فاترك الحقل فارغاً.',
+    };
+  }
   return props;
 }
+
+// The company's projects as it listed them for Estate (services/estate.js).
+// Lazy: estate.js needs lib/request-types too, and nothing here needs it at load.
+const companyProjects = (company) => require('../estate').settingsOf(company).projects;
 
 /**
  * @typedef {object} Feature
@@ -125,6 +139,8 @@ const FEATURES = [
       + 'ولا تستدعِ الأداة قبل أن يؤكد. لا تسأل عن رقم الجوال — يُسجَّل تلقائياً من المكالمة.',
     responseTimeoutSecs: 10,
     bodyProperties: requestBodyProperties(),
+    // Per company at publish: its project list becomes the project field's choices.
+    bodyPropertiesFor: (company) => requestBodyProperties(companyProjects(company)),
     bodyRequired: ['request_type', 'customer_confirmed'],
     // Opt-in. A capability that files records on a company's behalf must be
     // switched on by someone who decided they want it, never appear on every

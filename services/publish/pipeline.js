@@ -219,8 +219,11 @@ async function publishCompany({ company, deps, actorEmail = null, log = null }) 
     for (const key of plan.attach) {
       const feature = getFeature(key);
       if (!feature || feature.kind !== 'webhook') continue;
+      // A capability whose tool depends on the company (the request tool's
+      // project choices) is built from this company's own declaration.
+      const own = feature.bodyPropertiesFor ? { ...feature, bodyProperties: feature.bodyPropertiesFor(company) } : feature;
       const cfg = voice.buildFeatureTool(company, {
-        feature, companyId: company.id, publicBaseUrl,
+        feature: own, companyId: company.id, publicBaseUrl,
       });
       if (!cfg) continue;                  // no tool secret => fail closed
       webhookTools.push({

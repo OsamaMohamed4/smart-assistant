@@ -160,8 +160,34 @@ function estateReason(status, data) {
 // Accepted: a 2xx that does not itself say it failed.
 const accepted = (r) => r.status >= 200 && r.status < 300 && r.data?.status !== false;
 
-// The key as pasted, without a "Bearer " someone copied along with it.
-const bareKey = (token) => String(token || '').trim().replace(/^bearer\s+/i, '');
+// The key as Estate issued it. Copied out of an Arabic chat or e-mail, a key
+// picks up what does not show: direction marks (U+200E/F, U+202A-E,
+// U+2066-9), zero-width characters, a BOM, non-breaking spaces, a line break,
+// quotes around it -- and sometimes the word "Bearer". Any of them makes
+// Estate answer "header api-key is missing or not correct". A key has none.
+const HIDDEN = /[​-‏‪-‮⁠-⁩﻿ ]/g;
+function cleanKey(token) {
+  const QUOTES = /^["'`«»\s]+|["'`«»\s]+$/g;
+  return String(token || '').replace(HIDDEN, '').replace(QUOTES, '')
+    .replace(/^bearer\s+/i, '')
+    .replace(/\s+/g, '')
+    .replace(QUOTES, '');
+}
+const bareKey = cleanKey;
+
+// Enough of the saved key to compare with what Estate sent, and no more.
+function keyHint(token) {
+  const k = cleanKey(token);
+  if (!k) return null;
+  const head = Math.min(3, Math.floor(k.length / 4));
+  const tail = Math.min(2, Math.floor(k.length / 6));       // slice(-0) would be all of it
+  return {
+    length: k.length,
+    start: k.slice(0, head),
+    end: tail ? k.slice(-tail) : '',
+    cleaned: k !== String(token || ''),
+  };
+}
 
 // Estate's docs say Bearer, but its server reads the key from an `api-key`
 // header: with Bearer alone it answers 403 "header api-key is missing or not
@@ -306,6 +332,6 @@ function validateSettings(body, { hasToken }) {
 
 module.exports = {
   afterCall, pushRequest, check, validateSettings, settingsOf, readiness,
-  estateOrigin, estatePhone, buildNote, buildForm, estateReason, estateHeaders, parseProjects, projectCode,
+  estateOrigin, estatePhone, buildNote, buildForm, estateReason, estateHeaders, cleanKey, keyHint, parseProjects, projectCode,
   PATH, PLATFORM_DEFAULT,
 };

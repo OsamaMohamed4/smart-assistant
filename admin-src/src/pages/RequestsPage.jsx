@@ -358,6 +358,12 @@ function EstateCard({ companyId, onChange }) {
               <Button variant="secondary" disabled={!token.trim()} loading={busy === 'token'} onClick={() => saveToken(token.trim())}>حفظ المفتاح</Button>
             </div>
             <p className="mt-1 text-[11.5px] text-ink-500">لا يُعرض بعد الحفظ، ولا يصل إلى المتصفح.</p>
+            {s.keyHint && (
+              <p className="mt-1 text-[11.5px] text-ink-600">
+                المفتاح المحفوظ يبدأ بـ <span dir="ltr" className="font-mono">{s.keyHint.start || '—'}</span> وينتهي بـ <span dir="ltr" className="font-mono">{s.keyHint.end || '—'}</span>، وطوله {s.keyHint.length} حرفاً. قارنه بالمفتاح الذي أرسله Estate.
+                {s.keyHint.cleaned && <span className="block text-amber-800">كان فيه رموز مخفية أو مسافات نُسخت معه، وتُحذف قبل الإرسال.</span>}
+              </p>
+            )}
             {s.hasToken && (
               <button type="button" className="mt-1 text-[11.5px] text-rose-700 underline disabled:opacity-50" disabled={!!busy}
                 onClick={() => saveToken('')}>إزالة المفتاح</button>

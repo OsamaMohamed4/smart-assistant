@@ -1784,8 +1784,11 @@ app.get('/api/companies/:id/estate', requireSuperadmin, async (req, res) => {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
   const s = estate.settingsOf(c);
-  const hasToken = !!(await sql.getCompanyEstateToken.get(c.id))?.estate_token;
-  res.json({ url: s.url, platform: s.platform, enabled: s.enabled, projects: s.projects, hasToken });
+  const stored = (await sql.getCompanyEstateToken.get(c.id))?.estate_token;
+  // A glimpse of the saved key -- its first and last characters and length --
+  // to compare with what Estate sent, never the key.
+  const keyHint = stored ? estate.keyHint(decryptField(stored)) : null;
+  res.json({ url: s.url, platform: s.platform, enabled: s.enabled, projects: s.projects, hasToken: !!stored, keyHint });
 });
 
 app.put('/api/companies/:id/estate', requireSuperadmin, async (req, res) => {
@@ -1806,7 +1809,8 @@ app.put('/api/companies/:id/estate', requireSuperadmin, async (req, res) => {
 app.put('/api/companies/:id/estate/token', requireSuperadmin, async (req, res) => {
   const row = await sql.getCompany.get(req.params.id);
   if (!row) return res.status(404).json({ error: 'not found' });
-  const token = String(req.body?.token || '').trim();
+  // Stored as Estate issued it: what a copy-paste drags along is dropped.
+  const token = estate.cleanKey(req.body?.token);
   if (token.length > 2000) return res.status(400).json({ error: 'المفتاح أطول من المعتاد. انسخه كما هو.' });
   await sql.setCompanyEstateToken.run({ id: row.id, token: token ? encryptField(token) : null });
   // Without a key nothing can be sent, so switching the key off switches sending off.
@@ -1819,7 +1823,7 @@ app.put('/api/companies/:id/estate/token', requireSuperadmin, async (req, res) =
     }
   }
   audit(req, 'company.estate_token', `companies/${row.id}`, { set: !!token });
-  res.json({ hasToken: !!token });
+  res.json({ hasToken: !!token, keyHint: token ? estate.keyHint(token) : null });
 });
 
 // Address and key, checked with a request carrying no fields (see check()).

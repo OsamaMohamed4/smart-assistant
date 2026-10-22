@@ -188,6 +188,17 @@ test('the key goes in the api-key header Estate reads, as well as Bearer', () =>
   assert.equal(estate.estateHeaders('k-123')['api-key'], 'k-123');
 });
 
+test('what a copy-paste drags along is dropped from the key, and the hint says so', () => {
+  const pasted = '‏ "Bearer ab12-CD34 ef56‎"\n';
+  assert.equal(estate.cleanKey(pasted), 'ab12-CD34ef56');
+  assert.equal(estate.estateHeaders(pasted)['api-key'], 'ab12-CD34ef56');
+  assert.deepEqual(estate.keyHint(pasted), { length: 13, start: 'ab1', end: '56', cleaned: true });
+  assert.deepEqual(estate.keyHint('ab12CD34ef56gh78'), { length: 16, start: 'ab1', end: '78', cleaned: false });
+  // A short value shows next to nothing of itself.
+  assert.deepEqual(estate.keyHint('***'), { length: 3, start: '', end: '', cleaned: false });
+  assert.equal(estate.keyHint(''), null);
+});
+
 test('a refused key shows Estate\'s own words', async () => {
   // Exactly what maher.e-statee.com answers when the api-key header is wrong or absent.
   const live = { status: 403, data: { status: false, message: 'header api-key is missing or not correct' } };

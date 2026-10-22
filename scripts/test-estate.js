@@ -180,6 +180,26 @@ test('the check reads Estate\'s answer to a request with no fields', async () =>
   assert.match((await estate.check({ url: 'https://maher.e-statee.com', token: null })).text, /لم يُحفظ مفتاح/);
 });
 
+test('the key goes in the api-key header Estate reads, as well as Bearer', () => {
+  const h = estate.estateHeaders('  Bearer k-123 ');
+  assert.equal(h['api-key'], 'k-123');                     // a pasted "Bearer " is dropped
+  assert.equal(h.Authorization, 'Bearer k-123');
+  assert.equal(h['Content-Type'], 'application/x-www-form-urlencoded');
+  assert.equal(estate.estateHeaders('k-123')['api-key'], 'k-123');
+});
+
+test('a refused key shows Estate\'s own words', async () => {
+  // Exactly what maher.e-statee.com answers when the api-key header is wrong or absent.
+  const live = { status: 403, data: { status: false, message: 'header api-key is missing or not correct' } };
+  const r = await estate.check({ url: 'https://maher.e-statee.com', token: 'k', send: async () => live });
+  assert.equal(r.ok, false);
+  assert.match(r.text, /رفض Estate المفتاح \(header api-key is missing or not correct\)/);
+  answer = () => live;
+  const call = callWith([['interest', INTEREST]]);
+  const [sent] = await estate.afterCall(await company(), call, deps());
+  assert.equal(sent.failed, 'رفض Estate المفتاح (header api-key is missing or not correct)');
+});
+
 test('only an https Estate address is accepted, from the bare host or the full endpoint', () => {
   assert.equal(estate.estateOrigin('https://maher.e-statee.com'), 'https://maher.e-statee.com');
   assert.equal(estate.estateOrigin(' https://Maher.e-statee.com/api/v1/make/attention-request/attention-request-store '), 'https://maher.e-statee.com');

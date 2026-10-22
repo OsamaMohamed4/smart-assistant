@@ -147,7 +147,9 @@ function buildForm({ name, phone, platform, projectCode: code, note }) {
 
 // Estate's answer in words: its validation errors, or its message.
 function estateReason(status, data) {
-  if (status === 401 || status === 403) return 'رفض Estate المفتاح';
+  if (status === 401 || status === 403) {
+    return `رفض Estate المفتاح${typeof data?.message === 'string' && data.message ? ` (${data.message.slice(0, 200)})` : ''}`;
+  }
   if (status === 404) return 'لا توجد واجهة الطلبات هذه على عنوان Estate المحفوظ';
   const errs = data && typeof data.errors === 'object' && data.errors
     ? Object.values(data.errors).flat().filter(Boolean) : [];
@@ -158,15 +160,27 @@ function estateReason(status, data) {
 // Accepted: a 2xx that does not itself say it failed.
 const accepted = (r) => r.status >= 200 && r.status < 300 && r.data?.status !== false;
 
+// The key as pasted, without a "Bearer " someone copied along with it.
+const bareKey = (token) => String(token || '').trim().replace(/^bearer\s+/i, '');
+
+// Estate's docs say Bearer, but its server reads the key from an `api-key`
+// header: with Bearer alone it answers 403 "header api-key is missing or not
+// correct" (seen live on maher.e-statee.com, 2026-10-22). Both are sent.
+function estateHeaders(token) {
+  const key = bareKey(token);
+  return {
+    'api-key': key,
+    Authorization: `Bearer ${key}`,
+    Accept: 'application/json',
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
+}
+
 async function post(origin, token, form) {
   const url = origin + PATH;
   await assertSafeUrl(url);
   return axios.post(url, form.toString(), {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
+    headers: estateHeaders(token),
     timeout: TIMEOUT_MS,
     maxRedirects: 0,
     validateStatus: () => true,
@@ -263,7 +277,7 @@ async function check({ url, token, send = post }) {
   if (!token) return { ok: false, text: 'لم يُحفظ مفتاح Estate لهذه الشركة بعد.' };
   try {
     const r = await send(origin, token, new URLSearchParams());
-    if (r.status === 401 || r.status === 403) return { ok: false, text: 'رفض Estate المفتاح. انسخه من جديد كما أعطاك إياه Estate.' };
+    if (r.status === 401 || r.status === 403) return { ok: false, text: `${estateReason(r.status, r.data)}. تأكد أنه المفتاح الذي أعطاك إياه Estate، منسوخاً كاملاً.` };
     if (r.status === 404) return { ok: false, text: 'لا توجد واجهة الطلبات على هذا العنوان. تأكد من عنوان Estate الخاص بالشركة.' };
     if (r.status === 422) return { ok: true, text: `المفتاح مقبول. يشترط Estate في الطلب: ${estateReason(422, r.data)}` };
     if (accepted(r)) return { ok: true, warn: true, text: 'قبل Estate طلباً بلا بيانات، فربما أنشأ طلباً فارغاً. احذفه من Estate.' };
@@ -292,6 +306,6 @@ function validateSettings(body, { hasToken }) {
 
 module.exports = {
   afterCall, pushRequest, check, validateSettings, settingsOf, readiness,
-  estateOrigin, estatePhone, buildNote, buildForm, estateReason, parseProjects, projectCode,
+  estateOrigin, estatePhone, buildNote, buildForm, estateReason, estateHeaders, parseProjects, projectCode,
   PATH, PLATFORM_DEFAULT,
 };

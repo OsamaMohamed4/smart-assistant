@@ -180,7 +180,7 @@ export const api = {
   // chat (playground)
   chat              : (body) => request('/chat', { method: 'POST', body: JSON.stringify(body) }),
 
-  // voice catalogue (منى، ناصر); the platform default carries isDefault
+  // voice catalogue (ناصر only since 2026-10-23); the platform default carries isDefault
   listVoices        : () => request('/api/voices'),
 
   // currently-active scenario for a company (null if none) — used by playground

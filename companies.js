@@ -80,9 +80,9 @@ function localNow(date = new Date()) {
   return new Date(date.getTime() + TZ_OFFSET_HOURS * 3600 * 1000);
 }
 
-// The agent's spoken name and grammatical gender come from its VOICE, so one
-// scenario serves either voice: "معك {{agent_name}}" says منى in Mona's voice
-// and ناصر in the male one. It used to be the company's name, which made every
+// The agent's spoken name and grammatical gender come from its VOICE, so a
+// scenario never hard-codes them: "معك {{agent_name}}" says ناصر in the male
+// voice, and would say a female voice's name, in the feminine, if one returned. It used to be the company's name, which made every
 // agent introduce itself as its own company ("معك MASAR"). A voice outside the
 // catalogue (EXTRA_VOICE_IDS) has no name of its own and speaks as المساعد.
 function agentIdentity(company, voiceId) {

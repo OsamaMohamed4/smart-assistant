@@ -169,12 +169,13 @@ const {
 const ALI = 'MI88rOZjXbH22N8KHXUo';
 const JEDDAWI = 'yXEnnEln9armDCyhkXcA';
 
-test('F-14: the catalogue is exactly the two voices the operator chose', () => {
+test('F-14: the catalogue is exactly the voice the operator kept: ناصر, منى dropped', () => {
   assert.deepEqual(VOICES.map((v) => [v.id, v.label, v.gender]), [
-    ['o0oG1TnHDWDdKbAeBgCO', 'منى', 'female'],
     [JEDDAWI, 'ناصر', 'male'],
   ]);
   for (const v of VOICES) assert.equal(isAllowedVoiceId(v.id), true, v.name);
+  // Mona can no longer be picked: a save with her id is refused.
+  assert.equal(isAllowedVoiceId('o0oG1TnHDWDdKbAeBgCO'), false);
 });
 
 test('F-14: the default voice is one a company could also pick', () => {
@@ -238,7 +239,9 @@ test('F-14: a company saved with a retired voice loads with its replacement', ()
   assert.equal(c.settings.voiceSpeed, 1.1);
   // No voice stays no voice: the default applies at publish, not here.
   assert.equal(toCompany(row({ model: 'gpt-4.1' })).settings.voiceId, undefined);
-  assert.equal(toCompany(row({ voiceId: 'o0oG1TnHDWDdKbAeBgCO' })).settings.voiceId, 'o0oG1TnHDWDdKbAeBgCO');
+  // A company saved with Mona, dropped 2026-10-23, loads speaking as ناصر.
+  assert.equal(toCompany(row({ voiceId: 'o0oG1TnHDWDdKbAeBgCO' })).settings.voiceId, JEDDAWI);
+  assert.equal(RETIRED_VOICES.o0oG1TnHDWDdKbAeBgCO, JEDDAWI);
 });
 
 // ─── F-10: Saudi local time for spoken {{date}}/{{time}} ──────────

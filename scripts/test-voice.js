@@ -545,11 +545,14 @@ test('the agent\'s name and gender follow the company\'s voice', () => {
   // company's own name, so agents introduced themselves as "معك MASAR".
   const { fillGlobals } = require('../companies');
   const t = 'معك {{agent_name}}، تكلّم بصيغة {{agent_gender}}';
-  const mona = { id: 'co-a', name: 'س', settings: { voiceId: 'o0oG1TnHDWDdKbAeBgCO' } };
-  assert.equal(fillGlobals(t, mona), 'معك منى، تكلّم بصيغة المؤنث');
+  const nasser = { id: 'co-a', name: 'س', settings: { voiceId: 'yXEnnEln9armDCyhkXcA' } };
+  assert.equal(fillGlobals(t, nasser), 'معك ناصر، تكلّم بصيغة المذكر');
   assert.equal(fillGlobals(t, { id: 'co-b', name: 'س' }), 'معك ناصر، تكلّم بصيغة المذكر', 'no voice chosen: the default');
-  // A test call on the other voice introduces that voice.
-  assert.equal(fillGlobals(t, mona, { voiceId: 'yXEnnEln9armDCyhkXcA' }), 'معك ناصر، تكلّم بصيغة المذكر');
+  // A company still saved with Mona (dropped) -- or a test call naming her --
+  // speaks, and introduces itself, as ناصر, in the masculine.
+  const mona = { id: 'co-m', name: 'س', settings: { voiceId: 'o0oG1TnHDWDdKbAeBgCO' } };
+  assert.equal(fillGlobals(t, mona), 'معك ناصر، تكلّم بصيغة المذكر');
+  assert.equal(fillGlobals(t, nasser, { voiceId: 'o0oG1TnHDWDdKbAeBgCO' }), 'معك ناصر، تكلّم بصيغة المذكر');
   // A voice with no catalogue entry has no name of its own.
   assert.equal(fillGlobals('{{agent_name}}', { id: 'co-c', name: 'س', settings: { voiceId: 'extra123' } }), 'المساعد');
 });

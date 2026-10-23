@@ -856,12 +856,13 @@ const sql = {
       FROM whatsapp_messages WHERE company_id = $1 ORDER BY id DESC LIMIT $2`),
   getWhatsappThread: stmt(`SELECT * FROM whatsapp_threads WHERE channel_id = $1 AND contact_phone = $2`),
   upsertWhatsappThread: stmt(
-    `INSERT INTO whatsapp_threads (company_id, channel_id, contact_phone, ai_paused, paused_by, updated_at)
-     VALUES ($1, $2, $3, $4, $5, ${NOW})
+    `INSERT INTO whatsapp_threads (company_id, channel_id, contact_phone, ai_paused, paused_by, conversation_id, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, ${NOW})
      ON CONFLICT (channel_id, contact_phone) DO UPDATE SET
        company_id = EXCLUDED.company_id, ai_paused = EXCLUDED.ai_paused,
-       paused_by = EXCLUDED.paused_by, updated_at = EXCLUDED.updated_at`,
-    ['company_id', 'channel_id', 'contact_phone', 'ai_paused', 'paused_by'],
+       paused_by = EXCLUDED.paused_by, conversation_id = EXCLUDED.conversation_id,
+       updated_at = EXCLUDED.updated_at`,
+    ['company_id', 'channel_id', 'contact_phone', 'ai_paused', 'paused_by', 'conversation_id'],
   ),
   whatsappUsageByCompanyInRange: stmt(
     `SELECT company_id,

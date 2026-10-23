@@ -397,6 +397,8 @@ CREATE TABLE IF NOT EXISTS whatsapp_threads (
   contact_phone  TEXT NOT NULL,
   ai_paused      BIGINT NOT NULL DEFAULT 0,
   paused_by      TEXT,
+  -- LoopChat's conversation the pause belongs to, when its event names one.
+  conversation_id TEXT,
   updated_at     TEXT NOT NULL DEFAULT ${NOW_TEXT},
   PRIMARY KEY (channel_id, contact_phone)
 );

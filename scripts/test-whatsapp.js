@@ -102,12 +102,15 @@ beforeEach(() => {
 });
 
 let eventSeq = 0;
-const incoming = (text, { phone = '966501234567', channel = 6, type = 'text', id } = {}) => ({
+const incoming = (text, { phone = '966501234567', channel = 6, type = 'text', id, conversation, at } = {}) => ({
   event_type: 'message.received',
   event_id: id || `evt-${++eventSeq}`,
   contact: { id: 101, name: 'أبو فهد', phone, email: null },
-  message: { messageId: 765607, traffic: 'incoming', timestamp: Date.now(), message: { type, text, attachments: type === 'text' ? undefined : { url: 'https://x/y.jpg', name: 'y.jpg', mimeType: 'image/jpeg' } } },
+  message: { messageId: 765607, traffic: 'incoming', timestamp: at ?? Date.now(), message: { type, text, attachments: type === 'text' ? undefined : { url: 'https://x/y.jpg', name: 'y.jpg', mimeType: 'image/jpeg' } } },
   channel: { id: channel, name: 'WhatsApp', source: 'whatsapp' },
+  // The documented message event names no conversation; the tests that pass
+  // one cover a payload that does.
+  ...(conversation ? { conversation: { id: conversation } } : {}),
 });
 const messages = () => db.prepare('SELECT * FROM whatsapp_messages ORDER BY id').all();
 const setSettings = (id, s) => { db.prepare('UPDATE companies SET settings = ? WHERE id = ?').run(JSON.stringify(s), id); require('../companies').invalidateCache(); };
@@ -227,39 +230,97 @@ test('a picture or a voice note is left to the team', async () => {
   assert.equal(messages().at(-1).kind, 'media');
 });
 
-test('once an employee takes the conversation over, the assistant stays quiet until it is handed back', async () => {
+const handover = (type, phone, conversation = 1) => ({
+  event_type: type, event_id: `h-${++eventSeq}`, conversation: { id: conversation }, contact: { id: 2, phone }, channel: { id: 6 },
+  ...(type.endsWith('stopped') ? { stopped_by: { id: 12, name: 'سارة' } } : { started_by: { id: 13, name: 'نورة' } }),
+});
+
+test('while an employee has the conversation, its messages are left to them until it is handed back', async () => {
   const phone = '966509999999';
-  const handover = (type) => ({
-    event_type: type, event_id: `h-${++eventSeq}`, conversation: { id: 1 }, contact: { id: 2, phone }, channel: { id: 6 },
-    ...(type.endsWith('stopped') ? { stopped_by: { id: 12, name: 'سارة' } } : { started_by: { id: 13, name: 'نورة' } }),
-  });
-  const stopped = await wa.handleEvent(handover('message_integration.stopped'), deps());
+  const stopped = await wa.handleEvent(handover('message_integration.stopped', phone), deps());
   assert.deepEqual(stopped, { paused: true, by: 'سارة' });
-  const quiet = await wa.handleEvent(incoming('أبي موظف', { phone }), deps());
+  // A message LoopChat names as the same conversation: the employee is in it.
+  const quiet = await wa.handleEvent(incoming('أبي موظف', { phone, conversation: 1 }), deps());
   assert.deepEqual(quiet, { skipped: 'taken over by staff', by: 'سارة' });
   assert.equal(sent.length, 0);
   // The page names who paused it, and how it ends.
-  assert.match(wa.describeOutcome(stopped).text, /أوقف موظف \(سارة\).*يعيد الموظف تشغيل التكامل/);
-  assert.match(wa.describeOutcome(quiet).text, /متوقفة عند موظف \(سارة\).*أوقف التكامل لها ثم شغّله/);
-  const started = await wa.handleEvent(handover('message_integration.started'), deps());
+  assert.match(wa.describeOutcome(stopped).text, /أوقف موظف \(سارة\).*أول رسالة جديدة بعد إغلاق المحادثة/);
+  assert.match(wa.describeOutcome(quiet).text, /المحادثة نفسها ما زالت عند موظف \(سارة\)/);
+  const started = await wa.handleEvent(handover('message_integration.started', phone), deps());
   assert.deepEqual(started, { paused: false, by: 'نورة' });
   assert.match(wa.describeOutcome(started).text, /أعاد موظف \(نورة\)/);
-  assert.deepEqual(await wa.handleEvent(incoming('رجعت', { phone }), deps()), { sent: true });
+  assert.deepEqual(await wa.handleEvent(incoming('رجعت', { phone, conversation: 1 }), deps()), { sent: true });
+});
+
+// LoopChat's request of 2026-10-23: stopped, then the conversation closed in
+// LoopChat, and the customer's next message went unanswered for good.
+test('a new message after the conversation was closed brings the assistant back, and is answered', async () => {
+  const phone = '966509999998';
+  await wa.handleEvent(handover('message_integration.stopped', phone, 41), deps());
+  // A new conversation...
+  const r = await wa.handleEvent(incoming('السلام عليكم، عندي سؤال', { phone, conversation: 42 }), deps());
+  assert.deepEqual(r, { sent: true, resumed: true });
+  assert.match(wa.describeOutcome(r).text, /وصلت رسالة جديدة بعد إيقافها، فعاد المساعد إليها/);
+  const t = db.prepare('SELECT * FROM whatsapp_threads WHERE channel_id = 6 AND contact_phone = ?').get(phone);
+  assert.equal(Number(t.ai_paused), 0);
+  assert.equal(t.conversation_id, '42');
+  // ...and the conversation goes on with the assistant.
+  assert.deepEqual(await wa.handleEvent(incoming('وكم السعر؟', { phone, conversation: 42 }), deps()), { sent: true });
+});
+
+test('a message that names no conversation, as LoopChat documents it, brings the assistant back too', async () => {
+  const phone = '966509999997';
+  await wa.handleEvent(handover('message_integration.stopped', phone), deps());
+  assert.deepEqual(await wa.handleEvent(incoming('هلا', { phone }), deps()), { sent: true, resumed: true });
+});
+
+test('a message older than the pause, or one delivered again, does not end it', async () => {
+  const phone = '966509999996';
+  // Seen once before the employee stopped the assistant...
+  const early = incoming('سؤال قديم', { phone, id: 'evt-early' });
+  await wa.handleEvent(early, deps());
+  await wa.handleEvent(handover('message_integration.stopped', phone), deps());
+  const repliesBefore = replies.length;
+  // ...LoopChat sending it again changes nothing.
+  assert.deepEqual(await wa.handleEvent(early, deps()), { duplicate: true });
+  // A message written before the pause, delivered after it, does not either.
+  const late = await wa.handleEvent(incoming('رسالة متأخرة', { phone, at: Date.now() - 60 * 60 * 1000 }), deps());
+  assert.deepEqual(late, { skipped: 'taken over by staff', by: 'سارة', older: true });
+  assert.match(wa.describeOutcome(late).text, /وصلت متأخرة/);
+  assert.equal(replies.length, repliesBefore);
+  const t = db.prepare('SELECT ai_paused FROM whatsapp_threads WHERE channel_id = 6 AND contact_phone = ?').get(phone);
+  assert.equal(Number(t.ai_paused), 1);
+});
+
+test('a message time given in seconds is read as such, so it can still end a pause', async () => {
+  const phone = '966509999994';
+  await wa.handleEvent(handover('message_integration.stopped', phone), deps());
+  const r = await wa.handleEvent(incoming('هلا', { phone, at: Math.floor(Date.now() / 1000) + 5 }), deps());
+  assert.deepEqual(r, { sent: true, resumed: true });
+});
+
+test('a pause ended by a message is said even when that message itself is not answered', async () => {
+  const phone = '966509999995';
+  await wa.handleEvent(handover('message_integration.stopped', phone), deps());
+  const r = await wa.handleEvent(incoming('', { phone, type: 'image' }), deps());
+  assert.deepEqual(r, { skipped: 'not text', resumed: true });
+  assert.match(wa.describeOutcome(r).text, /ليست رسالة نصية.*وعادت المحادثة إلى المساعد/);
 });
 
 // An employee answering from LoopChat by hand: the assistant steps back in
 // that conversation.
-const outgoing = (text, phone) => ({
+const outgoing = (text, phone, conversation) => ({
   event_type: 'message.received', event_id: `o-${++eventSeq}`,
   contact: { id: 101, phone },
   message: { messageId: 1, traffic: 'outgoing', timestamp: Date.now(), message: { type: 'text', text }, user: { name: 'نورة' } },
   channel: { id: 6, name: 'WhatsApp', source: 'whatsapp' },
+  ...(conversation ? { conversation: { id: conversation } } : {}),
 });
 
 test('an employee writing from LoopChat silences the assistant in that conversation', async () => {
   const phone = '966502222222';
-  assert.deepEqual(await wa.handleEvent(outgoing('أهلاً، معك نورة من المبيعات', phone), deps()), { paused: true, by: 'نورة' });
-  assert.deepEqual(await wa.handleEvent(incoming('هلا نورة', { phone }), deps()), { skipped: 'taken over by staff', by: 'نورة' });
+  assert.deepEqual(await wa.handleEvent(outgoing('أهلاً، معك نورة من المبيعات', phone, 9), deps()), { paused: true, by: 'نورة' });
+  assert.deepEqual(await wa.handleEvent(incoming('هلا نورة', { phone, conversation: 9 }), deps()), { skipped: 'taken over by staff', by: 'نورة' });
   assert.equal(sent.length, 0);
 });
 

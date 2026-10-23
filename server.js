@@ -1052,6 +1052,9 @@ function noteLoopchatEvent(evt, result) {
     channelName: channel.name ? String(channel.name).slice(0, 60) : null,
     // Which conversation: a pause is per customer, not per number.
     contact: whatsapp.waDigits(evt?.contact?.phone) ? `+${whatsapp.waDigits(evt.contact.phone)}` : null,
+    // LoopChat's conversation, when the event names one: what tells a closed
+    // conversation from the one an employee is still in.
+    conversation: whatsapp.conversationOf(evt),
     ...whatsapp.describeOutcome(result),
   });
   loopchatRecent.length = Math.min(loopchatRecent.length, 20);

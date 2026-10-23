@@ -128,9 +128,39 @@ async function handleStaffMessage(evt, deps) {
   const staffName = String(evt.message?.user?.name || evt.message?.sender_name || evt.sender?.name || 'موظف').slice(0, 80);
   await deps.sql.upsertWhatsappThread.run({
     company_id: company.id, channel_id: channelId, contact_phone: phone,
-    ai_paused: 1, paused_by: staffName,
+    ai_paused: 1, paused_by: staffName, conversation_id: conversationOf(evt),
   });
   return { paused: true, by: staffName };
+}
+
+// LoopChat's conversation an event belongs to, where it says: the handover
+// events carry conversation.id; whether a message does is not documented.
+function conversationOf(evt) {
+  const id = evt?.conversation?.id ?? evt?.message?.conversation_id ?? evt?.conversation_id ?? null;
+  return id == null || id === '' ? null : String(id).slice(0, 64);
+}
+
+// A pause ends when a NEW message reaches us. LoopChat asked for this
+// (2026-10-23): an employee stops the assistant in a conversation, closes the
+// conversation, and the customer's next message must be answered again --
+// LoopChat sends no "started" for that. Its docs say a stopped conversation
+// is taken off the integration, so a message it does deliver is one the
+// integration has back. Two things keep the pause all the same:
+//   - the message names the very conversation that was stopped (when both
+//     the pause and the message carry a conversation id): the employee is
+//     still in it;
+//   - the message is older than the pause: a late delivery, not a new one.
+// Returns why the pause holds, or null when it ends.
+function pauseStillHolds(thread, evt) {
+  const conv = conversationOf(evt);
+  if (conv && thread.conversation_id && conv === String(thread.conversation_id)) return 'same conversation';
+  // Milliseconds as documented; a value in seconds is read as such, or every
+  // message would look older than the pause and none would end it.
+  let sentAt = Number(evt?.message?.timestamp);
+  if (sentAt > 0 && sentAt < 1e12) sentAt *= 1000;
+  const pausedAt = Date.parse(`${String(thread.updated_at || '').replace(' ', 'T')}Z`);
+  if (Number.isFinite(sentAt) && sentAt > 0 && Number.isFinite(pausedAt) && sentAt < pausedAt) return 'older';
+  return null;
 }
 
 function describeMedia(msg) {
@@ -157,17 +187,8 @@ async function handleMessage(evt, deps) {
   const isText = msg.type === 'text' && String(msg.text || '').trim();
   const text = isText ? String(msg.text).trim().slice(0, 4000) : '';
 
-  const thread = await sql.getWhatsappThread.get(channelId, phone);
-  if (thread && Number(thread.ai_paused)) {
-    await record(deps, {
-      company_id: company.id, channel_id: channelId, contact_phone: phone, direction: 'in',
-      kind: isText ? 'text' : 'media', body: isText ? text : describeMedia(msg), status: 'received',
-      event_id: evt.event_id ? String(evt.event_id).slice(0, 100) : null,
-      provider_message_id: evt.message?.messageId != null ? String(evt.message.messageId) : null,
-    });
-    return { skipped: 'taken over by staff', by: thread.paused_by || null };
-  }
-
+  // Recorded first: a redelivered event is a duplicate before it can end a
+  // pause or be answered twice.
   const inserted = await record(deps, {
     company_id: company.id, channel_id: channelId, contact_phone: phone, direction: 'in',
     kind: isText ? 'text' : 'media', body: isText ? text : describeMedia(msg), status: 'received',
@@ -176,12 +197,26 @@ async function handleMessage(evt, deps) {
   });
   if (!inserted.changes) return { duplicate: true };
 
-  const cfg = settingsOf(company);
-  if (!cfg.autoReply) return { skipped: 'auto-reply off' };
-  if (!phone) return { skipped: 'no phone' };
-  if (!isText) return { skipped: 'not text' };
+  const thread = phone ? await sql.getWhatsappThread.get(channelId, phone) : null;
+  let resumed = false;
+  if (thread && Number(thread.ai_paused)) {
+    const holds = pauseStillHolds(thread, evt);
+    if (holds) return { skipped: 'taken over by staff', by: thread.paused_by || null, ...(holds === 'older' ? { older: true } : {}) };
+    await sql.upsertWhatsappThread.run({
+      company_id: company.id, channel_id: channelId, contact_phone: phone,
+      ai_paused: 0, paused_by: null, conversation_id: conversationOf(evt),
+    });
+    logger.info('whatsapp: pause lifted by a new message', { companyId: company.id, channelId });
+    resumed = true;
+  }
 
-  return await serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps));
+  const cfg = settingsOf(company);
+  const done = (r) => (resumed ? { ...r, resumed } : r);
+  if (!cfg.autoReply) return done({ skipped: 'auto-reply off' });
+  if (!phone) return done({ skipped: 'no phone' });
+  if (!isText) return done({ skipped: 'not text' });
+
+  return done(await serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps)));
 }
 
 async function reply({ company, channelId, phone, text, contact }, deps) {
@@ -251,7 +286,7 @@ async function handleHandover(evt, deps) {
   
   await deps.sql.upsertWhatsappThread.run({
     company_id: company.id, channel_id: channelId, contact_phone: phone,
-    ai_paused: paused ? 1 : 0, paused_by: paused ? by : null,
+    ai_paused: paused ? 1 : 0, paused_by: paused ? by : null, conversation_id: conversationOf(evt),
   });
   return { paused, by };
 }
@@ -327,17 +362,23 @@ const SKIPPED = {
   'own reply'          : 'رد المساعد نفسه عاد من LoopChat، فلا يُعدّ رد موظف',
 };
 function describeOutcome(r) {
+  const d = outcomeText(r);
+  // A pause a new message ended is worth saying whatever came of the message.
+  if (r?.resumed && !r.sent) d.text += '، وعادت المحادثة إلى المساعد بعد إيقافها';
+  return d;
+}
+function outcomeText(r) {
   if (!r) return { ok: false, text: 'تعذّرت معالجة الحدث، والتفاصيل في سجل الخادم' };
   if (r.sent) {
-    return { ok: true, text: `ردّ المساعد ووصل الرد إلى LoopChat${r.resumed ? '. كانت المحادثة موقوفة عندنا، وLoopChat يقول إن التكامل يعمل لها، فعاد المساعد إليها' : ''}` };
+    return { ok: true, text: `ردّ المساعد ووصل الرد إلى LoopChat${r.resumed ? '. كانت المحادثة موقوفة، ووصلت رسالة جديدة بعد إيقافها، فعاد المساعد إليها' : ''}` };
   }
   if (r.duplicate) return { ok: true, text: 'وصلت من قبل، فلم تُعالج مرة ثانية' };
   const by = r.by ? ` (${r.by})` : '';
-  if (r.paused === true) return { ok: true, text: `أوقف موظف${by} المساعد في هذه المحادثة من LoopChat، ولا يرد فيها حتى يعيد الموظف تشغيل التكامل لها من LoopChat` };
+  if (r.paused === true) return { ok: true, text: `أوقف موظف${by} المساعد في هذه المحادثة من LoopChat. يعود إليها مع أول رسالة جديدة بعد إغلاق المحادثة في LoopChat، أو حين يُعاد تشغيل التكامل لها` };
   if (r.paused === false) return { ok: true, text: `أعاد موظف${by} المحادثة إلى المساعد` };
   if (r.skipped === 'taken over by staff') {
-    const confirmed = r.live === false ? '، وLoopChat يؤكد أن التكامل متوقف لها' : '';
-    return { ok: false, text: `المحادثة متوقفة عند موظف${by} في LoopChat${confirmed}، فلم يرد المساعد. لإعادتها إليه: افتح المحادثة في LoopChat، وأوقف التكامل لها ثم شغّله (أو شغّله إن كان موقوفاً)` };
+    if (r.older) return { ok: false, text: 'رسالة أقدم من إيقاف المساعد وصلت متأخرة، فلم يُرد عليها' };
+    return { ok: false, text: `المحادثة نفسها ما زالت عند موظف${by} في LoopChat، فلم يرد المساعد. يعود إليها حين تُغلق في LoopChat وتصل رسالة جديدة، أو حين يُعاد تشغيل التكامل لها` };
   }
   if (r.failed === 'no scenario') return { ok: false, text: NO_SCENARIO };
   if (r.failed) return { ok: false, text: r.failed === 'reply' ? 'تعذّر توليد الرد' : `لم يُرسل الرد، وسبب LoopChat: ${r.failed}` };
@@ -380,7 +421,7 @@ function validateSettings(body) {
 }
 
 module.exports = {
-  handleEvent, afterCall, validateSettings, settingsOf, companyForChannel, describeOutcome,
+  handleEvent, afterCall, validateSettings, settingsOf, companyForChannel, describeOutcome, conversationOf,
   whatsappNumber, waDigits, buildVariables,
   VARIABLE_SOURCES, TRIGGERS, FOLLOWUP_MAX_AGE_MS,
 };

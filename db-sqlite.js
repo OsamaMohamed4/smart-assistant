@@ -887,6 +887,15 @@ if (!hasColumn('companies', 'estate_token')) {
   `);
 }
 
+// Migration 48: the LoopChat conversation a WhatsApp pause belongs to, so a
+// new message in that same conversation keeps the assistant out while one in
+// a new conversation (the old one closed) brings it back. Postgres:
+// db-pg-schema.js + lib/migrations-pg.js.
+if (!hasColumn('whatsapp_threads', 'conversation_id')) {
+  runMigration(48, 'whatsapp_threads_add_conversation',
+    'ALTER TABLE whatsapp_threads ADD COLUMN conversation_id TEXT');
+}
+
 // ─── Tenant-safety: one company per phone number ──────────────────
 // A DID and an imported provider number each identify exactly ONE tenant.
 // Inbound calls are attributed by those values (services/voice resolves a call
@@ -1805,11 +1814,12 @@ const sql = {
   `),
   getWhatsappThread: db.prepare('SELECT * FROM whatsapp_threads WHERE channel_id = ? AND contact_phone = ?'),
   upsertWhatsappThread: db.prepare(`
-    INSERT INTO whatsapp_threads (company_id, channel_id, contact_phone, ai_paused, paused_by, updated_at)
-    VALUES (@company_id, @channel_id, @contact_phone, @ai_paused, @paused_by, datetime('now'))
+    INSERT INTO whatsapp_threads (company_id, channel_id, contact_phone, ai_paused, paused_by, conversation_id, updated_at)
+    VALUES (@company_id, @channel_id, @contact_phone, @ai_paused, @paused_by, @conversation_id, datetime('now'))
     ON CONFLICT (channel_id, contact_phone) DO UPDATE SET
       company_id = excluded.company_id, ai_paused = excluded.ai_paused,
-      paused_by = excluded.paused_by, updated_at = excluded.updated_at
+      paused_by = excluded.paused_by, conversation_id = excluded.conversation_id,
+      updated_at = excluded.updated_at
   `),
   whatsappUsageByCompanyInRange: db.prepare(`
     SELECT company_id,

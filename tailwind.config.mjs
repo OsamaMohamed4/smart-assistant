@@ -25,26 +25,25 @@ export default {
           900 : '#1c1d21',
           950 : '#0e0f12',
         },
-        // MASAR. #765C36 is the ONE official colour — every other step is a
-        // derived tint, and 100/200/300/500/700 are the exact values the
-        // public site already uses so the two never drift apart.
-        //
-        // 300 (#C5A677) is the only bronze that stays legible on a dark
-        // ground; on the white chrome the official 600 is used as-is.
+        // MASAR new identity. Official palette: #8439FF (violet), #0017E0 (blue),
+        // #FF93EE (pink), #101010 (black), #FFFFFF. 600 is the official violet;
+        // every other step is a derived tint or shade.
         brand: {
-          50  : '#FAF6F0',
-          100 : '#F1E8DA',
-          200 : '#DECCAF',
-          300 : '#C5A677',
-          400 : '#AE8C5C',
-          500 : '#9B7946',
-          600 : '#765C36',                            // official
-          700 : '#5B4729',
-          800 : '#43351E',
-          900 : '#2B2213',
+          50  : '#F8F4FF',
+          100 : '#F1EAFF',
+          200 : '#DCCBFF',
+          300 : '#C3A2FF',
+          400 : '#A878FF',
+          500 : '#9552FF',
+          600 : '#8439FF',                            // official
+          700 : '#6A2BD6',
+          800 : '#4F1FA3',
+          900 : '#331470',
         },
         accent: {
-          violet  : '#8b5cf6',
+          violet  : '#8439FF',
+          pink    : '#FF93EE',
+          blue    : '#0017E0',
           emerald : '#10b981',
           amber   : '#f59e0b',
           rose    : '#f43f5e',
@@ -56,7 +55,7 @@ export default {
         'card'    : '0 1px 2px rgba(16,18,27,0.04), 0 4px 12px rgba(16,18,27,0.04)',
         'pop'     : '0 4px 6px rgba(16,18,27,0.04), 0 20px 25px -5px rgba(16,18,27,0.10)',
         'inner-1' : 'inset 0 1px 0 rgba(255,255,255,0.04)',
-        'glow'    : '0 0 0 4px rgba(118,92,54,0.14)',
+        'glow'    : '0 0 0 4px rgba(132,57,255,0.14)',
       },
       borderRadius: {
         'xl'   : '14px',

@@ -255,6 +255,9 @@ export const api = {
     return res.json();
   },
   deleteDocument    : (companyId, docId) => request(`/api/companies/${companyId}/documents/${docId}`, { method: 'DELETE' }),
+  // Read the company's own website into its knowledge base (and how far the read has got).
+  startSiteImport   : (companyId, url) => request(`/api/companies/${companyId}/documents/from-site`, { method: 'POST', body: JSON.stringify({ url }) }),
+  siteImportStatus  : (companyId) => request(`/api/companies/${companyId}/documents/from-site`),
   ragTest           : (companyId, query) => request(`/api/companies/${companyId}/rag-test`, {
     method: 'POST', body: JSON.stringify({ query }),
   }),

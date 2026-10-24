@@ -80,7 +80,7 @@ function WhatsappUsage({ data, rows }) {
               </div>
             ))}
           </div>
-          {rows.length > 1 && (
+          {rows.length > 0 && (
             <div className="overflow-x-auto mt-4">
               <table className="w-full text-[13px] whitespace-nowrap">
                 <thead>
@@ -157,8 +157,8 @@ export function UsagePage({ pinnedCompanyId }) {
           <SummaryCard icon={Phone} label="الإجمالي" accent="brand" calls={all.calls} seconds={all.seconds} />
         </div>
 
-        {/* One company needs no table: the cards above are its whole report. */}
-        {rows.length > 1 && (
+        {/* The same table the admin sees, with only the viewer's own companies in it. */}
+        {rows.length > 0 && (
           <Card className="overflow-x-auto">
             <table className="w-full text-[13px] whitespace-nowrap">
               <thead>

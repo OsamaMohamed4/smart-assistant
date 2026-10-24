@@ -28,6 +28,9 @@ const NAV_GROUPS = [
       // Which WhatsApp number belongs to which company, and what the
       // assistant does there. Superadmin-only, like the phone numbers.
       { id: 'whatsapp',   label: 'واتساب',      icon: MessageCircle, hint: 'رسائل',          roles: ['superadmin'] },
+      // The company's own side of WhatsApp: what the assistant says, knows and
+      // when it answers. The connection itself stays with the whatsapp page above.
+      { id: 'wabehavior', label: 'رد واتساب',   icon: MessageCircle, hint: 'تحكم',           roles: ['client'] },
     ],
   },
   {

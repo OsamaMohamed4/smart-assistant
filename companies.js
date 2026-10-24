@@ -36,21 +36,34 @@ class NoActiveScenarioError extends Error {
 // `inbound`: the customer started the conversation (a WhatsApp message), so
 // the scenario's instructions for inbound calls apply when it has them — the
 // same ones its inbound agent answers the phone with.
-async function buildSystemPromptWithRAG(company, userQuery, vars, { inbound = false } = {}) {
+//
+// `channel: 'whatsapp'`: the company may have written instructions and extra
+// knowledge for WhatsApp alone (settings.whatsappPrompt / whatsappKnowledge).
+// Where it has, they are used here and ONLY here -- the voice agents are built
+// by a different path and never see them. Where it has not, nothing changes.
+async function buildSystemPromptWithRAG(company, userQuery, vars, { inbound = false, channel = null } = {}) {
+  const cs = company?.settings || {};
+  const waPrompt = channel === 'whatsapp' ? String(cs.whatsappPrompt || '').trim() : '';
+  const waKnowledge = channel === 'whatsapp' ? String(cs.whatsappKnowledge || '').trim() : '';
   const scenario = await sql.getActiveScenarioForCompany.get(company.id);
-  if (!scenario || !scenario.instruction_prompt) {
+  if (!waPrompt && (!scenario || !scenario.instruction_prompt)) {
     throw new NoActiveScenarioError(company.id);
   }
-  const instructions = (inbound && String(scenario.instruction_prompt_inbound || '').trim())
-    ? scenario.instruction_prompt_inbound
-    : scenario.instruction_prompt;
+  const instructions = waPrompt
+    ? waPrompt
+    : (inbound && String(scenario.instruction_prompt_inbound || '').trim())
+      ? scenario.instruction_prompt_inbound
+      : scenario.instruction_prompt;
   // Runtime vars first (per-call values like agent_name from selected voice),
   // then globals as fallback (date/time, company_name, and agent_name from
   // the company's voice if the caller didn't supply one). Scenario is the SOLE source of truth — no
   // MASTER prefix — so the text channel matches the voice channel.
   let filled = fillRuntimeVars(instructions, vars);
   filled = fillGlobals(filled, company);
-  const base = filled;
+  let base = filled;
+  if (waKnowledge) {
+    base += `\n\n---\n\n## معلومات الشركة لواتساب\n\nاستخدم المعلومات التالية كمصدر حقائق رسمي. لا تختلق أسعاراً أو معلومات غير موجودة هنا:\n\n${foldPresentationForms(waKnowledge)}`;
+  }
 
   if (!userQuery) return base;
   const chunkCount = (await sql.countCompanyChunks.get(company.id))?.n || 0;

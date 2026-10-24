@@ -7,6 +7,7 @@ import { Label } from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { api } from '../lib/api';
 import { cn, fmtDate } from '../lib/utils';
+import { WhatsappBehavior } from '../components/companies/WhatsappBehavior';
 
 // WhatsApp per company, through the client's LoopChat account. Superadmin
 // only: the channel is what ties incoming messages to a company, the same way
@@ -292,6 +293,9 @@ export function WhatsappPage() {
           </Card>
         )}
 
+        {/* ─── What the assistant says, knows, and when it answers ─── */}
+        {company && <WhatsappBehavior key={companyId} companyId={companyId} />}
+
         {/* ─── Recent messages ─── */}
         {company && (
           <Card className="overflow-x-auto">
@@ -436,4 +440,3 @@ function Notice({ tone, icon: Icon, children }) {
     </div>
   );
 }
-

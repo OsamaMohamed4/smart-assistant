@@ -3,6 +3,7 @@ const loopchat = require('./loopchat');
 const requestTool = require('./requests');
 const { connectedCall } = require('../../lib/call-status');
 const { REQUEST_TYPES } = require('../../lib/request-types');
+const schedule = require('./schedule');
 
 const FOLLOWUP_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
@@ -39,6 +40,8 @@ function settingsOf(company) {
     channelId: channelIdOf(s.whatsappChannelId),
     autoReply: s.whatsappAutoReply === true,
     followup : s.whatsappFollowup && typeof s.whatsappFollowup === 'object' ? s.whatsappFollowup : null,
+    // Reply hours. null = never set = always on, as before.
+    schedule : schedule.scheduleOf(s.whatsappSchedule),
   };
 }
 
@@ -216,8 +219,22 @@ async function handleMessage(evt, deps) {
   if (!cfg.autoReply) return done({ skipped: 'auto-reply off' });
   if (!phone) return done({ skipped: 'no phone' });
   if (!isText) return done({ skipped: 'not text' });
+  if (!schedule.isOpenNow(cfg.schedule)) {
+    return done(await outsideHours({ company, channelId, phone }, deps));
+  }
 
   return done(await serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps)));
+}
+
+// A message that arrives while the company's reply hours say the assistant is
+// off. The assistant stays silent and the company's staff answer in LoopChat;
+// the message is only noted in the log so the screen shows why nothing went out.
+async function outsideHours({ company, channelId, phone }, deps) {
+  await record(deps, {
+    company_id: company.id, channel_id: channelId, contact_phone: phone, direction: 'out', kind: 'text',
+    status: 'skipped', detail: 'خارج ساعات الرد — يرد الموظفون',
+  });
+  return { skipped: 'outside hours' };
 }
 
 async function reply({ company, channelId, phone, text, contact }, deps) {
@@ -374,6 +391,7 @@ const SKIPPED = {
   'daily cap'          : 'بلغت الشركة الحد اليومي للرسائل',
   'empty reply'        : 'رد فارغ من المساعد',
   'own reply'          : 'رد المساعد نفسه عاد من LoopChat، فلا يُعدّ رد موظف',
+  'outside hours'      : 'خارج ساعات الرد المحددة، فيرد الموظفون',
 };
 function describeOutcome(r) {
   const d = outcomeText(r);

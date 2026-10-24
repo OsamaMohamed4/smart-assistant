@@ -29,7 +29,9 @@
 //     request tool's enum, rebuilt on «نشر»), so a name maps to its code
 //     exactly; nothing is guessed from free text.
 //   - After the call ends: the customer's number is attached from the call
-//     record, which exists only then.
+//     record, which exists only then. A request made on WhatsApp carries the
+//     WhatsApp number instead, and goes as soon as the customer confirms it
+//     (services/whatsapp/requests.js).
 //
 // Nothing is sent until a superadmin has set the address, the key and the
 // platform value and switched it on. Every attempt, and why one did not go,
@@ -110,13 +112,17 @@ function projectCode(value, projects) {
   return hit ? hit.code : null;
 }
 
-// Estate's own example writes a Saudi mobile the local way: 0551234567.
+// Estate's own example writes a Saudi mobile the local way: 0551234567. A
+// Saudi landline goes the same way (0115009384); it used to fall through to
+// the international form and left as "+0115009384".
 function estatePhone(raw) {
   let d = String(raw || '').replace(/\D/g, '');
   if (d.startsWith('00')) d = d.slice(2);
-  if (/^9665\d{8}$/.test(d)) return `0${d.slice(3)}`;
-  if (/^05\d{8}$/.test(d)) return d;
+  if (/^966[1-9]\d{8}$/.test(d)) return `0${d.slice(3)}`;
+  if (/^0[1-9]\d{8}$/.test(d)) return d;
   if (/^5\d{8}$/.test(d)) return `0${d}`;
+  // A local number of any other length is not one this can place.
+  if (d.startsWith('0')) return null;
   return d.length >= 8 && d.length <= 15 ? `+${d}` : null;
 }
 
@@ -124,10 +130,12 @@ function parseFields(request) {
   try { return request.fields ? JSON.parse(request.fields) || {} : {}; } catch { return {}; }
 }
 
-// Every answer the customer gave, one per line, in the client's own labels.
+// Every answer the customer gave, one per line, in the client's own labels,
+// under where it was made: a call, or a WhatsApp conversation.
 function buildNote(request, fields) {
   const type = REQUEST_TYPES[request.request_type];
-  const lines = [`${type?.labelAr || request.request_type} من مكالمة مع المساعد الذكي`];
+  const where = request.channel === 'whatsapp' ? 'محادثة واتساب' : 'مكالمة';
+  const lines = [`${type?.labelAr || request.request_type} من ${where} مع المساعد الذكي`];
   for (const k of type?.fields || Object.keys(fields)) {
     if (k === 'customer_name' || !fields[k]) continue;
     lines.push(`${FIELDS[k]?.labelAr || k}: ${fields[k]}`);

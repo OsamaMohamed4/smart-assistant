@@ -304,9 +304,11 @@ CREATE TABLE IF NOT EXISTS company_tools (
 -- TABLE really does create every column, which is not true of a column added
 -- later by a migration.
 --
--- The customer's number is NOT stored here. It belongs to the call, which the
--- provider fills from the line itself, and is joined through conversation_id.
--- One encrypted copy of a number is better than two that can disagree.
+-- A call's request does NOT store the customer's number. It belongs to the
+-- call, which the provider fills from the line itself, and is joined through
+-- conversation_id. One encrypted copy of a number is better than two that can
+-- disagree. A request filed on WhatsApp has no call: it keeps the WhatsApp
+-- number in contact_phone (encrypted the same way), and channel says so.
 --
 -- (company_id, conversation_id, request_type) is unique so a provider retry,
 -- or the model correcting itself mid-call, updates the same request instead of
@@ -325,6 +327,9 @@ CREATE TABLE IF NOT EXISTS customer_requests (
   estate_status   TEXT,
   estate_detail   TEXT,
   estate_at       TEXT,
+  -- NULL: filed on a call. 'whatsapp': filed in a WhatsApp conversation.
+  channel         TEXT,
+  contact_phone   TEXT,
   created_at      TEXT NOT NULL DEFAULT ${NOW_TEXT},
   updated_at      TEXT NOT NULL DEFAULT ${NOW_TEXT}
 );

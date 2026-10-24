@@ -325,10 +325,10 @@ const sql = {
       WHERE company_id = $1 AND conversation_id = $2 AND request_type = $3`,
   ),
   insertCustomerRequest: stmt(
-    `INSERT INTO customer_requests (company_id, conversation_id, request_type, customer_name, fields)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO customer_requests (company_id, conversation_id, request_type, customer_name, fields, channel, contact_phone)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id`,
-    ['company_id', 'conversation_id', 'request_type', 'customer_name', 'fields'],
+    ['company_id', 'conversation_id', 'request_type', 'customer_name', 'fields', 'channel', 'contact_phone'],
   ),
   updateCustomerRequestFields: stmt(
     `UPDATE customer_requests
@@ -339,8 +339,8 @@ const sql = {
   listCustomerRequests: stmt(
     `SELECT r.id, r.conversation_id, r.request_type, r.status, r.customer_name,
             r.fields, r.staff_notes, r.created_at, r.updated_at,
-            r.estate_status, r.estate_detail, r.estate_at,
-            c.caller_number
+            r.estate_status, r.estate_detail, r.estate_at, r.channel,
+            COALESCE(r.contact_phone, c.caller_number) AS caller_number
        FROM customer_requests r
        LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
       WHERE r.company_id = $1
@@ -358,13 +358,15 @@ const sql = {
   ),
   // Estate -- see db-sqlite.js.
   listRequestsForEstate: stmt(
-    `SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, c.caller_number
+    `SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, r.channel,
+            COALESCE(r.contact_phone, c.caller_number) AS caller_number
        FROM customer_requests r
        LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
       WHERE r.company_id = $1 AND r.conversation_id = $2 ORDER BY r.id`,
   ),
   getRequestForEstate: stmt(
-    `SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, c.caller_number
+    `SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, r.channel,
+            COALESCE(r.contact_phone, c.caller_number) AS caller_number
        FROM customer_requests r
        LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
       WHERE r.id = $1 AND r.company_id = $2`,

@@ -1,5 +1,6 @@
 // WhatsApp for a company, through the client's provider (LoopChat).
 const loopchat = require('./loopchat');
+const requestTool = require('./requests');
 const { connectedCall } = require('../../lib/call-status');
 const { REQUEST_TYPES } = require('../../lib/request-types');
 
@@ -234,11 +235,19 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
   const sessionId = `wa-${phone}`;
   const t0 = Date.now();
   let answer = '';
+  // Requests the customer confirmed in this message (services/whatsapp/requests.js).
+  const filed = new Set();
   try {
     const history = await deps.loadSessionHistory(company.id, sessionId);
     const vars = { customer_phone: `+${phone}` };
     if (contact?.name) vars.customer_name = String(contact.name).slice(0, 80);
-    answer = String((await deps.askReply(company, text, history, vars)).reply || '').trim();
+    const tools = await requestTool.toolsFor(company, deps);
+    const runTool = async (name, args) => {
+      const r = await requestTool.runTool(name, args, { company, channelId, phone }, deps);
+      if (r.requestId) filed.add(r.requestId);
+      return r.result;
+    };
+    answer = String((await deps.askReply(company, text, history, vars, tools ? { tools, runTool } : {})).reply || '').trim();
   } catch (e) {
     logger.error('whatsapp: reply failed', { err: e.message, companyId: company.id });
     const noScenario = e.code === 'NO_ACTIVE_SCENARIO';
@@ -262,7 +271,12 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
       assistant_reply: sent.ok ? answer : '', channel: 'whatsapp', latency_ms: Date.now() - t0, user_id: null,
     });
   } catch (e) { logger.error('whatsapp: chat insert failed', { err: e.message }); }
-  return sent.ok ? { sent: true } : { failed: reason };
+
+  // Filed whether or not the reply reached the customer: they confirmed it.
+  const estate = [];
+  for (const id of filed) estate.push(await requestTool.toEstate(company, id, deps));
+  const extra = filed.size ? { requests: [...filed], estate } : {};
+  return sent.ok ? { sent: true, ...extra } : { failed: reason, ...extra };
 }
 
 function refusal(sent, contact) {
@@ -365,7 +379,16 @@ function describeOutcome(r) {
   const d = outcomeText(r);
   // A pause a new message ended is worth saying whatever came of the message.
   if (r?.resumed && !r.sent) d.text += '، وعادت المحادثة إلى المساعد بعد إيقافها';
+  if (r?.requests?.length) d.text += `. ${requestNote(r.estate)}`;
   return d;
+}
+// A request the customer confirmed in the message, and what Estate made of it.
+function requestNote(results) {
+  const e = (results || []).find(Boolean);
+  if (e?.sent) return 'وسجّل العميل طلباً أُرسل إلى Estate';
+  if (e?.failed) return `وسجّل العميل طلباً لم يقبله Estate: ${e.failed}`;
+  if (e?.skipped && e.skipped !== 'not configured') return `وسجّل العميل طلباً لم يُرسل إلى Estate (${e.skipped})`;
+  return 'وسجّل العميل طلباً، تجده في صفحة «الطلبات»';
 }
 function outcomeText(r) {
   if (!r) return { ok: false, text: 'تعذّرت معالجة الحدث، والتفاصيل في سجل الخادم' };

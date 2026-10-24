@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Inbox, Phone, ChevronDown, ChevronUp } from 'lucide-react';
+import { Inbox, Phone, MessageCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Card } from '../components/ui/Card';
@@ -8,13 +8,14 @@ import { useToast } from '../components/ui/Toast';
 import { cn, relTime } from '../lib/utils';
 import { api } from '../lib/api';
 
-// The requests the agent filed during calls, for the sales team to work.
+// The requests the agent filed during calls and WhatsApp conversations, for
+// the sales team to work.
 //
 // A request arrives as "جديد" and only a person moves it on — the client's
 // requirements sheet (question 37) asks for changes to be stored for staff
-// review rather than applied. The phone number comes from the call itself,
-// never from the model, so an inbound call's number appears once that call's
-// record has landed; a browser test never has one.
+// review rather than applied. The phone number comes from the call itself (or
+// the WhatsApp number), never from the model, so an inbound call's number
+// appears once that call's record has landed; a browser test never has one.
 
 const STATUS_TONE = {
   new      : 'bg-brand-100 text-brand-800',
@@ -57,11 +58,17 @@ function RequestRow({ r, statuses, onUpdate, busy, canSendToEstate, onSendToEsta
                 {r.customerName || 'بدون اسم'}
               </span>
               <span className="text-[11px] px-2 py-0.5 rounded-full bg-ink-100 text-ink-600">{r.typeLabel}</span>
+              {r.channel === 'whatsapp' && (
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">واتساب</span>
+              )}
             </div>
             <div className="mt-0.5 flex items-center gap-3 text-[12px] text-ink-500">
               {r.customerPhone ? (
                 <span className="inline-flex items-center gap-1" dir="ltr">
-                  <Phone className="w-3 h-3" strokeWidth={2} />{r.customerPhone}
+                  {r.channel === 'whatsapp'
+                    ? <MessageCircle className="w-3 h-3" strokeWidth={2} />
+                    : <Phone className="w-3 h-3" strokeWidth={2} />}
+                  {r.customerPhone}
                 </span>
               ) : (
                 <span className="text-ink-400">لا يوجد رقم بعد</span>
@@ -324,7 +331,7 @@ function EstateCard({ companyId, onChange }) {
         <span className="text-[14px] font-semibold text-ink-900">ربط Estate</span>
         <span className="flex items-center gap-2">
           <span className={cn('text-[12px] font-medium', s.enabled ? 'text-emerald-700' : 'text-ink-500')}>
-            {s.enabled ? 'يعمل: تُرسل طلبات الاهتمام بعد كل مكالمة' : 'غير مفعّل'}
+            {s.enabled ? 'يعمل: تُرسل طلبات الاهتمام من المكالمات وواتساب' : 'غير مفعّل'}
           </span>
           {open ? <ChevronUp className="w-4 h-4 text-ink-400" /> : <ChevronDown className="w-4 h-4 text-ink-400" />}
         </span>
@@ -333,7 +340,7 @@ function EstateCard({ companyId, onChange }) {
       {open && (
         <>
           <p className="text-[12px] text-ink-500 leading-relaxed">
-            يُرسل كل «طلب اهتمام» يسجّله الوكيل إلى نظام Estate الخاص بالشركة بعد انتهاء المكالمة: اسم العميل، ورقمه من المكالمة، والمشروع المهتم به برمزه، وملاحظة فيها كل إجابات العميل.
+            يُرسل كل «طلب اهتمام» يسجّله الوكيل إلى نظام Estate الخاص بالشركة: من المكالمة بعد انتهائها، ومن واتساب حين يؤكد العميل طلبه. ويُرسل معه اسم العميل، ورقمه من المكالمة أو من واتساب، والمشروع المهتم به برمزه، وملاحظة فيها كل إجابات العميل.
             مهير ووكن على Estate واحد: العنوان نفسه والمفتاح نفسه، ويُميَّز الطلب برمز المشروع.
             طلبات التأجير لا تُرسل، فلها في Estate واجهة أخرى. ويظهر بجانب كل طلب ما جرى له.
           </p>
@@ -392,7 +399,7 @@ function EstateCard({ companyId, onChange }) {
             <input type="checkbox" className="mt-1 w-4 h-4 accent-brand-600" checked={form.enabled}
               onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))} />
             <span>
-              <span className="block text-[13px] font-medium text-ink-900">إرسال طلبات الاهتمام إلى Estate بعد كل مكالمة</span>
+              <span className="block text-[13px] font-medium text-ink-900">إرسال طلبات الاهتمام إلى Estate من المكالمات وواتساب</span>
               <span className="block text-[12px] text-ink-500 mt-0.5">يحتاج العنوان والمفتاح.</span>
             </span>
           </label>

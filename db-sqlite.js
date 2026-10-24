@@ -896,6 +896,17 @@ if (!hasColumn('whatsapp_threads', 'conversation_id')) {
     'ALTER TABLE whatsapp_threads ADD COLUMN conversation_id TEXT');
 }
 
+// Migration 49: a request filed on WhatsApp has no call to take the customer's
+// number from, so it keeps its own -- the WhatsApp number, encrypted like
+// calls.caller_number -- and the channel it came on. NULL channel: a call.
+// Postgres: db-pg-schema.js + lib/migrations-pg.js.
+if (!hasColumn('customer_requests', 'channel')) {
+  runMigration(49, 'customer_requests_add_channel', `
+    ALTER TABLE customer_requests ADD COLUMN channel TEXT;
+    ALTER TABLE customer_requests ADD COLUMN contact_phone TEXT;
+  `);
+}
+
 // ─── Tenant-safety: one company per phone number ──────────────────
 // A DID and an imported provider number each identify exactly ONE tenant.
 // Inbound calls are attributed by those values (services/voice resolves a call
@@ -1163,8 +1174,8 @@ const sql = {
      WHERE company_id = ? AND conversation_id = ? AND request_type = ?
   `),
   insertCustomerRequest: db.prepare(`
-    INSERT INTO customer_requests (company_id, conversation_id, request_type, customer_name, fields)
-    VALUES (@company_id, @conversation_id, @request_type, @customer_name, @fields)
+    INSERT INTO customer_requests (company_id, conversation_id, request_type, customer_name, fields, channel, contact_phone)
+    VALUES (@company_id, @conversation_id, @request_type, @customer_name, @fields, @channel, @contact_phone)
   `),
   updateCustomerRequestFields: db.prepare(`
     UPDATE customer_requests
@@ -1174,8 +1185,8 @@ const sql = {
   listCustomerRequests: db.prepare(`
     SELECT r.id, r.conversation_id, r.request_type, r.status, r.customer_name,
            r.fields, r.staff_notes, r.created_at, r.updated_at,
-           r.estate_status, r.estate_detail, r.estate_at,
-           c.caller_number
+           r.estate_status, r.estate_detail, r.estate_at, r.channel,
+           COALESCE(r.contact_phone, c.caller_number) AS caller_number
       FROM customer_requests r
       LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
      WHERE r.company_id = ?
@@ -1191,15 +1202,18 @@ const sql = {
      WHERE id = @id AND company_id = @company_id
   `),
   // Sending requests on to the company's Estate (services/estate.js). The
-  // customer's number comes from the call, as on the requests page.
+  // customer's number comes from the call, as on the requests page -- or, for
+  // one filed on WhatsApp, from the WhatsApp number it keeps.
   listRequestsForEstate: db.prepare(`
-    SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, c.caller_number
+    SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, r.channel,
+           COALESCE(r.contact_phone, c.caller_number) AS caller_number
       FROM customer_requests r
       LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
      WHERE r.company_id = ? AND r.conversation_id = ? ORDER BY r.id
   `),
   getRequestForEstate: db.prepare(`
-    SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, c.caller_number
+    SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, r.channel,
+           COALESCE(r.contact_phone, c.caller_number) AS caller_number
       FROM customer_requests r
       LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
      WHERE r.id = ? AND r.company_id = ?

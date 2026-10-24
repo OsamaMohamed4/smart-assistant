@@ -40,7 +40,7 @@ const estate = require('./services/estate');
 const loopchat = require('./services/whatsapp/loopchat');
 const invoices = require('./services/invoices');
 const mailer = require('./lib/mailer');
-const { describeFeatures, setFeature } = require('./services/features/store');
+const { describeFeatures, setFeature, featureEnabled } = require('./services/features/store');
 const { startCampaignWorker, getWorkerHealth: getCampaignWorkerHealth } = require('./services/campaigns');
 const { startRetentionWorker } = require('./services/retention');
 const { dailyCap, checkAndBumpUsage } = require('./services/usage');
@@ -612,7 +612,11 @@ async function claimPhoneOwnership({ companyId, phoneNumber, phoneNumberId, log 
   return [...released];
 }
 
-async function askGPT(company, message, history, vars, { inbound = false } = {}) {
+// `tools` / `runTool`: tools the model may call while answering (WhatsApp's
+// request tool, services/whatsapp/requests.js). A call is run, its result
+// handed back, and the model asked once more for the reply itself -- with
+// tools off, so that answer is text.
+async function askGPT(company, message, history, vars, { inbound = false, tools = null, runTool = null } = {}) {
   const systemContent = await buildSystemPromptWithRAG(company, message, vars, { inbound });
   const messages = [
     { role: 'system', content: systemContent },
@@ -623,9 +627,23 @@ async function askGPT(company, message, history, vars, { inbound = false } = {})
   // Same model the live voice agent runs on — see resolveAgentModel() — unless
   // that is a provider-hosted Gemini model, which OpenAI cannot serve.
   const m = resolveAgentModel(company);
-  const completion = await openai.chat.completions.create({
-    model: textChannelModel(m.model), messages, max_tokens: m.maxTokens, temperature: m.temperature,
-  });
+  const params = { model: textChannelModel(m.model), messages, max_tokens: m.maxTokens, temperature: m.temperature };
+  const withTools = !!(tools?.length && runTool);
+  // A request's arguments in Arabic can outrun a voice-sized reply limit, and a
+  // call cut short is not valid JSON; the limit is a ceiling, not a length.
+  let completion = await openai.chat.completions.create(withTools
+    ? { ...params, tools, max_tokens: Math.max(m.maxTokens, 400) }
+    : params);
+  const calls = completion.choices[0].message.tool_calls;
+  if (withTools && calls?.length) {
+    messages.push({ role: 'assistant', content: completion.choices[0].message.content ?? null, tool_calls: calls });
+    for (const tc of calls) {
+      let content;
+      try { content = await runTool(tc.function?.name, tc.function?.arguments); } catch { content = 'تعذّر تنفيذ الأداة.'; }
+      messages.push({ role: 'tool', tool_call_id: tc.id, content: String(content ?? '') });
+    }
+    completion = await openai.chat.completions.create({ ...params, tools, tool_choice: 'none' });
+  }
   return { reply: completion.choices[0].message.content, ms: Date.now() - t0, usage: completion.usage };
 }
 
@@ -1030,11 +1048,11 @@ async function companyLoopchatToken(companyId) {
   return decryptField(row?.loopchat_token) || null;
 }
 const whatsappDeps = () => ({
-  sql, logger, decryptField, fillGlobals,
+  sql, logger, decryptField, encryptField, fillGlobals, featureEnabled,
   listCompanies: listCompaniesFull,
   loadSessionHistory, checkAndBumpUsage, dailyCap,
   // A customer who writes first is answered as an inbound caller would be.
-  askReply: (company, text, history, vars) => askGPT(company, text, history, vars, { inbound: true }),
+  askReply: (company, text, history, vars, opts = {}) => askGPT(company, text, history, vars, { ...opts, inbound: true }),
 });
 
 // The last events LoopChat delivered and what became of each, newest first,
@@ -1754,8 +1772,10 @@ app.get('/api/companies/:id/requests', requireCompanyAccess, async (req, res) =>
         status        : r.status,
         statusLabel   : REQUEST_STATUSES[r.status] || r.status,
         customerName  : r.customer_name,
-        // From the call, never from the model. Null until the call's record
-        // lands for an inbound call, and always null for a browser test.
+        // 'call' or 'whatsapp': where the customer made the request.
+        channel       : r.channel === 'whatsapp' ? 'whatsapp' : 'call',
+        // From the call -- or the WhatsApp number -- never from the model. Null
+        // until a call's record lands, and always null for a browser test.
         customerPhone : decryptField(r.caller_number) || null,
         // Labelled in the client's own words, in the order their sheet lists.
         fields: (REQUEST_TYPES[r.request_type]?.fields || Object.keys(fields))

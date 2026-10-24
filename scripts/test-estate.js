@@ -224,6 +224,10 @@ test('numbers are written the local Saudi way, others internationally', () => {
   assert.equal(estate.estatePhone('00966501234567'), '0501234567');
   assert.equal(estate.estatePhone('0501234567'), '0501234567');
   assert.equal(estate.estatePhone('501234567'), '0501234567');
+  // A Saudi landline, as 3CX hands it over or internationally -- never "+011…".
+  assert.equal(estate.estatePhone('0115009384'), '0115009384');
+  assert.equal(estate.estatePhone('+966115009384'), '0115009384');
+  assert.equal(estate.estatePhone('01234'), null);
   assert.equal(estate.estatePhone('+201095363467'), '+201095363467');
   assert.equal(estate.estatePhone(''), null);
 });

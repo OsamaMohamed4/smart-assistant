@@ -62,6 +62,17 @@ function requestBodyProperties(projects = []) {
   return props;
 }
 
+// The client's answer to question 31: interest and a visit with a sales
+// representative both need the customer's explicit confirmation. Said in the
+// tool's own description, because that is what the model reads at the moment
+// it decides whether to call — not in the operator's scenario, which this
+// system does not write into. `source` is where the customer's number is taken
+// from: the call, or the WhatsApp conversation.
+const requestToolDescription = (source = 'المكالمة') =>
+  'سجّل طلب العميل (اهتمام بالشراء، أو تأجير سكني، أو تأجير مكتبي/تجاري) ليتابعه فريق المبيعات. '
+  + 'اجمع الحقول المطلوبة لنوع الطلب، ثم اقرأ البيانات على العميل واطلب تأكيده الصريح، '
+  + `ولا تستدعِ الأداة قبل أن يؤكد. لا تسأل عن رقم الجوال — يُسجَّل تلقائياً من ${source}.`;
+
 // The company's projects as it listed them for Estate (services/estate.js).
 // Lazy: estate.js needs lib/request-types too, and nothing here needs it at load.
 const companyProjects = (company) => require('../estate').settingsOf(company).projects;
@@ -128,15 +139,7 @@ const FEATURES = [
     kind: 'webhook',
     endpoint: 'request',
     toolName: 'submit_customer_request',
-    // The client's answer to question 31: interest and a visit with a sales
-    // representative both need the customer's explicit confirmation. Said
-    // here, in the tool's own description, because that is what the model
-    // reads at the moment it decides whether to call — not in the operator's
-    // scenario, which this system does not write into.
-    toolDescriptionAr:
-      'سجّل طلب العميل (اهتمام بالشراء، أو تأجير سكني، أو تأجير مكتبي/تجاري) ليتابعه فريق المبيعات. '
-      + 'اجمع الحقول المطلوبة لنوع الطلب، ثم اقرأ البيانات على العميل واطلب تأكيده الصريح، '
-      + 'ولا تستدعِ الأداة قبل أن يؤكد. لا تسأل عن رقم الجوال — يُسجَّل تلقائياً من المكالمة.',
+    toolDescriptionAr: requestToolDescription('المكالمة'),
     responseTimeoutSecs: 10,
     bodyProperties: requestBodyProperties(),
     // Per company at publish: its project list becomes the project field's choices.
@@ -180,4 +183,5 @@ const enableableKeys = () => FEATURES.filter((f) => f.status === 'implemented').
 
 module.exports = {
   FEATURES, getFeature, featureByEndpoint, isImplemented, allFeatures, enableableKeys,
+  requestToolDescription,
 };

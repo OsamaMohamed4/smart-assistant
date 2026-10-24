@@ -69,16 +69,22 @@ const fake = http.createServer((req, res) => {
 
 let sql; let db; let wa; let loopchat;
 const replies = [];
-const deps = () => ({
+// Estate, as test-estate.js stubs it: what was posted, and Estate's answer.
+const estatePosts = [];
+const deps = (over = {}) => ({
   sql,
   logger: { info() {}, warn() {}, error() {} },
   listCompanies: async () => require('../companies').listCompaniesFull(),
-  askReply: async (company, text, history, vars) => { replies.push({ company: company.id, text, history, vars }); return { reply: `رد على: ${text}` }; },
+  askReply: async (company, text, history, vars, opts) => { replies.push({ company: company.id, text, history, vars, opts }); return { reply: `رد على: ${text}` }; },
   loadSessionHistory: async () => [],
   checkAndBumpUsage: async () => true,
   dailyCap: () => 2000,
   decryptField: (v) => v,
+  encryptField: (v) => v,
+  featureEnabled: (...a) => require('../services/features/store').featureEnabled(...a),
   fillGlobals: (t) => t.replace('{{agent_name}}', 'جداوي'),
+  post: async (origin, token, form) => { estatePosts.push({ origin, token, form: Object.fromEntries(form) }); return { status: 200, data: { status: true, message: 'تمت العملية بنجاح' } }; },
+  ...over,
 });
 
 before(async () => {
@@ -97,7 +103,7 @@ after(() => {
   for (const s of ['', '-wal', '-shm']) fs.rmSync(DB + s, { force: true });
 });
 beforeEach(() => {
-  sent.length = 0; replies.length = 0; sendResult = 'sent'; matchedContact = 101;
+  sent.length = 0; replies.length = 0; estatePosts.length = 0; sendResult = 'sent'; matchedContact = 101;
   require('../companies').invalidateCache();
 });
 
@@ -470,6 +476,97 @@ test('the LoopChat client reads every page of templates and counts their variabl
   assert.equal(t[0].channelId, 6);
   assert.equal(loopchat.templateVariableCount('بدون متغيرات'), 0);
   assert.deepEqual((await loopchat.listChannels())[0], { id: 6, name: 'WhatsApp 1', phoneNumber: '+966920031118', hasActiveBot: false });
+});
+
+// ─── (د) requests on WhatsApp ─────────────────────────────────────
+// The reply model gets the call agent's request tool; what it files lands on
+// the requests page with the WhatsApp number, and goes on to Estate.
+const M10 = 'M-10 — أدوار، حي المغرزات';
+function withRequests(on) {
+  setSettings('maheer', {
+    whatsappChannelId: 6, whatsappAutoReply: true,
+    estate: { url: 'https://maher.e-statee.com', enabled: true, projects: [{ name: M10, code: 'M-10' }] },
+  });
+  db.prepare("UPDATE companies SET estate_token = 'estate-key' WHERE id = 'maheer'").run();
+  db.prepare(`INSERT INTO company_features (company_id, feature_key, enabled) VALUES ('maheer', 'request_creation', ?)
+              ON CONFLICT(company_id, feature_key) DO UPDATE SET enabled = excluded.enabled`).run(on ? 1 : 0);
+}
+// A model that files what it is given, then answers.
+const filing = (args) => async (company, text, history, vars, opts) => {
+  replies.push({ company: company.id, text, opts });
+  const r = await opts.runTool(opts.tools[0].function.name, JSON.stringify(args));
+  return { reply: r };
+};
+const waRequests = (phone) => db.prepare("SELECT * FROM customer_requests WHERE company_id = 'maheer' AND channel = 'whatsapp' AND contact_phone = ? ORDER BY id").all(`+${phone}`);
+
+test('a customer who confirms a purchase on WhatsApp files a request that goes to Estate with the WhatsApp number', async () => {
+  withRequests(true);
+  const phone = '966551112223';
+  const r = await wa.handleEvent(incoming('إيه صح، أكّد الطلب', { phone }), deps({
+    askReply: filing({ request_type: 'interest', customer_confirmed: true, customer_name: 'أبو فهد', project: M10, payment_method: 'كاش' }),
+  }));
+  assert.equal(r.sent, true);
+  assert.equal(r.requests.length, 1);
+  assert.deepEqual(r.estate, [{ sent: true }]);
+  assert.match(wa.describeOutcome(r).text, /أُرسل إلى Estate/);
+
+  // The tool the model saw: the call agent's, with this company's projects.
+  const tool = replies[0].opts.tools[0].function;
+  assert.equal(tool.name, 'submit_customer_request');
+  assert.ok(tool.parameters.properties.project.enum.includes(M10));
+  assert.match(tool.description, /يُسجَّل تلقائياً من محادثة واتساب/);
+  assert.deepEqual(tool.parameters.required, ['request_type', 'customer_confirmed']);
+
+  const [row] = waRequests(phone);
+  assert.equal(row.request_type, 'interest');
+  assert.equal(row.customer_name, 'أبو فهد');
+  assert.match(row.conversation_id, /^wa:6:966551112223:\d{4}-\d{2}-\d{2}$/);
+  assert.equal(row.estate_status, 'sent');
+  // On the requests page with its number, like a call's.
+  const listed = sql.listCustomerRequests.all('maheer').find((x) => x.id === row.id);
+  assert.equal(listed.caller_number, '+966551112223');
+  assert.equal(listed.channel, 'whatsapp');
+
+  assert.equal(estatePosts.length, 1);
+  const f = estatePosts[0].form;
+  assert.equal(f.name, 'أبو فهد');
+  assert.equal(f.phone, '0551112223');
+  assert.equal(f['project_codes[0]'], 'M-10');
+  assert.equal(f.platform, 'ai_chat');
+  assert.equal(f.note.split('\n')[0], 'طلب اهتمام من محادثة واتساب مع المساعد الذكي');
+  assert.match(f.note, /طريقة الدفع: كاش/);
+  // The customer read the confirmation the model wrote after filing.
+  assert.match(sent.at(-1).body.content, /تم تسجيل الطلب/);
+});
+
+test('a second confirmation the same day updates that request, and Estate is not sent it twice', async () => {
+  withRequests(true);
+  const phone = '966551112224';
+  const once = { request_type: 'interest', customer_confirmed: true, customer_name: 'أبو سعد', project: M10 };
+  await wa.handleEvent(incoming('أكد', { phone }), deps({ askReply: filing(once) }));
+  await wa.handleEvent(incoming('وأبيه كاش', { phone }), deps({ askReply: filing({ ...once, payment_method: 'كاش' }) }));
+  const rows = waRequests(phone);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(JSON.parse(rows[0].fields), { customer_name: 'أبو سعد', project: M10, payment_method: 'كاش' });
+  assert.equal(estatePosts.length, 1);
+});
+
+test('without «استقبال الطلبات» no tool is offered; unconfirmed, nothing is filed', async () => {
+  withRequests(false);
+  await wa.handleEvent(incoming('أبي أشتري', { phone: '966551112225' }), deps());
+  assert.equal(replies.at(-1).opts.tools, undefined);
+
+  withRequests(true);
+  const phone = '966551112226';
+  const r = await wa.handleEvent(incoming('أبي أشتري', { phone }), deps({
+    askReply: filing({ request_type: 'interest', customer_confirmed: false, customer_name: 'أبو خالد' }),
+  }));
+  assert.equal(r.requests, undefined);
+  assert.equal(waRequests(phone).length, 0);
+  assert.match(sent.at(-1).body.content, /لم يُسجَّل الطلب بعد/);
+  assert.equal(estatePosts.length, 0);
+  withRequests(false);
+  setSettings('maheer', { whatsappChannelId: 6, whatsappAutoReply: true });
 });
 
 // ─── (ج) the counts ───────────────────────────────────────────────

@@ -226,6 +226,7 @@ export function WhatsappPage() {
                 <span className="block text-[13px] font-medium text-ink-900">المساعد يرد على رسائل العملاء</span>
                 <span className="block text-[12px] text-ink-500 mt-0.5 leading-relaxed">
                   بنفس سيناريو الشركة (تعليمات المكالمات الواردة) وقاعدة معرفتها. يرد على الرسائل النصية فقط، ويتوقف في أي محادثة يستلمها موظف من LoopChat.
+                  وإن كانت «استقبال الطلبات» مفعّلة للشركة، يسجّل طلب العميل بعد تأكيده كما في المكالمة، ويظهر في «الطلبات» ويُرسل إلى Estate إن كان الربط مفعّلاً.
                 </span>
               </span>
             </label>

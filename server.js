@@ -2174,6 +2174,108 @@ app.delete('/api/companies/:id/documents/:docId', requireCompanyAccess, async (r
   res.json({ deleted: 1 });
 });
 
+// ─── Knowledge base from the company's own website ──────────────────
+// The company gives its site's address; the server reads the pages (lib/site-
+// crawler.js) and stores each as a knowledge-base document, exactly as if the
+// text had been uploaded. Reading again REPLACES the earlier pages of that
+// site -- and only once the new ones are in, so a failed read never empties
+// the knowledge base. Documents the company uploaded by hand are never touched.
+// The progress of the read is held in memory (one read per company at a time);
+// what survives a restart is the documents and the address, kept in settings.
+const siteCrawler = require('./lib/site-crawler');
+const siteJobs = new Map();   // companyId -> { state, url, found, queued, added, failed, ... }
+
+async function replaceSiteDocuments(companyId, prefix, keepIds) {
+  const old = (await sql.listDocuments.all(companyId))
+    .filter((d) => String(d.filename || '').startsWith(prefix) && !keepIds.has(d.id));
+  for (const d of old) {
+    await withTransaction(async () => {
+      await sql.deleteDocument.run(d.id);
+      await sql.purgeDocumentChunks.run(d.id);
+    });
+  }
+  if (old.length) invalidateChunkCache(companyId);
+  return old.length;
+}
+
+async function runSiteImport(company, job) {
+  const prefix = siteCrawler.docPrefix(job.url);
+  try {
+    const crawl = await siteCrawler.crawlSite({
+      startUrl: job.url,
+      onProgress: (p) => { job.found = p.pages; job.queued = p.queued; job.skipped = p.skipped; },
+    });
+    if (crawl.scriptRendered && !crawl.pages.length) {
+      throw new Error('هذا الموقع يرسم محتواه بالجافاسكربت في المتصفح، فلا يوجد نص في صفحاته يمكن قراءته. أرسل لنا رابط واجهة بيانات الموقع (API) أو ارفع ملفات المشاريع يدوياً.');
+    }
+    const pages = siteCrawler.dropRepeatedLines(crawl.pages);
+    if (!pages.length) throw new Error('لم نجد في الموقع صفحات فيها نص يمكن قراءته. تأكد من الرابط وأنه يفتح بدون تسجيل دخول.');
+
+    job.state = 'saving';
+    job.total = pages.length;
+    const keep = new Set();
+    for (const page of pages) {
+      try {
+        const buffer = Buffer.from(siteCrawler.pageDocument(page), 'utf8');
+        const r = await ingestDocument({
+          companyId: company.id, filename: siteCrawler.docName(job.url, page), mime: 'text/plain', buffer,
+        });
+        keep.add(r.documentId);
+        job.added += 1;
+      } catch (e) {
+        job.failed += 1;
+        logger.warn('site import: page not stored', { companyId: company.id, url: page.url, err: e.message });
+      }
+    }
+    if (!job.added) throw new Error('تعذّر حفظ صفحات الموقع في قاعدة المعرفة الآن. حاول مرة أخرى بعد قليل.');
+
+    job.replaced = await replaceSiteDocuments(company.id, prefix, keep);
+
+    const row = await sql.getCompany.get(company.id);
+    let existing = {};
+    try { if (row?.settings) existing = JSON.parse(row.settings) || {}; } catch {}
+    existing.kbSite = { url: job.url, lastReadAt: new Date().toISOString(), pages: job.added };
+    await sql.updateCompanySettings.run({ id: company.id, settings: JSON.stringify(existing) });
+    invalidateCache();
+    job.state = 'done';
+  } catch (e) {
+    const forUser = /[؀-ۿ]/.test(String(e.message || ''));
+    job.state = 'failed';
+    job.error = forUser ? e.message : 'تعذّرت قراءة الموقع. تأكد من الرابط وحاول مرة أخرى.';
+    logger.warn('site import failed', { companyId: company.id, url: job.url, err: e.message });
+  } finally {
+    job.finishedAt = Date.now();
+  }
+}
+
+app.post('/api/companies/:id/documents/from-site', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  let url = String(req.body?.url || '').trim();
+  if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
+  const safe = isSafeUrl(url);
+  if (!safe.ok) return res.status(400).json({ error: safe.reason });
+  const running = siteJobs.get(c.id);
+  if (running && (running.state === 'reading' || running.state === 'saving')) {
+    return res.status(409).json({ error: 'تجري قراءة الموقع الآن. انتظر حتى تنتهي.' });
+  }
+  const job = {
+    state: 'reading', url, found: 0, queued: 0, skipped: 0, total: 0, added: 0, failed: 0, replaced: 0,
+    startedAt: Date.now(), finishedAt: null, error: null,
+  };
+  siteJobs.set(c.id, job);
+  audit(req, 'kb.site_import', `companies/${c.id}`, { url });
+  runSiteImport(c, job).catch((e) => logger.error('site import crashed', { err: e.message }));
+  res.status(202).json({ started: true });
+});
+
+app.get('/api/companies/:id/documents/from-site', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  const job = siteJobs.get(c.id) || null;
+  res.json({ site: c.settings?.kbSite || null, job });
+});
+
 // Download the original document if available, otherwise fallback to extracted text.
 app.get('/api/companies/:id/documents/:docId/download', requireCompanyAccess, async (req, res) => {
   const doc = await sql.getDocument.get(req.params.docId);

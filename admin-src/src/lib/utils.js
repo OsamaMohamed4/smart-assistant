@@ -68,8 +68,8 @@ export function fmtSar(halalas) {
 
 // ─── Avatar gradient from string (consistent hash) ───────────
 const GRADIENTS = [
-  ['#765C36', '#8b5cf6'],
-  ['#0ea5e9', '#765C36'],
+  ['#8439FF', '#FF93EE'],
+  ['#0017E0', '#8439FF'],
   ['#10b981', '#0ea5e9'],
   ['#f59e0b', '#f43f5e'],
   ['#8b5cf6', '#ec4899'],

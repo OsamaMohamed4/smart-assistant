@@ -616,8 +616,8 @@ async function claimPhoneOwnership({ companyId, phoneNumber, phoneNumberId, log 
 // request tool, services/whatsapp/requests.js). A call is run, its result
 // handed back, and the model asked once more for the reply itself -- with
 // tools off, so that answer is text.
-async function askGPT(company, message, history, vars, { inbound = false, tools = null, runTool = null } = {}) {
-  const systemContent = await buildSystemPromptWithRAG(company, message, vars, { inbound });
+async function askGPT(company, message, history, vars, { inbound = false, channel = null, tools = null, runTool = null } = {}) {
+  const systemContent = await buildSystemPromptWithRAG(company, message, vars, { inbound, channel });
   const messages = [
     { role: 'system', content: systemContent },
     ...history,
@@ -1052,7 +1052,7 @@ const whatsappDeps = () => ({
   listCompanies: listCompaniesFull,
   loadSessionHistory, checkAndBumpUsage, dailyCap,
   // A customer who writes first is answered as an inbound caller would be.
-  askReply: (company, text, history, vars, opts = {}) => askGPT(company, text, history, vars, { ...opts, inbound: true }),
+  askReply: (company, text, history, vars, opts = {}) => askGPT(company, text, history, vars, { ...opts, inbound: true, channel: 'whatsapp' }),
 });
 
 // The last events LoopChat delivered and what became of each, newest first,
@@ -2383,6 +2383,55 @@ app.put('/api/companies/:id/whatsapp', requireCompanyAdmin, async (req, res) => 
   });
   const s = whatsapp.settingsOf({ settings: merged });
   res.json({ channelId: s.channelId, autoReply: s.autoReply, followup: s.followup });
+});
+
+// ─── WhatsApp behaviour: what the assistant says, knows, and when it answers ──
+// Open to the company itself (a workspace user), not only a superadmin: these
+// are the company's own words and hours. Everything about the CONNECTION --
+// the number, the LoopChat key, the follow-up template -- stays superadmin-only
+// above. Saved inside the company's settings, so no table is touched, and the
+// voice agents never read any of it.
+const waSchedule = require('./services/whatsapp/schedule');
+function whatsappControlsOf(c) {
+  const s = whatsapp.settingsOf(c);
+  const cs = c.settings || {};
+  return {
+    connected : !!s.channelId,
+    autoReply : s.autoReply && !!s.channelId,
+    prompt    : String(cs.whatsappPrompt || ''),
+    knowledge : String(cs.whatsappKnowledge || ''),
+    schedule  : s.schedule || { enabled: false, days: waSchedule.defaultDays() },
+    openNow   : waSchedule.isOpenNow(s.schedule),
+    limits    : { prompt: waSchedule.PROMPT_MAX, knowledge: waSchedule.KNOWLEDGE_MAX },
+  };
+}
+
+app.get('/api/companies/:id/whatsapp/controls', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  res.json(whatsappControlsOf(c));
+});
+
+app.put('/api/companies/:id/whatsapp/controls', requireCompanyAccess, async (req, res) => {
+  const row = await sql.getCompany.get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const v = waSchedule.validateControls(req.body);
+  if (v.error) return res.status(400).json({ error: v.error });
+  let existing = {};
+  try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
+  const merged = { ...existing, ...v.settings };
+  if (req.body?.autoReply !== undefined) {
+    // Same rule as the superadmin screen: on only when a number is connected.
+    merged.whatsappAutoReply = req.body.autoReply === true && !!whatsapp.settingsOf({ settings: existing }).channelId;
+  }
+  await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify(merged) });
+  invalidateCache();
+  audit(req, 'company.whatsapp_controls', `companies/${row.id}`, {
+    autoReply: merged.whatsappAutoReply === true,
+    schedule: merged.whatsappSchedule?.enabled ? 'on' : 'off',
+    promptSet: !!merged.whatsappPrompt, knowledgeSet: !!merged.whatsappKnowledge,
+  });
+  res.json(whatsappControlsOf(await loadCompany(row.id)));
 });
 
 // The company's own LoopChat Integration Token: one token reaches one LoopChat

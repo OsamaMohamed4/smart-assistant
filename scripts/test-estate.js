@@ -74,7 +74,7 @@ test('a purchase-interest request goes to the company\'s Estate after the call, 
   assert.equal(posts[0].token, 'estate-key');
   assert.deepEqual(Object.keys(posts[0].form), ['name', 'phone', 'platform', 'project_codes[0]', 'note']);
   assert.equal(posts[0].form.name, 'أبو فهد');
-  assert.equal(posts[0].form.phone, '0501234567');          // the local way, as Estate's example
+  assert.equal(posts[0].form.phone, '966501234567');        // as Estate asked: country code, no "+"
   assert.equal(posts[0].form.platform, 'ai_chat');
   assert.equal(posts[0].form['project_codes[0]'], 'M-10');
   assert.equal(posts[0].form.note, [
@@ -219,16 +219,16 @@ test('only an https Estate address is accepted, from the bare host or the full e
   }
 });
 
-test('numbers are written the local Saudi way, others internationally', () => {
-  assert.equal(estate.estatePhone('+966 50 123 4567'), '0501234567');
-  assert.equal(estate.estatePhone('00966501234567'), '0501234567');
-  assert.equal(estate.estatePhone('0501234567'), '0501234567');
-  assert.equal(estate.estatePhone('501234567'), '0501234567');
+test('numbers go as digits with the country code, never a "+" or a local 0', () => {
+  assert.equal(estate.estatePhone('+966 50 123 4567'), '966501234567');
+  assert.equal(estate.estatePhone('00966501234567'), '966501234567');
+  assert.equal(estate.estatePhone('0501234567'), '966501234567');
+  assert.equal(estate.estatePhone('501234567'), '966501234567');
   // A Saudi landline, as 3CX hands it over or internationally -- never "+011…".
-  assert.equal(estate.estatePhone('0115009384'), '0115009384');
-  assert.equal(estate.estatePhone('+966115009384'), '0115009384');
+  assert.equal(estate.estatePhone('0115009384'), '966115009384');
+  assert.equal(estate.estatePhone('+966115009384'), '966115009384');
   assert.equal(estate.estatePhone('01234'), null);
-  assert.equal(estate.estatePhone('+201095363467'), '+201095363467');
+  assert.equal(estate.estatePhone('+201095363467'), '201095363467');
   assert.equal(estate.estatePhone(''), null);
 });
 

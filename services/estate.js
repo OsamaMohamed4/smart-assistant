@@ -112,18 +112,18 @@ function projectCode(value, projects) {
   return hit ? hit.code : null;
 }
 
-// Estate's own example writes a Saudi mobile the local way: 0551234567. A
-// Saudi landline goes the same way (0115009384); it used to fall through to
-// the international form and left as "+0115009384".
+// Digits with the country code, no "+" and no local 0: 966501234567,
+// 966115009384. Estate asked for exactly this (2026-10-24), after a lead went
+// as "+0115009384"; its docs' example (0551234567) is not what it wants.
 function estatePhone(raw) {
   let d = String(raw || '').replace(/\D/g, '');
   if (d.startsWith('00')) d = d.slice(2);
-  if (/^966[1-9]\d{8}$/.test(d)) return `0${d.slice(3)}`;
-  if (/^0[1-9]\d{8}$/.test(d)) return d;
-  if (/^5\d{8}$/.test(d)) return `0${d}`;
+  if (/^966[1-9]\d{8}$/.test(d)) return d;
+  if (/^0[1-9]\d{8}$/.test(d)) return `966${d.slice(1)}`;
+  if (/^5\d{8}$/.test(d)) return `966${d}`;
   // A local number of any other length is not one this can place.
   if (d.startsWith('0')) return null;
-  return d.length >= 8 && d.length <= 15 ? `+${d}` : null;
+  return d.length >= 8 && d.length <= 15 ? d : null;
 }
 
 function parseFields(request) {

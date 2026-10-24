@@ -530,7 +530,7 @@ test('a customer who confirms a purchase on WhatsApp files a request that goes t
   assert.equal(estatePosts.length, 1);
   const f = estatePosts[0].form;
   assert.equal(f.name, 'أبو فهد');
-  assert.equal(f.phone, '0551112223');
+  assert.equal(f.phone, '966551112223');
   assert.equal(f['project_codes[0]'], 'M-10');
   assert.equal(f.platform, 'ai_chat');
   assert.equal(f.note.split('\n')[0], 'طلب اهتمام من محادثة واتساب مع المساعد الذكي');

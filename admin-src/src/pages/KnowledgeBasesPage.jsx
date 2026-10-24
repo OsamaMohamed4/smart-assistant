@@ -3,6 +3,7 @@ import { BookOpen } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { EmptyState } from '../components/ui/EmptyState';
 import { DocumentsManager } from '../components/companies/DocumentsManager';
+import { SiteImport } from '../components/companies/SiteImport';
 import { Label } from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { api } from '../lib/api';
@@ -14,6 +15,8 @@ export function KnowledgeBasesPage({ pinnedCompanyId }) {
   const { push } = useToast();
   const [companies, setCompanies] = useState([]);
   const [companyId, setCompanyId] = useState(pinnedCompanyId || null);
+  // Bumped when a website read ends, so the document list below shows its pages.
+  const [listVersion, setListVersion] = useState(0);
 
   useEffect(() => {
     if (pinnedCompanyId) { setCompanyId(pinnedCompanyId); return; }
@@ -56,7 +59,10 @@ export function KnowledgeBasesPage({ pinnedCompanyId }) {
             description="أنشئ شركة من تبويب الشركات أولاً."
           />
         ) : (
-          <DocumentsManager companyId={companyId} companyName={activeCompany?.name || ''} />
+          <>
+            <SiteImport key={companyId} companyId={companyId} onDone={() => setListVersion((v) => v + 1)} />
+            <DocumentsManager key={`${companyId}-${listVersion}`} companyId={companyId} companyName={activeCompany?.name || ''} />
+          </>
         )}
       </div>
     </div>

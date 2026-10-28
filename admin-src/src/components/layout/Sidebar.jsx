@@ -28,6 +28,9 @@ const NAV_GROUPS = [
       // Which WhatsApp number belongs to which company, and what the
       // assistant does there. Superadmin-only, like the phone numbers.
       { id: 'whatsapp',   label: 'واتساب',      icon: MessageCircle, hint: 'رسائل',          roles: ['superadmin'] },
+      // The company's own side of WhatsApp: what the assistant says, knows and
+      // when it answers. The connection itself stays with the whatsapp page above.
+      { id: 'wabehavior', label: 'رد واتساب',   icon: MessageCircle, hint: 'تحكم',           roles: ['client'] },
     ],
   },
   {
@@ -102,7 +105,7 @@ export function Sidebar({ active, onChange, user, onLogout, workspaceMode = fals
       )}
 
       {/* ─── Nav ─── */}
-      <nav className="flex-1 px-3 py-4 space-y-4">
+      <nav className="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-4">
         {NAV_GROUPS.map((group) => {
           const visible = group.items.filter((it) => {
             if (it.roles && !it.roles.includes(user?.role)) return false;
@@ -147,7 +150,7 @@ export function Sidebar({ active, onChange, user, onLogout, workspaceMode = fals
       </nav>
 
       {/* ─── Footer ─── */}
-      <div className="p-3 border-t border-ink-100 space-y-0.5">
+      <div className="p-3 border-t border-ink-100 space-y-0.5 shrink-0">
         {user && (
           <div>
             <div className="flex items-center gap-3 px-3 py-2">
@@ -160,14 +163,14 @@ export function Sidebar({ active, onChange, user, onLogout, workspaceMode = fals
                 </div>
                 <div className="text-ink-500 text-[10.5px] mt-0.5">{ROLE_LABELS[user.role] || user.role}</div>
               </div>
-              <button
-                onClick={onLogout}
-                title="تسجيل الخروج"
-                className="w-7 h-7 rounded-md text-ink-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition-colors"
-              >
-                <LogOut className="w-3.5 h-3.5" strokeWidth={2} />
-              </button>
             </div>
+            <button
+              onClick={onLogout}
+              className="w-full flex items-center gap-3 px-3 h-10 rounded-xl text-[13.5px] font-medium text-rose-600 hover:bg-rose-50 transition-colors"
+            >
+              <LogOut className="w-4 h-4 shrink-0" strokeWidth={1.8} />
+              <span className="flex-1 text-right">تسجيل الخروج</span>
+            </button>
           </div>
         )}
       </div>

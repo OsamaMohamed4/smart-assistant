@@ -51,7 +51,8 @@ function SummaryCard({ icon: Icon, label, calls, seconds, accent }) {
 // would read as "linked, and nothing happened".
 const WA_COLUMNS = [
   { key: 'received',  label: 'رسائل واردة' },
-  { key: 'replies',   label: 'ردود المساعد' },
+  { key: 'conversations', label: 'محادثات ردّ عليها المساعد' },
+  { key: 'replies',   label: 'رسائل ردّ المساعد' },
   { key: 'templates', label: 'رسائل بعد المكالمة' },
   { key: 'failed',    label: 'لم تُرسل' },
 ];
@@ -70,7 +71,7 @@ function WhatsappUsage({ data, rows }) {
         <p className="text-[12px] text-ink-500 mt-3">واتساب غير مربوط بالمنصة بعد، فلا يوجد استهلاك رسائل لعرضه.</p>
       ) : (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4">
             {WA_COLUMNS.map((c) => (
               <div key={c.key} className="rounded-xl bg-ink-50/60 px-4 py-3">
                 <div className={cn('text-[22px] font-bold tabular-nums leading-none', c.key === 'failed' && t?.failed ? 'text-rose-600' : 'text-ink-900')}>
@@ -80,7 +81,7 @@ function WhatsappUsage({ data, rows }) {
               </div>
             ))}
           </div>
-          {rows.length > 1 && (
+          {rows.length > 0 && (
             <div className="overflow-x-auto mt-4">
               <table className="w-full text-[13px] whitespace-nowrap">
                 <thead>
@@ -157,8 +158,8 @@ export function UsagePage({ pinnedCompanyId }) {
           <SummaryCard icon={Phone} label="الإجمالي" accent="brand" calls={all.calls} seconds={all.seconds} />
         </div>
 
-        {/* One company needs no table: the cards above are its whole report. */}
-        {rows.length > 1 && (
+        {/* The same table the admin sees, with only the viewer's own companies in it. */}
+        {rows.length > 0 && (
           <Card className="overflow-x-auto">
             <table className="w-full text-[13px] whitespace-nowrap">
               <thead>

@@ -222,7 +222,7 @@ function renderInvoiceHtml(s, { siteUrl = null } = {}) {
   const c = s.computed;
   const seller = s.seller || {};
   const td = 'padding:10px 12px;border-bottom:1px solid #E6E0D6;font-size:14px;color:#1A150E;';
-  const th = 'padding:10px 12px;background:#F3EFE8;font-size:12px;color:#4A4238;text-align:right;font-weight:600;';
+  const th = 'padding:10px 12px;background:#F3EFE8;font-size:12px;color:#3F3D4A;text-align:right;font-weight:600;';
   const meta = [
     ['رقم الفاتورة', s.number || 'معاينة — لم تُصدر بعد'],
     ['تاريخ الإصدار', s.issueDate ? arDate(s.issueDate) : '—'],
@@ -236,7 +236,7 @@ function renderInvoiceHtml(s, { siteUrl = null } = {}) {
     seller.address,
     [seller.email, seller.phone].filter(Boolean).join(' · '),
   ].filter(Boolean);
-  const total = (label, value, strong) => `<tr><td colspan="3" style="${td}text-align:left;${strong ? 'font-weight:700;' : 'color:#4A4238;'}">${esc(label)}</td><td style="${td}${strong ? 'font-weight:700;' : ''}white-space:nowrap;" dir="ltr">${esc(value)} ر.س</td></tr>`;
+  const total = (label, value, strong) => `<tr><td colspan="3" style="${td}text-align:left;${strong ? 'font-weight:700;' : 'color:#3F3D4A;'}">${esc(label)}</td><td style="${td}${strong ? 'font-weight:700;' : ''}white-space:nowrap;" dir="ltr">${esc(value)} ر.س</td></tr>`;
 
   return `<!doctype html>
 <html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -248,8 +248,8 @@ function renderInvoiceHtml(s, { siteUrl = null } = {}) {
   <tr><td style="padding:28px 28px 8px;">
     <table role="presentation" width="100%"><tr>
       <td style="vertical-align:top;">
-        <div style="font-size:22px;font-weight:700;color:#765C36;">${esc(seller.brand || 'مسار')}</div>
-        ${sellerLines.map((l) => `<div style="font-size:12.5px;color:#4A4238;line-height:1.8;">${esc(l)}</div>`).join('')}
+        <div style="font-size:22px;font-weight:700;color:#8439FF;">${esc(seller.brand || 'مسار')}</div>
+        ${sellerLines.map((l) => `<div style="font-size:12.5px;color:#3F3D4A;line-height:1.8;">${esc(l)}</div>`).join('')}
       </td>
       <td style="vertical-align:top;text-align:left;">
         <div style="font-size:20px;font-weight:700;color:#1A150E;">${s.number ? 'فاتورة' : 'معاينة فاتورة'}</div>
@@ -271,14 +271,14 @@ function renderInvoiceHtml(s, { siteUrl = null } = {}) {
       ${total('الإجمالي', sar(c.total), true)}
     </table>
   </td></tr>
-  <tr><td style="padding:12px 28px 4px;font-size:12.5px;color:#4A4238;line-height:1.9;">
+  <tr><td style="padding:12px 28px 4px;font-size:12.5px;color:#3F3D4A;line-height:1.9;">
     <div>المكالمات الصادرة هذا الشهر: ${num(c.outbound.calls)}، تم الرد على ${num(c.outbound.answered)}، واحتُسب منها ${num(c.outbound.units)} مكالمة.</div>
     <div>الباقة: ${num(s.contract.includedOutboundCalls)} مكالمة صادرة ضمن العقد — المتبقي بعد هذا الشهر: ${num(c.outbound.includedLeft)}.</div>
     <div>طريقة الاحتساب: المكالمة من دقيقة إلى ${Math.round(s.contract.unitSeconds / 60)} دقائق تُحتسب مكالمة واحدة، وكل ${Math.round(s.contract.unitSeconds / 60)} دقائق إضافية مكالمة، والمكالمة الأقل من دقيقة لا تُحتسب. المكالمات الواردة غير محدودة.</div>
     <div>مدة العقد: من ${esc(arDate(s.contract.startDate))} إلى ${esc(arDate(s.contract.endDate))}.</div>
     ${c.needsQuote ? '<div style="color:#9B3B2B;">تجاوز عدد المكالمات الإضافية آخر شريحة، ويُسعَّر الزائد بموجب عرض سعر خاص.</div>' : ''}
   </td></tr>
-  ${siteUrl ? `<tr><td style="padding:8px 28px 4px;font-size:12.5px;color:#4A4238;">يمكنكم الاطلاع على فواتيركم في لوحة التحكم: <a href="${esc(siteUrl)}/login" style="color:#765C36;">${esc(siteUrl.replace(/^https?:\/\//, ''))}/login</a></td></tr>` : ''}
+  ${siteUrl ? `<tr><td style="padding:8px 28px 4px;font-size:12.5px;color:#3F3D4A;">يمكنكم الاطلاع على فواتيركم في لوحة التحكم: <a href="${esc(siteUrl)}/login" style="color:#8439FF;">${esc(siteUrl.replace(/^https?:\/\//, ''))}/login</a></td></tr>` : ''}
   <tr><td style="padding:16px 28px 24px;"></td></tr>
 </table>
 </td></tr></table>

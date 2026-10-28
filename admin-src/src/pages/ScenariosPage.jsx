@@ -920,6 +920,9 @@ function PromptPreviewModal({ open, onClose, companyId, instructionPrompt }) {
 }
 
 function ScenarioTab({ scenario, update }) {
+  // Outbound and inbound are shown one at a time so each one's greeting and
+  // instructions sit together. Display only: the same fields are saved.
+  const [dir, setDir] = useState('out');
   // Toggle the primary criterion (one at most)
   const setPrimary = (idx) => update({
     successCriteria: scenario.successCriteria.map((c, i) => ({ ...c, primary: i === idx })),
@@ -949,7 +952,26 @@ function ScenarioTab({ scenario, update }) {
         />
       </Card>
 
+      {/* ─── Direction switch ─── */}
+      <div className="flex items-center gap-1 bg-white border border-ink-200 rounded-2xl p-1 w-fit">
+        {[['out', 'المكالمات الصادرة', 'نحن نتصل بالعميل'], ['in', 'المكالمات الواردة', 'العميل يتصل بنا']].map(([id, label, hint]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setDir(id)}
+            className={cn(
+              'h-10 px-5 rounded-xl text-[13px] font-medium transition-all text-right',
+              dir === id ? 'bg-brand-500 text-white shadow-soft' : 'text-ink-600 hover:text-ink-900',
+            )}
+          >
+            {label}
+            <span className={cn('block text-[10.5px] font-normal', dir === id ? 'text-white/80' : 'text-ink-400')}>{hint}</span>
+          </button>
+        ))}
+      </div>
+
       {/* ─── First message (outbound) ─── */}
+      {dir === 'out' && (
       <Card>
         <div className="flex items-start justify-between mb-2">
           <div>
@@ -973,8 +995,10 @@ function ScenarioTab({ scenario, update }) {
           placeholder="مرحباً {{customer_name}}، معك {{agent_name}} من {{company_name}}..."
         />
       </Card>
+      )}
 
       {/* ─── First message (inbound) ─── */}
+      {dir === 'in' && (
       <Card>
         <div className="flex items-start justify-between mb-2">
           <div>
@@ -998,10 +1022,15 @@ function ScenarioTab({ scenario, update }) {
           placeholder="حياك الله في {{company_name}}، معك {{agent_name}}..."
         />
       </Card>
+      )}
 
-      {/* ─── Instruction prompt ─── */}
+      {/* ─── Instruction prompt (outbound) ─── */}
+      {dir === 'out' && (
       <Card>
-        <Label hint="تعليمات السلوك بالتفصيل — أقسام، نبرة، خطوات الحوار">Prompt</Label>
+        <Label hint="تعليمات السلوك بالتفصيل — أقسام، نبرة، خطوات الحوار">تعليمات المكالمات الصادرة</Label>
+        <p className="text-[12px] text-ink-500 mb-2 max-w-2xl leading-relaxed">
+          ما يتبعه المساعد عندما نتصل نحن بالعميل. وهي أيضاً تعليمات المكالمات الواردة ما لم تكتب لها تعليمات خاصة في تبويب «الواردة».
+        </p>
         <SectionInserter
           onInsert={(header) => update({
             instructionPrompt: (scenario.instructionPrompt || '').replace(/\s*$/, '') + `\n\n${header}\n`,
@@ -1015,9 +1044,10 @@ function ScenarioTab({ scenario, update }) {
         />
         <LintWarnings text={scenario.instructionPrompt} />
       </Card>
+      )}
 
-      {/* ─── Optional: separate inbound prompt (Phase 3) ─── */}
-      <InboundPromptCard scenario={scenario} update={update} />
+      {/* ─── Optional: separate inbound prompt ─── */}
+      {dir === 'in' && <InboundPromptCard scenario={scenario} update={update} />}
 
       {/* ─── Template variables ─── */}
       <Card>
@@ -1235,12 +1265,12 @@ function SectionInserter({ onInsert }) {
 // SECOND agent for inbound calls (the company's number is bound to it).
 // Empty = inbound uses the same prompt as outbound (default).
 function InboundPromptCard({ scenario, update }) {
-  const [open, setOpen] = useState(!!scenario.instructionPromptInbound);
+  const [open, setOpen] = useState(true);
   return (
     <Card>
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-[14px] font-semibold text-ink-900">تعليمات المكالمات الواردة (اختياري)</h3>
+          <h3 className="text-[14px] font-semibold text-ink-900">تعليمات المكالمات الواردة</h3>
           <p className="text-[11.5px] text-ink-500 mt-0.5 leading-relaxed">
             عند تعبئتها، يبني النشر مساعداً منفصلاً للمكالمات الواردة، فاربط الرقم الوارد به. وإن تُركت فارغة، تستخدم المكالمات الواردة نفس تعليمات الصادرة.
           </p>

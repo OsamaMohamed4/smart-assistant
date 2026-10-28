@@ -3,6 +3,7 @@ import { BookOpen } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { EmptyState } from '../components/ui/EmptyState';
 import { DocumentsManager } from '../components/companies/DocumentsManager';
+import { SiteImport } from '../components/companies/SiteImport';
 import { Label } from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { api } from '../lib/api';
@@ -20,6 +21,8 @@ export function KnowledgeBasesPage({ pinnedCompanyId }) {
   const { push } = useToast();
   const [companies, setCompanies] = useState([]);
   const [companyId, setCompanyId] = useState(pinnedCompanyId || null);
+  // Bumped when a website read ends, so the document list below shows its pages.
+  const [listVersion, setListVersion] = useState(0);
 
   useEffect(() => {
     if (pinnedCompanyId) { setCompanyId(pinnedCompanyId); return; }
@@ -68,13 +71,15 @@ export function KnowledgeBasesPage({ pinnedCompanyId }) {
               الملف الذي يحتاجه الاثنان يُرفع في المكانين. بعد أي تغيير اضغط «نشر» للشركة حتى يصل إلى المساعد الصوتي.
               وإن لم يكن في سيناريو الشركة تعليمات للمكالمات الواردة، فالمساعد واحد ويستخدم ملفات المكانين.
             </p>
+            {/* The company's own site is for both agents: its pages go into both places. */}
+            <SiteImport key={companyId} companyId={companyId} onDone={() => setListVersion((v) => v + 1)} />
             {KB_SECTIONS.map((s) => (
               <section key={s.audience} className="space-y-3">
                 <div>
                   <h2 className="text-[15px] font-semibold text-ink-900">{s.title}</h2>
                   <p className="text-[12px] text-ink-500 mt-0.5">{s.hint}</p>
                 </div>
-                <DocumentsManager companyId={companyId} companyName={activeCompany?.name || ''} audience={s.audience} />
+                <DocumentsManager key={`${companyId}-${s.audience}-${listVersion}`} companyId={companyId} companyName={activeCompany?.name || ''} audience={s.audience} />
               </section>
             ))}
           </>

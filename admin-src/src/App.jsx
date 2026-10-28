@@ -20,6 +20,7 @@ import { AuditPage } from './pages/AuditPage';
 import { RequestsPage } from './pages/RequestsPage';
 import { UsagePage } from './pages/UsagePage';
 import { WhatsappPage } from './pages/WhatsappPage';
+import { WhatsappBehaviorPage } from './pages/WhatsappBehaviorPage';
 import { InvoicesPage } from './pages/InvoicesPage';
 import { ToastProvider } from './components/ui/Toast';
 import { api, setUnauthenticatedHandler } from './lib/api';
@@ -168,10 +169,10 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
   // 'requests' is open to clients too: the leads are theirs to work.
   // 'usage' too: a client sees their own consumption, the server pins it.
   const allowedTabs = isWorkspace
-    ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'sessions', 'requests', 'campaigns', 'usage', 'invoices'])
+    ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'wabehavior', 'sessions', 'requests', 'campaigns', 'usage', 'invoices'])
     : isSuper
       ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'clients', 'whatsapp', 'sessions', 'requests', 'campaigns', 'usage', 'invoices', 'audit'])
-      : new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'sessions', 'requests', 'campaigns', 'usage', 'invoices']);
+      : new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'sessions', 'requests', 'campaigns', 'usage', 'invoices', 'wabehavior']);
   const activeTab = allowedTabs.has(tab) ? tab : 'dashboard';
 
   // A full page load, not a re-render: every page holds state for the company
@@ -215,6 +216,7 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         )}
         {activeTab === 'clients'   && isSuper && !isWorkspace && <ClientsPage />}
         {activeTab === 'whatsapp'  && isSuper && !isWorkspace && <WhatsappPage />}
+        {activeTab === 'wabehavior' && <WhatsappBehaviorPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'sessions'  && <SessionsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'requests'  && <RequestsPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'campaigns' && <CampaignsPage user={user} pinnedCompanyId={pinnedCompanyId} />}

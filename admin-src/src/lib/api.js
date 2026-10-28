@@ -57,6 +57,10 @@ export const api = {
   whatsappOverview  : (companyId) => request(`/api/whatsapp/overview?companyId=${encodeURIComponent(companyId || '')}`),
   companyWhatsapp   : (companyId) => request(`/api/companies/${companyId}/whatsapp`),
   saveCompanyWhatsapp: (companyId, body) => request(`/api/companies/${companyId}/whatsapp`, { method: 'PUT', body: JSON.stringify(body) }),
+  // WhatsApp behaviour (open to the company itself): its instructions, extra
+  // knowledge and weekly reply hours. Never touches the connection.
+  whatsappControls  : (companyId) => request(`/api/companies/${companyId}/whatsapp/controls`),
+  saveWhatsappControls: (companyId, body) => request(`/api/companies/${companyId}/whatsapp/controls`, { method: 'PUT', body: JSON.stringify(body) }),
   saveCompanyWhatsappToken: (companyId, token) => request(`/api/companies/${companyId}/whatsapp/token`, { method: 'PUT', body: JSON.stringify({ token }) }),
   // Forgotten password: request a link, check it, set the new password.
   forgotPassword    : (email) => request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
@@ -253,6 +257,9 @@ export const api = {
     return res.json();
   },
   deleteDocument    : (companyId, docId) => request(`/api/companies/${companyId}/documents/${docId}`, { method: 'DELETE' }),
+  // Read the company's own website into its knowledge base (and how far the read has got).
+  startSiteImport   : (companyId, url) => request(`/api/companies/${companyId}/documents/from-site`, { method: 'POST', body: JSON.stringify({ url }) }),
+  siteImportStatus  : (companyId) => request(`/api/companies/${companyId}/documents/from-site`),
   ragTest           : (companyId, query, audience) => request(`/api/companies/${companyId}/rag-test`, {
     method: 'POST', body: JSON.stringify({ query, audience }),
   }),

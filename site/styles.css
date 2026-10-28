@@ -6,34 +6,36 @@
    ink/brand tokens in tailwind.config.mjs, not admin-src/src/index.css.
    Changing anything here cannot affect /admin or /c/<id>.
 
-   ONE OFFICIAL BRAND COLOUR: --brand #765C36.
-   Every other bronze value below is a DERIVED tint or shade of it,
+   ONE OFFICIAL BRAND COLOUR: --brand #8439FF.
+   Every other violet value below is a DERIVED tint or shade of it,
    used as a design treatment. They are not official brand colours and
    must not be published as such.
    ============================================================ */
 
 :root {
   /* ── Official ── */
-  --brand:        #765C36;
+  --brand:        #8439FF;
+  --blue:         #0017E0;
+  --pink:         #FF93EE;
 
   /* ── Derived from --brand (design treatment, not brand colours) ── */
-  --b-100:        #F1E8DA;
-  --b-200:        #DECCAF;
-  --b-300:        #C5A677;   /* the only bronze legible on dark grounds */
-  --b-500:        #9B7946;
-  --b-700:        #5B4729;
+  --b-100:        #F1EAFF;
+  --b-200:        #DCCBFF;
+  --b-300:        #C3A2FF;   /* the only violet legible on dark grounds */
+  --b-500:        #6A2BD6;
+  --b-700:        #3D1A87;
 
-  /* ── Warm neutrals, hue-matched to the bronze ── */
-  --paper:        #FAF8F5;
+  /* ── Warm neutrals, hue-matched to the violet ── */
+  --paper:        #FAF9FD;
   --surface:      #FFFFFF;
-  --surface-2:    #F3EFE8;
-  --ink:          #1A150E;
-  --ink-2:        #4A4238;
-  --ink-3:        #7A7166;
-  --line:         #E6E0D6;
-  --line-2:       #D4CBBC;
-  --dark:         #14100A;
-  --dark-2:       #1F1913;
+  --surface-2:    #F3F1F8;
+  --ink:          #101010;
+  --ink-2:        #3F3D4A;
+  --ink-3:        #6F6C7C;
+  --line:         #E6E3EE;
+  --line-2:       #D3CFE0;
+  --dark:         #0B0B14;
+  --dark-2:       #14142A;
 
   /* ── Type ─────────────────────────────────────────────────
      --font-ar IS THE SINGLE SWAP POINT for the Arabic typeface.
@@ -136,12 +138,12 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
 .stroke {
   height: 2px;
   width: 120px;
-  background: linear-gradient(90deg, var(--brand), rgba(118, 92, 54, 0));
+  background: linear-gradient(90deg, var(--brand), rgba(132, 57, 255, 0));
   border-radius: 2px;
   border: 0;
   margin: 0;
 }
-[dir="rtl"] .stroke { background: linear-gradient(270deg, var(--brand), rgba(118, 92, 54, 0)); }
+[dir="rtl"] .stroke { background: linear-gradient(270deg, var(--brand), rgba(132, 57, 255, 0)); }
 .stroke.sm { width: 72px; }
 
 /* ── Buttons ───────────────────────────────────────────── */
@@ -161,14 +163,14 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
 .btn-ghost { background: transparent; color: var(--b-700); border-color: var(--line-2); }
 .btn-ghost:hover { border-color: var(--brand); color: var(--brand); }
 .btn-onDark { background: var(--b-300); color: var(--dark); }
-.btn-onDark:hover { background: #D8BF95; }
+.btn-onDark:hover { background: #D2BAFF; }
 
 /* ── Header ────────────────────────────────────────────── */
 .site-header {
   position: sticky;
   top: env(safe-area-inset-top, 0px);
   z-index: 100;
-  background: rgba(250, 248, 245, .92);
+  background: rgba(250, 249, 253, .92);
   backdrop-filter: saturate(180%) blur(12px);
   -webkit-backdrop-filter: saturate(180%) blur(12px);
   border-bottom: 1px solid var(--line);
@@ -383,22 +385,22 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
 /* ── Security, the one dark section ────────────────────── */
 .section-dark {
   background: var(--dark);
-  color: #EFE9DE;
+  color: #ECE8F6;
   border-top: 1px solid var(--dark-2);
 }
 .section-dark h2 { color: #FFFFFF; }
 .section-dark .eyebrow { color: var(--b-300); }
-.section-dark .lede { color: #C7BCA9; }
-/* The brand bronze measures only 3.0:1 here, so the dark ground uses the
-   derived 300 (8.3:1) for every bronze element. */
-.section-dark .stroke { background: linear-gradient(270deg, var(--b-300), rgba(197, 166, 119, 0)); }
-.sec-item { border-top: 1px solid #2E2619; padding-top: var(--s-4); }
+.section-dark .lede { color: #BDB8D0; }
+/* The brand violet measures low contrast here, so the dark ground uses the
+   derived 300 (8.3:1) for every violet element. */
+.section-dark .stroke { background: linear-gradient(270deg, var(--b-300), rgba(195, 162, 255, 0)); }
+.sec-item { border-top: 1px solid #1E1E3A; padding-top: var(--s-4); }
 .sec-item h3 { font-size: 16.5px; color: var(--b-300); margin-bottom: var(--s-1); }
-.sec-item p { font-size: 15px; color: #B7AB97; line-height: 1.7; }
+.sec-item p { font-size: 15px; color: #A9A5BD; line-height: 1.7; }
 .section-dark .disclaimer {
   margin-top: var(--s-7); padding-top: var(--s-5);
-  border-top: 1px solid #2E2619;
-  font-size: 14px; color: #8E8477; max-width: 62ch;
+  border-top: 1px solid #1E1E3A;
+  font-size: 14px; color: #8A869C; max-width: 62ch;
 }
 
 /* ── Contact ───────────────────────────────────────────── */
@@ -406,7 +408,7 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
 .contact h2 { margin-inline: auto; margin-bottom: var(--s-4); }
 .contact .lede { margin-inline: auto; margin-bottom: var(--s-6); }
 .contact .stroke { margin-inline: auto; margin-bottom: var(--s-5);
-  background: linear-gradient(90deg, rgba(118,92,54,0), var(--brand), rgba(118,92,54,0)); }
+  background: linear-gradient(90deg, rgba(132,57,255,0), var(--brand), rgba(132,57,255,0)); }
 .contact p { margin-inline: auto; }
 
 /* ── Footer ────────────────────────────────────────────── */
@@ -439,7 +441,7 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
 .legal-body strong { color: var(--ink-1); font-weight: 600; }
 /* An unresolved fact is marked so it cannot be published unnoticed. */
 .legal-todo {
-  background: #FDF3E3; border: 1px dashed var(--brand);
+  background: #F6EEFF; border: 1px dashed var(--brand);
   color: var(--brand); padding: 1px 8px; border-radius: 4px;
   font-size: 14px; unicode-bidi: isolate; direction: rtl;
 }
@@ -707,7 +709,7 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: var(--s-5);
-  box-shadow: 0 24px 60px -32px rgba(26, 21, 14, .28);
+  box-shadow: 0 24px 60px -32px rgba(16, 16, 16, .28);
 }
 .hv-head {
   display: flex; align-items: center; gap: var(--s-2);
@@ -719,8 +721,8 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
   animation: hv-pulse 1.8s ease-in-out infinite;
 }
 @keyframes hv-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(118, 92, 54, .45); opacity: 1; }
-  50%      { box-shadow: 0 0 0 7px rgba(118, 92, 54, 0); opacity: .55; }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(132, 57, 255, .45); opacity: 1; }
+  50%      { box-shadow: 0 0 0 7px rgba(132, 57, 255, 0); opacity: .55; }
 }
 .hv-eq { display: flex; align-items: flex-end; gap: 5px; height: 64px; margin-bottom: var(--s-5); }
 .hv-eq i {
@@ -778,7 +780,7 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
 .shots { position: relative; max-width: 560px; margin-inline: auto; }
 .stage {
   position: relative; min-height: clamp(460px, 90vw, 540px);
-  background: linear-gradient(140deg, var(--b-100), #E7D7BC);
+  background: linear-gradient(140deg, var(--b-100), #E4D3FF);
   border-radius: 18px; overflow: hidden;
 }
 .shot {
@@ -799,7 +801,7 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
 }
 .mock {
   background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
-  padding: var(--s-5); box-shadow: 0 20px 50px -34px rgba(26, 21, 14, .3);
+  padding: var(--s-5); box-shadow: 0 20px 50px -34px rgba(16, 16, 16, .3);
 }
 .mock-head {
   display: flex; align-items: center; gap: var(--s-2);
@@ -865,25 +867,25 @@ p { margin: 0; max-width: 58ch; }        /* Arabic measure */
 .vnote-wave i:nth-child(2n){animation-delay:.15s} .vnote-wave i:nth-child(3n){animation-delay:.3s}
 
 /* Collections card — dark variant, like the reference */
-.mock-dark { background: var(--dark); border-color: var(--dark-2); color: #EFE9DE; }
+.mock-dark { background: var(--dark); border-color: var(--dark-2); color: #ECE8F6; }
 .mock-dark .mock-head { color: var(--b-300); }
 .mock-dark .mock-head .dot { background: var(--b-300); }
-.mock-dark .dash-row { border-color: #2E2619; }
-.mock-dark .dash-row .k { color: #9A8E7C; }
-.mock-dark .dash-row .v { color: #F1E8DA; }
+.mock-dark .dash-row { border-color: #1E1E3A; }
+.mock-dark .dash-row .k { color: #8E8AA2; }
+.mock-dark .dash-row .v { color: #F1EAFF; }
 .mock-head .dstatus {
   margin-inline-start: auto; font-family: var(--font-ar); font-size: 11px; letter-spacing: 0;
   padding: 3px 10px; border-radius: 999px;
-  background: rgba(197, 166, 119, .16); color: var(--b-300); border: 1px solid rgba(197, 166, 119, .3);
+  background: rgba(195, 162, 255, .16); color: var(--b-300); border: 1px solid rgba(195, 162, 255, .3);
 }
-.dassist { display: flex; align-items: center; gap: 8px; margin: var(--s-3) 0; font-size: 13px; color: #B7AB97; }
+.dassist { display: flex; align-items: center; gap: 8px; margin: var(--s-3) 0; font-size: 13px; color: #A9A5BD; }
 .dassist-dots { display: inline-flex; gap: 3px; }
 .dassist-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--b-300); animation: dassist 1.2s ease-in-out infinite; }
 .dassist-dots i:nth-child(2){animation-delay:.2s} .dassist-dots i:nth-child(3){animation-delay:.4s}
 @keyframes dassist { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
-.dresult { margin: var(--s-2) 0 var(--s-3); padding: 9px 12px; border-radius: 8px; background: rgba(197, 166, 119, .12); color: var(--b-300); font-size: 14px; font-weight: 500; }
+.dresult { margin: var(--s-2) 0 var(--s-3); padding: 9px 12px; border-radius: 8px; background: rgba(195, 162, 255, .12); color: var(--b-300); font-size: 14px; font-weight: 500; }
 .dchips { display: flex; flex-wrap: wrap; gap: 8px; }
-.mock-dark .chip { background: rgba(197, 166, 119, .14); color: var(--b-300); border-color: rgba(197, 166, 119, .32); }
+.mock-dark .chip { background: rgba(195, 162, 255, .14); color: var(--b-300); border-color: rgba(195, 162, 255, .32); }
 
 /* Growth chart — "learns and improves" */
 .growth { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: var(--s-4); margin-bottom: var(--s-3); }

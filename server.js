@@ -617,8 +617,8 @@ async function claimPhoneOwnership({ companyId, phoneNumber, phoneNumberId, log 
 // request tool, services/whatsapp/requests.js). A call is run, its result
 // handed back, and the model asked once more for the reply itself -- with
 // tools off, so that answer is text.
-async function askGPT(company, message, history, vars, { inbound = false, tools = null, runTool = null } = {}) {
-  const systemContent = await buildSystemPromptWithRAG(company, message, vars, { inbound });
+async function askGPT(company, message, history, vars, { inbound = false, channel = null, tools = null, runTool = null } = {}) {
+  const systemContent = await buildSystemPromptWithRAG(company, message, vars, { inbound, channel });
   const messages = [
     { role: 'system', content: systemContent },
     ...history,
@@ -1060,7 +1060,7 @@ const whatsappDeps = () => ({
   listCompanies: listCompaniesFull,
   loadSessionHistory, checkAndBumpUsage, dailyCap,
   // A customer who writes first is answered as an inbound caller would be.
-  askReply: (company, text, history, vars, opts = {}) => askGPT(company, text, history, vars, { ...opts, inbound: true }),
+  askReply: (company, text, history, vars, opts = {}) => askGPT(company, text, history, vars, { ...opts, inbound: true, channel: 'whatsapp' }),
 });
 
 // The last events LoopChat delivered and what became of each, newest first,
@@ -2189,6 +2189,112 @@ app.delete('/api/companies/:id/documents/:docId', requireCompanyAccess, async (r
   res.json({ deleted: 1 });
 });
 
+// ─── Knowledge base from the company's own website ──────────────────
+// The company gives its site's address; the server reads the pages (lib/site-
+// crawler.js) and stores each as a knowledge-base document, exactly as if the
+// text had been uploaded. Reading again REPLACES the earlier pages of that
+// site -- and only once the new ones are in, so a failed read never empties
+// the knowledge base. Documents the company uploaded by hand are never touched.
+// The progress of the read is held in memory (one read per company at a time);
+// what survives a restart is the documents and the address, kept in settings.
+const siteCrawler = require('./lib/site-crawler');
+const siteJobs = new Map();   // companyId -> { state, url, found, queued, added, failed, ... }
+
+async function replaceSiteDocuments(companyId, prefix, keepIds) {
+  const old = (await sql.listDocuments.all(companyId))
+    .filter((d) => String(d.filename || '').startsWith(prefix) && !keepIds.has(d.id));
+  for (const d of old) {
+    await withTransaction(async () => {
+      await sql.deleteDocument.run(d.id);
+      await sql.purgeDocumentChunks.run(d.id);
+    });
+  }
+  if (old.length) invalidateChunkCache(companyId);
+  return old.length;
+}
+
+async function runSiteImport(company, job) {
+  const prefix = siteCrawler.docPrefix(job.url);
+  try {
+    const crawl = await siteCrawler.crawlSite({
+      startUrl: job.url,
+      onProgress: (p) => { job.found = p.pages; job.queued = p.queued; job.skipped = p.skipped; },
+    });
+    if (crawl.scriptRendered && !crawl.pages.length) {
+      throw new Error('هذا الموقع يرسم محتواه بالجافاسكربت في المتصفح، فلا يوجد نص في صفحاته يمكن قراءته. أرسل لنا رابط واجهة بيانات الموقع (API) أو ارفع ملفات المشاريع يدوياً.');
+    }
+    const pages = siteCrawler.dropRepeatedLines(crawl.pages);
+    if (!pages.length) throw new Error('لم نجد في الموقع صفحات فيها نص يمكن قراءته. تأكد من الرابط وأنه يفتح بدون تسجيل دخول.');
+
+    job.state = 'saving';
+    job.total = pages.length;
+    const keep = new Set();
+    for (const page of pages) {
+      try {
+        const buffer = Buffer.from(siteCrawler.pageDocument(page), 'utf8');
+        // The company's own site is for both of its agents: each page goes
+        // into both halves of the knowledge base (lib/kb-audience.js).
+        for (const audience of ['inbound', 'outbound']) {
+          const r = await ingestDocument({
+            companyId: company.id, filename: siteCrawler.docName(job.url, page), mime: 'text/plain', buffer, audience,
+          });
+          keep.add(r.documentId);
+        }
+        job.added += 1;
+      } catch (e) {
+        job.failed += 1;
+        logger.warn('site import: page not stored', { companyId: company.id, url: page.url, err: e.message });
+      }
+    }
+    if (!job.added) throw new Error('تعذّر حفظ صفحات الموقع في قاعدة المعرفة الآن. حاول مرة أخرى بعد قليل.');
+
+    job.replaced = await replaceSiteDocuments(company.id, prefix, keep);
+
+    const row = await sql.getCompany.get(company.id);
+    let existing = {};
+    try { if (row?.settings) existing = JSON.parse(row.settings) || {}; } catch {}
+    existing.kbSite = { url: job.url, lastReadAt: new Date().toISOString(), pages: job.added };
+    await sql.updateCompanySettings.run({ id: company.id, settings: JSON.stringify(existing) });
+    invalidateCache();
+    job.state = 'done';
+  } catch (e) {
+    const forUser = /[؀-ۿ]/.test(String(e.message || ''));
+    job.state = 'failed';
+    job.error = forUser ? e.message : 'تعذّرت قراءة الموقع. تأكد من الرابط وحاول مرة أخرى.';
+    logger.warn('site import failed', { companyId: company.id, url: job.url, err: e.message });
+  } finally {
+    job.finishedAt = Date.now();
+  }
+}
+
+app.post('/api/companies/:id/documents/from-site', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  let url = String(req.body?.url || '').trim();
+  if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
+  const safe = isSafeUrl(url);
+  if (!safe.ok) return res.status(400).json({ error: safe.reason });
+  const running = siteJobs.get(c.id);
+  if (running && (running.state === 'reading' || running.state === 'saving')) {
+    return res.status(409).json({ error: 'تجري قراءة الموقع الآن. انتظر حتى تنتهي.' });
+  }
+  const job = {
+    state: 'reading', url, found: 0, queued: 0, skipped: 0, total: 0, added: 0, failed: 0, replaced: 0,
+    startedAt: Date.now(), finishedAt: null, error: null,
+  };
+  siteJobs.set(c.id, job);
+  audit(req, 'kb.site_import', `companies/${c.id}`, { url });
+  runSiteImport(c, job).catch((e) => logger.error('site import crashed', { err: e.message }));
+  res.status(202).json({ started: true });
+});
+
+app.get('/api/companies/:id/documents/from-site', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  const job = siteJobs.get(c.id) || null;
+  res.json({ site: c.settings?.kbSite || null, job });
+});
+
 // Download the original document if available, otherwise fallback to extracted text.
 app.get('/api/companies/:id/documents/:docId/download', requireCompanyAccess, async (req, res) => {
   const doc = await sql.getDocument.get(req.params.docId);
@@ -2398,6 +2504,55 @@ app.put('/api/companies/:id/whatsapp', requireCompanyAdmin, async (req, res) => 
   });
   const s = whatsapp.settingsOf({ settings: merged });
   res.json({ channelId: s.channelId, autoReply: s.autoReply, followup: s.followup });
+});
+
+// ─── WhatsApp behaviour: what the assistant says, knows, and when it answers ──
+// Open to the company itself (a workspace user), not only a superadmin: these
+// are the company's own words and hours. Everything about the CONNECTION --
+// the number, the LoopChat key, the follow-up template -- stays superadmin-only
+// above. Saved inside the company's settings, so no table is touched, and the
+// voice agents never read any of it.
+const waSchedule = require('./services/whatsapp/schedule');
+function whatsappControlsOf(c) {
+  const s = whatsapp.settingsOf(c);
+  const cs = c.settings || {};
+  return {
+    connected : !!s.channelId,
+    autoReply : s.autoReply && !!s.channelId,
+    prompt    : String(cs.whatsappPrompt || ''),
+    knowledge : String(cs.whatsappKnowledge || ''),
+    schedule  : s.schedule || { enabled: false, days: waSchedule.defaultDays() },
+    openNow   : waSchedule.isOpenNow(s.schedule),
+    limits    : { prompt: waSchedule.PROMPT_MAX, knowledge: waSchedule.KNOWLEDGE_MAX },
+  };
+}
+
+app.get('/api/companies/:id/whatsapp/controls', requireCompanyAccess, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  res.json(whatsappControlsOf(c));
+});
+
+app.put('/api/companies/:id/whatsapp/controls', requireCompanyAccess, async (req, res) => {
+  const row = await sql.getCompany.get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const v = waSchedule.validateControls(req.body);
+  if (v.error) return res.status(400).json({ error: v.error });
+  let existing = {};
+  try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
+  const merged = { ...existing, ...v.settings };
+  if (req.body?.autoReply !== undefined) {
+    // Same rule as the superadmin screen: on only when a number is connected.
+    merged.whatsappAutoReply = req.body.autoReply === true && !!whatsapp.settingsOf({ settings: existing }).channelId;
+  }
+  await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify(merged) });
+  invalidateCache();
+  audit(req, 'company.whatsapp_controls', `companies/${row.id}`, {
+    autoReply: merged.whatsappAutoReply === true,
+    schedule: merged.whatsappSchedule?.enabled ? 'on' : 'off',
+    promptSet: !!merged.whatsappPrompt, knowledgeSet: !!merged.whatsappKnowledge,
+  });
+  res.json(whatsappControlsOf(await loadCompany(row.id)));
 });
 
 // The company's own LoopChat Integration Token: one token reaches one LoopChat

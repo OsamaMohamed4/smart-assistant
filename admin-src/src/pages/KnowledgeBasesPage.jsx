@@ -10,6 +10,12 @@ import { api } from '../lib/api';
 // Knowledge base management as a first-class sidebar page (matches sarj's
 // layout). Superadmin sees a company switcher; clients are pinned to their
 // workspace and skip straight to their company's documents.
+//
+// Two knowledge bases per company, one per agent (lib/kb-audience.js).
+const KB_SECTIONS = [
+  { audience: 'inbound', title: 'ملفات المكالمات الواردة وواتساب', hint: 'ما يعرفه المساعد حين يتصل العميل أو يراسل الشركة على واتساب.' },
+  { audience: 'outbound', title: 'ملفات المكالمات الصادرة', hint: 'ما يعرفه المساعد حين يتصل هو بالعميل، كالحملات.' },
+];
 export function KnowledgeBasesPage({ pinnedCompanyId }) {
   const { push } = useToast();
   const [companies, setCompanies] = useState([]);
@@ -48,7 +54,7 @@ export function KnowledgeBasesPage({ pinnedCompanyId }) {
         }
       />
 
-      <div className="px-8 py-7 max-w-3xl">
+      <div className="px-8 py-7 max-w-3xl space-y-8">
         {!companyId ? (
           <EmptyState
             icon={BookOpen}
@@ -56,7 +62,22 @@ export function KnowledgeBasesPage({ pinnedCompanyId }) {
             description="أنشئ شركة من تبويب الشركات أولاً."
           />
         ) : (
-          <DocumentsManager companyId={companyId} companyName={activeCompany?.name || ''} />
+          <>
+            <p className="text-[12.5px] text-ink-500 leading-relaxed">
+              لكل شركة قاعدتا معرفة: واحدة لمساعد المكالمات الواردة وواتساب، وواحدة لمساعد المكالمات الصادرة، ولا يرى أحدهما ملفات الآخر.
+              الملف الذي يحتاجه الاثنان يُرفع في المكانين. بعد أي تغيير اضغط «نشر» للشركة حتى يصل إلى المساعد الصوتي.
+              وإن لم يكن في سيناريو الشركة تعليمات للمكالمات الواردة، فالمساعد واحد ويستخدم ملفات المكانين.
+            </p>
+            {KB_SECTIONS.map((s) => (
+              <section key={s.audience} className="space-y-3">
+                <div>
+                  <h2 className="text-[15px] font-semibold text-ink-900">{s.title}</h2>
+                  <p className="text-[12px] text-ink-500 mt-0.5">{s.hint}</p>
+                </div>
+                <DocumentsManager companyId={companyId} companyName={activeCompany?.name || ''} audience={s.audience} />
+              </section>
+            ))}
+          </>
         )}
       </div>
     </div>

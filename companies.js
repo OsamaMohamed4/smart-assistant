@@ -3,6 +3,7 @@ const { MASTER_PROMPT } = require('./lib/master-prompt');
 const { parseBusinessProfile } = require('./lib/business-profile');
 const { resolveVoiceId, VOICES, DEFAULT_VOICE_ID } = require('./lib/voices');
 const { foldPresentationForms } = require('./lib/pdf-text');
+const { scenarioAudience } = require('./lib/kb-audience');
 
 const cache = new Map();
 
@@ -57,7 +58,10 @@ async function buildSystemPromptWithRAG(company, userQuery, vars, { inbound = fa
   if (!chunkCount) return base;
   try {
     const { retrieve, formatChunksForPrompt } = require('./lib/rag');
-    const chunks = await retrieve(company.id, userQuery);
+    // The documents of the agent whose instructions these are: inbound for a
+    // customer who wrote first (WhatsApp), as for an inbound call.
+    const audience = scenarioAudience(scenario, inbound);
+    const chunks = await retrieve(company.id, userQuery, { audience });
     if (!chunks.length) return base;
     return foldPresentationForms(base + formatChunksForPrompt(chunks));
   } catch (e) {

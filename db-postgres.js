@@ -511,9 +511,9 @@ const sql = {
 
   // ─── RAG: documents + chunks ─────────────────────────────
   insertDocument: stmt(
-    `INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    ['company_id', 'filename', 'mime_type', 'size_bytes', 'raw_text', 'raw_data'],
+    `INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    ['company_id', 'filename', 'mime_type', 'size_bytes', 'raw_text', 'raw_data', 'audience'],
   ),
   insertChunk: stmt(
     `INSERT INTO kb_chunks (company_id, document_id, chunk_index, text, embedding, token_count)
@@ -522,7 +522,7 @@ const sql = {
     { embedding: bufferToVecLiteral },
   ),
   listDocuments: stmt(`
-    SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at,
+    SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at, d.audience,
            (SELECT COUNT(*)::int FROM kb_chunks WHERE document_id = d.id) AS chunk_count
       FROM kb_documents d
      WHERE d.company_id = $1 AND d.deleted_at IS NULL
@@ -538,14 +538,16 @@ const sql = {
     SELECT id, chunk_index, text, token_count
       FROM kb_chunks WHERE document_id = $1 ORDER BY chunk_index ASC`),
   listCompanyChunkTexts: stmt(`
-    SELECT id, document_id, text FROM kb_chunks WHERE company_id = $1`),
+    SELECT c.id, c.document_id, c.text, d.audience
+      FROM kb_chunks c JOIN kb_documents d ON d.id = c.document_id
+     WHERE c.company_id = $1`),
   updateChunkEmbedding: stmt(
     `UPDATE kb_chunks SET embedding = $1::vector WHERE id = $2`,
     ['embedding', 'id'],
     { embedding: bufferToVecLiteral },
   ),
   listAllChunksForCompany: stmt(`
-    SELECT c.id, c.document_id, c.chunk_index, c.text, d.filename
+    SELECT c.id, c.document_id, c.chunk_index, c.text, d.filename, d.audience
       FROM kb_chunks c
       JOIN kb_documents d ON d.id = c.document_id
      WHERE c.company_id = $1 AND d.deleted_at IS NULL

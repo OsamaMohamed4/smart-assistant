@@ -12,6 +12,7 @@ const { db, sql, get: dataGet, all: dataAll, run: dataRun, withTransaction, init
 const { loadCompany, listCompaniesFull, invalidateCache, buildSystemPromptWithRAG, fillGlobals } = require('./companies');
 const { summarize, chatToTranscript } = require('./summarize');
 const { ingestDocument, retrieve, repairMojibake, invalidateChunkCache } = require('./lib/rag');
+const { scenarioAudience, inAudience, validAudience } = require('./lib/kb-audience');
 const { END_CALL_TOOL_RULE } = require('./lib/master-prompt');
 const { foldPresentationForms } = require('./lib/pdf-text');
 const { renderFactsBlock, businessProfileSchema, parseBusinessProfile } = require('./lib/business-profile');
@@ -682,7 +683,10 @@ const {
 function resolveAgentModel(company) {
   return resolveModelSettings(company?.settings);
 }
-async function composeSystemPrompt(company, instructionPrompt) {
+// `audience`: whose documents go in -- the inbound or the outbound agent's
+// (lib/kb-audience.js); null puts in all of the company's, for a single
+// agent answering both directions.
+async function composeSystemPrompt(company, instructionPrompt, { audience = null } = {}) {
   // A scenario saved from an earlier composed prompt can carry the hang-up
   // block already; it is appended once, below, so any copy inside the
   // operator's text goes. The block is platform wiring, not their wording.
@@ -696,7 +700,11 @@ async function composeSystemPrompt(company, instructionPrompt) {
   // Behaviour stays operator-authored — this block states data only.
   systemContent += renderFactsBlock(company, company.businessProfile);
 
-  const chunks = await sql.listAllChunksForCompany.all(company.id);
+  // A document in both halves is put in once.
+  const seenText = new Set();
+  const chunks = (await sql.listAllChunksForCompany.all(company.id))
+    .filter((ch) => inAudience(ch, audience))
+    .filter((ch) => (seenText.has(ch.text) ? false : seenText.add(ch.text)));
   if (chunks.length) {
     const header = '\n\n---\n\n## قاعدة معرفة الشركة\n\nاستخدم المعلومات التالية كمصدر حقائق رسمي. لا تختلق أسعاراً أو معلومات غير موجودة هنا:\n\n';
     const segs = chunks.map((ch, i) => ({
@@ -1940,7 +1948,7 @@ app.get('/api/companies/:id/publish-preview', requireCompanyAccess, async (req, 
     });
   }
   const scenario = shapeScenario(scenarioRow);
-  const prompt = await composeSystemPrompt(c, scenario.instructionPrompt);
+  const prompt = await composeSystemPrompt(c, scenario.instructionPrompt, { audience: scenarioAudience(scenarioRow, false) });
   const factsBlock = renderFactsBlock(c, c.businessProfile);
 
   const s = c.settings || {};
@@ -2108,6 +2116,9 @@ app.post('/api/companies/:id/documents', requireCompanyAccess, uploadDocument, a
   // Multer stores originalname as latin1 bytes; decode to UTF-8 so Arabic /
   // Unicode filenames display correctly instead of appearing as mojibake.
   const filename = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+  // Which of the company's two knowledge bases it goes in (lib/kb-audience.js).
+  const audience = validAudience(req.body?.audience ?? req.query.audience);
+  if (!audience) return res.status(400).json({ error: 'حدّد لمن الملف: المكالمات الواردة وواتساب، أو المكالمات الصادرة.' });
 
   try {
     const result = await ingestDocument({
@@ -2115,9 +2126,11 @@ app.post('/api/companies/:id/documents', requireCompanyAccess, uploadDocument, a
       filename,
       mime     : req.file.mimetype,
       buffer   : req.file.buffer,
+      audience,
     });
     res.status(201).json({
       documentId  : result.documentId,
+      audience,
       filename,
       chunkCount  : result.chunkCount,
       textLength  : result.textLength,
@@ -2151,8 +2164,10 @@ function extractionQuality(chunkCount, textLength, sizeBytes) {
   return { level: 'ok', message: '' };
 }
 
+// ?audience=inbound|outbound lists one of the two knowledge bases.
 app.get('/api/companies/:id/documents', requireCompanyAccess, async (req, res) => {
-  res.json((await sql.listDocuments.all(req.params.id)).map((d) => ({
+  const audience = validAudience(req.query.audience);
+  res.json((await sql.listDocuments.all(req.params.id)).filter((d) => inAudience(d, audience)).map((d) => ({
     ...d,
     quality: extractionQuality(d.chunk_count, (d.chunk_count || 0) * 200, d.size_bytes),
   })));
@@ -3075,7 +3090,9 @@ app.post('/api/companies/:id/scenarios/test-draft', chatLimiter, requireCompanyA
     .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
     .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_MSG_CHARS) }));
 
-  const systemContent = await composeSystemPrompt(c, draft);
+  // The draft is the scenario's main (outbound) instructions.
+  const active = await sql.getActiveScenarioForCompany.get(c.id);
+  const systemContent = await composeSystemPrompt(c, draft, { audience: scenarioAudience(active, false) });
   try {
     const t0 = Date.now();
     // The whole point of the draft tester is to preview what will ship, so it
@@ -3103,12 +3120,11 @@ app.post('/api/companies/:id/scenarios/preview-prompt', requireCompanyAccess, as
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
   let prompt = req.body?.instructionPrompt;
-  if (prompt === undefined) {
-    const row = await sql.getActiveScenarioForCompany.get(c.id);
-    prompt = row?.instruction_prompt || '';
-  }
-  const composed = await composeSystemPrompt(c, String(prompt).slice(0, 30000));
-  const chunks = await sql.listAllChunksForCompany.all(c.id);
+  const row = await sql.getActiveScenarioForCompany.get(c.id);
+  if (prompt === undefined) prompt = row?.instruction_prompt || '';
+  const audience = scenarioAudience(row, false);
+  const composed = await composeSystemPrompt(c, String(prompt).slice(0, 30000), { audience });
+  const chunks = (await sql.listAllChunksForCompany.all(c.id)).filter((ch) => inAudience(ch, audience));
   res.json({
     prompt    : composed,
     length    : composed.length,
@@ -3296,7 +3312,8 @@ app.post('/api/companies/:id/rag-test', requireCompanyAccess, async (req, res) =
   if (!query) return res.status(400).json({ error: 'query required' });
 
   try {
-    const chunks = await retrieve(c.id, query, { topK: 6, minScore: 0.0 });
+    // One of the two knowledge bases, as its agent would search it.
+    const chunks = await retrieve(c.id, query, { topK: 6, minScore: 0.0, audience: validAudience(req.body?.audience) });
     res.json({
       query,
       chunks: chunks.map((ch) => ({

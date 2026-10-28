@@ -167,7 +167,7 @@ test('a text file saved as "Unicode" (UTF-16) is read, not turned into NULs', as
 
 test('what is stored has no NUL in it', async () => {
   const body = 'مشروع الواحة السكني في شمال الرياض، شقق وفلل جاهزة للسكن.\u0000 '.repeat(4);
-  const r = await rag.ingestDocument({ companyId: 'kb-co', filename: 'nul.txt', mime: 'text/plain', buffer: Buffer.from(body) });
+  const r = await rag.ingestDocument({ companyId: 'kb-co', filename: 'nul.txt', mime: 'text/plain', buffer: Buffer.from(body), audience: 'inbound' });
   const doc = db.prepare('SELECT raw_text FROM kb_documents WHERE id = ?').get(r.documentId);
   assert.ok(!doc.raw_text.includes('\u0000'));
   for (const c of db.prepare('SELECT text FROM kb_chunks WHERE document_id = ?').all(r.documentId)) {
@@ -176,14 +176,14 @@ test('what is stored has no NUL in it', async () => {
 });
 
 test('a file with too little text says why, in Arabic', async () => {
-  await assert.rejects(rag.ingestDocument({ companyId: 'kb-co', filename: 'scan.pdf', mime: 'application/pdf', buffer: makePdf(['x']) }),
+  await assert.rejects(rag.ingestDocument({ companyId: 'kb-co', filename: 'scan.pdf', mime: 'application/pdf', buffer: makePdf(['x']), audience: 'inbound' }),
     (e) => ARABIC.test(e.message));
 });
 
 // ─── The whole ingest ─────────────────────────────────────────────
 test('a PDF ingests into a document and its searchable chunks', async () => {
   const lines = Array.from({ length: 6 }, (_, i) => `${LINES[i % LINES.length]} Section ${i + 1}.`);
-  const r = await rag.ingestDocument({ companyId: 'kb-co', filename: 'كتيب.pdf', mime: 'application/pdf', buffer: makePdf(lines) });
+  const r = await rag.ingestDocument({ companyId: 'kb-co', filename: 'كتيب.pdf', mime: 'application/pdf', buffer: makePdf(lines), audience: 'outbound' });
   assert.ok(r.documentId > 0);
   assert.ok(r.chunkCount >= 1);
   const doc = await sql.getDocument.get(r.documentId);
@@ -199,10 +199,64 @@ test('when indexing fails, nothing half-done is left in the knowledge base', asy
   embeddingsFail = true;
   try {
     const lines = Array.from({ length: 6 }, (_, i) => `${LINES[i % LINES.length]} Part ${i + 1}.`);
-    await assert.rejects(rag.ingestDocument({ companyId: 'kb-co', filename: 'b.pdf', mime: 'application/pdf', buffer: makePdf(lines) }),
+    await assert.rejects(rag.ingestDocument({ companyId: 'kb-co', filename: 'b.pdf', mime: 'application/pdf', buffer: makePdf(lines), audience: 'outbound' }),
       (e) => ARABIC.test(e.message));
   } finally {
     embeddingsFail = false;
   }
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM kb_documents').get().n, before);
+});
+
+// ─── Two knowledge bases: inbound (and WhatsApp), outbound ───────
+const txt = (s) => Buffer.from(s.repeat(3));
+const OASIS = 'مشروع الواحة السكني في حي النرجس، فلل بأسعار تبدأ من تسعمائة ألف ريال. ';
+const CAMPAIGN = 'عرض حملة الخريف على شقق حي الملقا، خصم عشرة بالمئة لأول عشرين عميل. ';
+const SHARED = 'ساعات العمل من الأحد إلى الخميس، من التاسعة صباحاً حتى الخامسة مساءً. ';
+
+test('a document goes into one of the two knowledge bases; an upload naming neither is refused in Arabic', async () => {
+  db.prepare("INSERT INTO companies (id, name, language, system_prompt) VALUES ('kb-split', 'شركة', 'ar', '')").run();
+  await assert.rejects(rag.ingestDocument({ companyId: 'kb-split', filename: 'x.txt', mime: 'text/plain', buffer: txt(OASIS) }),
+    (e) => ARABIC.test(e.message));
+  const a = await rag.ingestDocument({ companyId: 'kb-split', filename: 'الواحة.txt', mime: 'text/plain', buffer: txt(OASIS), audience: 'inbound' });
+  const b = await rag.ingestDocument({ companyId: 'kb-split', filename: 'الحملة.txt', mime: 'text/plain', buffer: txt(CAMPAIGN), audience: 'outbound' });
+  assert.equal((await sql.getDocument.get(a.documentId)).audience, 'inbound');
+  assert.equal((await sql.getDocument.get(b.documentId)).audience, 'outbound');
+  const listed = await sql.listDocuments.all('kb-split');
+  assert.deepEqual(listed.map((d) => d.audience).sort(), ['inbound', 'outbound']);
+});
+
+test('each agent searches only its own half; across both, a text in both halves comes back once', async () => {
+  // The fake embeddings carry no meaning, so what is found is found by its words.
+  const docsOf = (aud) => new Set(db.prepare('SELECT id FROM kb_documents WHERE company_id = ? AND audience = ?').all('kb-split', aud).map((d) => d.id));
+  const inbound = await rag.retrieve('kb-split', 'مشروع الواحة', { topK: 10, audience: 'inbound' });
+  assert.ok(inbound.length && inbound.every((c) => docsOf('inbound').has(c.documentId)));
+  assert.deepEqual(await rag.retrieve('kb-split', 'مشروع الواحة', { topK: 10, audience: 'outbound' }), [],
+    'the outbound agent never sees an inbound document');
+  const outbound = await rag.retrieve('kb-split', 'حملة الخريف', { topK: 10, audience: 'outbound' });
+  assert.ok(outbound.length && outbound.every((c) => docsOf('outbound').has(c.documentId)));
+  assert.deepEqual(await rag.retrieve('kb-split', 'حملة الخريف', { topK: 10, audience: 'inbound' }), [],
+    'nor the inbound agent an outbound one');
+  // Both halves together -- a single agent answering both directions.
+  assert.equal((await rag.retrieve('kb-split', 'حملة الخريف', { topK: 10 })).length, outbound.length);
+
+  await rag.ingestDocument({ companyId: 'kb-split', filename: 'الدوام.txt', mime: 'text/plain', buffer: txt(SHARED), audience: 'inbound' });
+  await rag.ingestDocument({ companyId: 'kb-split', filename: 'الدوام.txt', mime: 'text/plain', buffer: txt(SHARED), audience: 'outbound' });
+  const both = await rag.retrieve('kb-split', 'ساعات العمل', { topK: 10 });
+  const texts = both.map((c) => c.text);
+  assert.equal(texts.length, new Set(texts).size, 'no text twice');
+  assert.ok(texts.some((t) => t.includes('ساعات العمل')));
+});
+
+test('whose half an agent reads: its own when the scenario has an inbound part, all of it when one agent does both', () => {
+  const { agentAudience, scenarioAudience } = require('../lib/kb-audience');
+  const company = { agentId: 'agent_out', agentIdInbound: 'agent_in' };
+  assert.equal(agentAudience(company, 'agent_in'), 'inbound');
+  assert.equal(agentAudience(company, 'agent_out'), 'outbound');
+  assert.equal(agentAudience(company, '{{system__agent_id}}'), null, 'an unfilled id searches everything rather than nothing');
+  assert.equal(agentAudience({ agentId: 'agent_out', agentIdInbound: null }, 'agent_out'), null, 'one agent answers both directions');
+  const withInbound = { instruction_prompt: 'صادر', instruction_prompt_inbound: 'وارد' };
+  assert.equal(scenarioAudience(withInbound, true), 'inbound');     // WhatsApp, inbound calls
+  assert.equal(scenarioAudience(withInbound, false), 'outbound');
+  assert.equal(scenarioAudience({ instruction_prompt: 'كل شيء', instruction_prompt_inbound: '  ' }, true), null);
+  assert.equal(scenarioAudience({ instructionPrompt: 'x', instructionPromptInbound: 'y' }, false), 'outbound', 'a shaped scenario too');
 });

@@ -907,6 +907,32 @@ if (!hasColumn('customer_requests', 'channel')) {
   `);
 }
 
+// Migration 50: a company's knowledge base splits in two -- what its inbound
+// agent (and WhatsApp) knows, and what its outbound agent knows; see
+// lib/kb-audience.js. A document uploaded before served both, so it becomes
+// two: the original for outbound calls and a copy, chunks and embeddings
+// included, for inbound -- nothing any agent knows changes until the
+// operator removes one. Postgres: lib/migrations-pg.js (split_kb_by_direction).
+if (!hasColumn('kb_documents', 'audience')) {
+  db.transaction(() => {
+    db.exec('ALTER TABLE kb_documents ADD COLUMN audience TEXT');
+    const copyDoc = db.prepare(`
+      INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, created_at, audience)
+      SELECT company_id, filename, mime_type, size_bytes, raw_text, raw_data, created_at, 'inbound'
+        FROM kb_documents WHERE id = ?`);
+    const copyChunks = db.prepare(`
+      INSERT INTO kb_chunks (company_id, document_id, chunk_index, text, embedding, token_count, created_at)
+      SELECT company_id, ?, chunk_index, text, embedding, token_count, created_at
+        FROM kb_chunks WHERE document_id = ? ORDER BY chunk_index`);
+    for (const d of db.prepare('SELECT id FROM kb_documents WHERE deleted_at IS NULL ORDER BY id').all()) {
+      const copy = copyDoc.run(d.id).lastInsertRowid;
+      copyChunks.run(copy, d.id);
+    }
+    db.prepare("UPDATE kb_documents SET audience = 'outbound' WHERE audience IS NULL").run();
+    db.prepare('INSERT INTO schema_migrations (id, name) VALUES (50, ?)').run('split_kb_by_direction');
+  })();
+}
+
 // ─── Tenant-safety: one company per phone number ──────────────────
 // A DID and an imported provider number each identify exactly ONE tenant.
 // Inbound calls are attributed by those values (services/voice resolves a call
@@ -1430,15 +1456,15 @@ const sql = {
 
   // ─── RAG: KB documents + chunks ──────────────────────────
   insertDocument     : db.prepare(`
-    INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data)
-    VALUES (@company_id, @filename, @mime_type, @size_bytes, @raw_text, @raw_data)
+    INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience)
+    VALUES (@company_id, @filename, @mime_type, @size_bytes, @raw_text, @raw_data, @audience)
   `),
   insertChunk        : db.prepare(`
     INSERT INTO kb_chunks (company_id, document_id, chunk_index, text, embedding, token_count)
     VALUES (@company_id, @document_id, @chunk_index, @text, @embedding, @token_count)
   `),
   listDocuments      : db.prepare(`
-    SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at,
+    SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at, d.audience,
            (SELECT COUNT(*) FROM kb_chunks WHERE document_id = d.id) AS chunk_count
     FROM kb_documents d
     WHERE d.company_id = ? AND d.deleted_at IS NULL
@@ -1458,9 +1484,12 @@ const sql = {
     SELECT id, chunk_index, text, token_count
     FROM kb_chunks WHERE document_id = ? ORDER BY chunk_index ASC
   `),
-  // Texts only (no embedding blobs) — keyword leg of the hybrid search.
+  // Texts only (no embedding blobs) — keyword leg of the hybrid search — with
+  // the audience of the document each belongs to (lib/kb-audience.js).
   listCompanyChunkTexts: db.prepare(`
-    SELECT id, document_id, text FROM kb_chunks WHERE company_id = ?
+    SELECT c.id, c.document_id, c.text, d.audience
+      FROM kb_chunks c JOIN kb_documents d ON d.id = c.document_id
+     WHERE c.company_id = ?
   `),
   updateChunkEmbedding: db.prepare(`
     UPDATE kb_chunks SET embedding = @embedding WHERE id = @id
@@ -1470,7 +1499,7 @@ const sql = {
   // cannot reach our DB while composing a reply, so we inline it once; the
   // in-call KB tool covers what the size cap had to truncate).
   listAllChunksForCompany: db.prepare(`
-    SELECT c.id, c.document_id, c.chunk_index, c.text, d.filename
+    SELECT c.id, c.document_id, c.chunk_index, c.text, d.filename, d.audience
       FROM kb_chunks c
       JOIN kb_documents d ON d.id = c.document_id
      WHERE c.company_id = ?

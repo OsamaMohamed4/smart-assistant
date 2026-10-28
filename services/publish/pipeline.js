@@ -161,9 +161,11 @@ async function publishCompany({ company, deps, actorEmail = null, log = null }) 
 
     // ── 3. compose the exact text the agent will run on ──────────
     const prompts = await rec.run(STEP.PROMPT_COMPOSE, true, async () => {
-      const main = await composeSystemPrompt(company, scenario.instructionPrompt);
+      // Each agent with its own half of the knowledge base; a single agent,
+      // answering both directions, with all of it (lib/kb-audience.js).
       const inboundRaw = (scenario.instructionPromptInbound || '').trim();
-      const inbound = inboundRaw ? await composeSystemPrompt(company, inboundRaw) : null;
+      const main = await composeSystemPrompt(company, scenario.instructionPrompt, { audience: inboundRaw ? 'outbound' : null });
+      const inbound = inboundRaw ? await composeSystemPrompt(company, inboundRaw, { audience: 'inbound' }) : null;
       return {
         value: { main, inbound },
         detail: `${main.length} chars${inbound ? ` (+${inbound.length} inbound)` : ''}`,

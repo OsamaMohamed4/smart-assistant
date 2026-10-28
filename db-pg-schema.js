@@ -200,7 +200,10 @@ CREATE TABLE IF NOT EXISTS kb_documents (
   raw_text     TEXT,
   raw_data     BYTEA,
   deleted_at   TEXT,
-  created_at   TEXT DEFAULT ${NOW_TEXT}
+  created_at   TEXT DEFAULT ${NOW_TEXT},
+  -- 'inbound' (inbound calls and WhatsApp) or 'outbound': which of the
+  -- company's two agents reads it. See lib/kb-audience.js.
+  audience     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_kbdocs_company ON kb_documents(company_id);
 

@@ -232,10 +232,12 @@ export const api = {
     method: 'POST', body: '{}',
   }),
 
-  // RAG: documents
-  listDocuments     : (companyId) => request(`/api/companies/${companyId}/documents`),
-  uploadDocument    : async (companyId, file) => {
+  // RAG: documents. `audience` picks one of the company's two knowledge
+  // bases: 'inbound' (inbound calls and WhatsApp) or 'outbound'.
+  listDocuments     : (companyId, audience) => request(`/api/companies/${companyId}/documents${audience ? `?audience=${audience}` : ''}`),
+  uploadDocument    : async (companyId, file, audience) => {
     const form = new FormData();
+    form.append('audience', audience);
     form.append('file', file);
     const res = await fetch(`/api/companies/${companyId}/documents`, {
       method: 'POST',
@@ -251,8 +253,8 @@ export const api = {
     return res.json();
   },
   deleteDocument    : (companyId, docId) => request(`/api/companies/${companyId}/documents/${docId}`, { method: 'DELETE' }),
-  ragTest           : (companyId, query) => request(`/api/companies/${companyId}/rag-test`, {
-    method: 'POST', body: JSON.stringify({ query }),
+  ragTest           : (companyId, query, audience) => request(`/api/companies/${companyId}/rag-test`, {
+    method: 'POST', body: JSON.stringify({ query, audience }),
   }),
 
   // Company facts (business profile). Saving does NOT change the live agent —

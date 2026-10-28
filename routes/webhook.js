@@ -16,6 +16,7 @@ const { logger } = require('../lib/logger');
 const { processCallEvent, drainWebhookInbox } = require('../services/call-events');
 const { dailyCap, checkAndBumpUsage } = require('../services/usage');
 const { featureEnabled } = require('../services/features/store');
+const { agentAudience } = require('../lib/kb-audience');
 const voice = require('../services/voice');
 
 const router = express.Router();
@@ -240,12 +241,14 @@ async function kbSearchAllowed(companyId, log) {
   return ok;
 }
 
-async function searchKb(companyId, query, log) {
+// `audience`: the inbound or outbound agent's documents (lib/kb-audience.js);
+// null searches all of the company's.
+async function searchKb(companyId, query, log, audience = null) {
   if (!companyId) return 'لا تتوفر قاعدة معرفة لهذه المكالمة.';
   if (!query) return 'لم يصل نص للبحث.';
   try {
     const { retrieve } = require('../lib/rag');
-    const chunks = await retrieve(companyId, query, { topK: 3 });
+    const chunks = await retrieve(companyId, query, { topK: 3, audience });
     if (!chunks.length) return 'لا توجد معلومات مطابقة في قاعدة المعرفة.';
     // Plain text back to the model; keep it inside a safe token budget.
     return chunks.map((c) => c.text.slice(0, 1200)).join('\n---\n').slice(0, 3800);
@@ -328,8 +331,12 @@ router.post('/elevenlabs/tools/kb', async (req, res) => {
   }
 
   const query = String(req.body?.query || '').trim().slice(0, 500);
-  const result = await searchKb(companyId, query, req.log);
-  req.log.info('kb tool handled', { companyId, chars: result.length });
+  // The calling agent's own half of the knowledge base: the provider fills
+  // agent_id, and authorizeToolCall has tied it to this company.
+  let audience = null;
+  try { audience = agentAudience(await require('../companies').loadCompany(companyId), req.body?.agent_id); } catch {}
+  const result = await searchKb(companyId, query, req.log, audience);
+  req.log.info('kb tool handled', { companyId, audience, chars: result.length });
   res.json({ result });
 });
 

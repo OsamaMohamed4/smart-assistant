@@ -10,7 +10,9 @@ import { cn, fmtNumber } from '../../lib/utils';
 const ACCEPT = '.pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown';
 const MAX_MB = 10;
 
-export function DocumentsManager({ companyId, companyName }) {
+// `audience`: which of the company's two knowledge bases this manages --
+// 'inbound' (inbound calls and WhatsApp) or 'outbound'.
+export function DocumentsManager({ companyId, companyName, audience }) {
   const { push } = useToast();
   const [docs, setDocs]         = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -21,10 +23,10 @@ export function DocumentsManager({ companyId, companyName }) {
   const replaceDocRef   = useRef(null);
 
   const load = async () => {
-    try { setDocs(await api.listDocuments(companyId)); }
+    try { setDocs(await api.listDocuments(companyId, audience)); }
     catch (e) { push(e.message, 'error'); }
   };
-  useEffect(() => { load(); }, [companyId]);
+  useEffect(() => { load(); }, [companyId, audience]);
 
   const handleFiles = async (files) => {
     const list = Array.from(files || []);
@@ -35,7 +37,7 @@ export function DocumentsManager({ companyId, companyName }) {
       }
       setUploading(true);
       try {
-        const r = await api.uploadDocument(companyId, file);
+        const r = await api.uploadDocument(companyId, file, audience);
         if (r.quality && r.quality.level !== 'ok') {
           // Big/empty extraction — warn instead of a plain success toast.
           push(`${file.name}: ${r.quality.message}`, r.quality.level === 'empty' ? 'error' : 'warning');
@@ -80,8 +82,8 @@ export function DocumentsManager({ companyId, companyName }) {
 
     setUploading(true);
     try {
-      // Upload the new file first
-      const r = await api.uploadDocument(companyId, file);
+      // Upload the new file first, into the same knowledge base
+      const r = await api.uploadDocument(companyId, file, audience);
       push(`تم استبدال ${oldDoc.filename} → ${file.name} (${fmtNumber(r.chunkCount)} مقطع)`, 'success');
       // Then delete the old one
       await api.deleteDocument(companyId, oldDoc.id).catch(() => {});
@@ -212,6 +214,7 @@ export function DocumentsManager({ companyId, companyName }) {
         onClose={() => setTestOpen(false)}
         companyId={companyId}
         companyName={companyName}
+        audience={audience}
       />
     </div>
   );
@@ -260,7 +263,7 @@ function DocRow({ doc, onDelete, onReplace, onDownload }) {
   );
 }
 
-function RAGTestModal({ open, onClose, companyId, companyName }) {
+function RAGTestModal({ open, onClose, companyId, companyName, audience }) {
   const [query, setQuery]   = useState('');
   const [busy, setBusy]     = useState(false);
   const [result, setResult] = useState(null);
@@ -278,7 +281,7 @@ function RAGTestModal({ open, onClose, companyId, companyName }) {
     if (!query.trim() || busy) return;
     setBusy(true); setResult(null);
     try {
-      const r = await api.ragTest(companyId, query.trim());
+      const r = await api.ragTest(companyId, query.trim(), audience);
       setResult(r);
     } catch (e) {
       setResult({ error: e.message });

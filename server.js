@@ -40,6 +40,7 @@ const whatsapp = require('./services/whatsapp');
 const estate = require('./services/estate');
 const loopchat = require('./services/whatsapp/loopchat');
 const invoices = require('./services/invoices');
+const waBilling = require('./lib/whatsapp-billing');
 const mailer = require('./lib/mailer');
 const { describeFeatures, setFeature, featureEnabled } = require('./services/features/store');
 const { startCampaignWorker, getWorkerHealth: getCampaignWorkerHealth } = require('./services/campaigns');
@@ -2616,7 +2617,8 @@ app.post('/api/mail/test', async (req, res) => {
 app.get('/api/companies/:id/contract', requireCompanyAdmin, async (req, res) => {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
-  res.json({ contract: invoices.contractOf(c), saved: !!c.settings?.contract });
+  // The WhatsApp packages to pick from: the client's table, from one place.
+  res.json({ contract: invoices.contractOf(c), saved: !!c.settings?.contract, whatsappPackages: waBilling.PACKAGES });
 });
 
 app.put('/api/companies/:id/contract', requireCompanyAdmin, async (req, res) => {
@@ -2628,7 +2630,7 @@ app.put('/api/companies/:id/contract', requireCompanyAdmin, async (req, res) => 
   try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
   await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify({ ...existing, contract: v.contract }) });
   invalidateCache();
-  audit(req, 'company.contract', `companies/${row.id}`, { startDate: v.contract.startDate, autoSend: v.contract.autoSend, vat: v.contract.vat });
+  audit(req, 'company.contract', `companies/${row.id}`, { startDate: v.contract.startDate, autoSend: v.contract.autoSend, vat: v.contract.vat, whatsapp: v.contract.whatsapp?.package || null });
   res.json({ contract: v.contract, saved: true });
 });
 
@@ -2713,6 +2715,11 @@ app.get('/api/usage', async (req, res) => {
     : await sql.listCompanyIdNames.all();
   const rows = await sql.usageByCompanyInRange.all({ from: range.from, to: range.to, company_id: companyId });
   const whatsappRows = await sql.whatsappUsageByCompanyInRange.all({ from: range.from, to: range.to, company_id: companyId });
+  // Conversations, counted exactly as the WhatsApp package bills them.
+  for (const w of whatsappRows) {
+    const msgs = await sql.listWhatsappForBilling.all({ company_id: w.company_id, from: range.from, to: range.to });
+    w.conversations = waBilling.countConversations(msgs, range.from, range.to).conversations;
+  }
   const report = buildUsageReport(rows, companies, { includeCredits: isSuper, whatsappRows });
   report.whatsappConnected = loopchat.isConfigured();
   report.rows.sort((x, y) => (y.inbound.seconds + y.outbound.seconds) - (x.inbound.seconds + x.outbound.seconds)

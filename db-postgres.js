@@ -880,6 +880,16 @@ const sql = {
       GROUP BY company_id`,
     ['from', 'to', 'company_id'],
   ),
+  // WhatsApp package counting -- see db-sqlite.js.
+  listWhatsappForBilling: stmt(
+    `SELECT contact_phone, created_at, direction FROM whatsapp_messages
+      WHERE company_id = $1 AND created_at < $3 AND contact_phone IS NOT NULL
+        AND (direction = 'in' OR status = 'sent')
+        AND contact_phone IN (SELECT contact_phone FROM whatsapp_messages
+                               WHERE company_id = $1 AND created_at >= $2 AND created_at < $3)
+      ORDER BY contact_phone, created_at, id`,
+    ['company_id', 'from', 'to'],
+  ),
   listRequestsForConversation: stmt(`
     SELECT request_type, customer_name FROM customer_requests
      WHERE company_id = $1 AND conversation_id = $2 ORDER BY id`),

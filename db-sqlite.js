@@ -1875,6 +1875,18 @@ const sql = {
        AND (@company_id IS NULL OR company_id = @company_id)
      GROUP BY company_id
   `),
+  // The messages that count towards a WhatsApp package (lib/whatsapp-billing.js):
+  // received, or sent and taken by LoopChat. Every number active in the
+  // period, with its earlier messages too, so a conversation already open when
+  // the period starts is seen whole and never counted twice.
+  listWhatsappForBilling: db.prepare(`
+    SELECT contact_phone, created_at, direction FROM whatsapp_messages
+     WHERE company_id = @company_id AND created_at < @to AND contact_phone IS NOT NULL
+       AND (direction = 'in' OR status = 'sent')
+       AND contact_phone IN (SELECT contact_phone FROM whatsapp_messages
+                              WHERE company_id = @company_id AND created_at >= @from AND created_at < @to)
+     ORDER BY contact_phone, created_at, id
+  `),
   listRequestsForConversation: db.prepare(`
     SELECT request_type, customer_name FROM customer_requests
      WHERE company_id = ? AND conversation_id = ? ORDER BY id

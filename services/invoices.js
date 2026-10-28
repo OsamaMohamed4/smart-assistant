@@ -11,6 +11,7 @@
 // Issuing takes a SNAPSHOT (lines, counts, terms, seller, buyer). The invoice
 // a company received never changes afterwards, whatever is edited later.
 const { computeInvoice, contractPeriod, unitsFor, DEFAULT_CONTRACT, sar } = require('../lib/invoice');
+const waBilling = require('../lib/whatsapp-billing');
 const { saudiMonthRange, currentSaudiMonth, TZ_OFFSET_HOURS } = require('../lib/usage-report');
 const mailer = require('../lib/mailer');
 
@@ -73,6 +74,10 @@ function validateContract(b) {
   const fee = Number(b?.monthlyFee ?? 0);
   if (!Number.isFinite(fee) || fee < 0) return { error: 'الرسوم الشهرية غير صحيحة' };
   out.monthlyFee = Math.round(fee * 100) / 100;
+  // The WhatsApp package, from the client's table (lib/whatsapp-billing.js).
+  const wa = waBilling.validate(b?.whatsapp);
+  if (wa.error) return { error: wa.error };
+  out.whatsapp = wa.whatsapp;
   out.vat = b?.vat === 'add' ? 'add' : 'none';
   out.vatRate = Number.isFinite(Number(b?.vatRate)) ? Math.min(100, Math.max(0, Number(b.vatRate))) : 15;
   const emails = (Array.isArray(b?.billingEmails) ? b.billingEmails : String(b?.billingEmails || '').split(/[,\s;]+/))
@@ -127,10 +132,18 @@ async function buildInvoice(company, month, deps) {
   const unitsBefore = unitsFor(before.map((r) => r.duration_sec), c);
   const month_ = await deps.sql.listOutboundDurations.all(company.id, from, to);
   const inbound = (await deps.sql.inboundTotals.get(company.id, from, to)) || { calls: 0, seconds: 0 };
+  // WhatsApp, when the contract names a package: its conversations and
+  // messages over the same period, priced by the package.
+  const waTerms = waBilling.termsOf(c);
+  const whatsapp = waTerms
+    ? waBilling.compute(waTerms, waBilling.countConversations(
+      await deps.sql.listWhatsappForBilling.all({ company_id: company.id, from, to }), from, to))
+    : null;
   const computed = computeInvoice({
     contract: c, unitsBefore,
     monthDurations: month_.map((r) => r.duration_sec),
     inbound: { calls: Number(inbound.calls) || 0, seconds: Number(inbound.seconds) || 0 },
+    whatsapp,
   });
   return {
     invoice: {
@@ -141,6 +154,7 @@ async function buildInvoice(company, month, deps) {
         startDate: period.start, endDate: saudiDate(stamp(fromStamp(endUtc) - 1000)), months: c.months,
         includedOutboundCalls: c.includedOutboundCalls, minBillableSeconds: c.minBillableSeconds,
         unitSeconds: c.unitSeconds, tiers: c.tiers, vat: c.vat, vatRate: c.vatRate, monthlyFee: c.monthlyFee,
+        whatsapp: waTerms,
       },
       computed,
     },
@@ -215,7 +229,25 @@ function invoiceRows(s) {
     rows.push([`مكالمات صادرة إضافية فوق ${num(s.contract.tiers.at(-1)?.upTo || 0)}`, `${num(c.outbound.beyondTiers)} مكالمة`, '—', 'حسب عرض السعر الخاص']);
   }
   if (c.monthlyFee > 0) rows.push(['الرسوم الشهرية', '1', sar(c.monthlyFee), sar(c.monthlyFee)]);
+  const w = c.whatsapp;
+  if (w) {
+    rows.push([`باقة واتساب ${w.labelAr} (${num(w.included.conversations)} محادثة و${num(w.included.messages)} رسالة)`, '1', sar(w.fee), sar(w.fee)]);
+    for (const l of w.lines) {
+      rows.push(l.key === 'conversations'
+        ? ['محادثات واتساب إضافية', `${num(l.units)} محادثة`, waBilling.unitSar(l.unitPrice), sar(l.amount)]
+        : ['رسائل واتساب إضافية', `${num(l.units)} رسالة`, waBilling.unitSar(l.unitPrice), sar(l.amount)]);
+    }
+  }
   return rows;
+}
+
+// The WhatsApp counts behind the lines, and how they are counted, in words.
+function whatsappNotes(w) {
+  if (!w) return [];
+  return [
+    `واتساب هذا الشهر: ${num(w.conversations)} محادثة و${num(w.messages)} رسالة. المشمول: ${num(w.included.conversations)} محادثة، ورسائل حتى ${num(w.messageAllowance)}${w.extraConversations ? ' مع رسائل المحادثات الإضافية' : ''}.`,
+    'طريقة الاحتساب: المحادثة رقم عميل واحد خلال 24 ساعة من أول رسالة، وتُحتسب إذا أرسل فيها المساعد رداً أو رسالة. رسائلها رسائل العميل والمساعد معاً، ولكل محادثة إضافية رسائلها من الباقة.',
+  ];
 }
 
 function renderInvoiceHtml(s, { siteUrl = null } = {}) {
@@ -275,6 +307,7 @@ function renderInvoiceHtml(s, { siteUrl = null } = {}) {
     <div>المكالمات الصادرة هذا الشهر: ${num(c.outbound.calls)}، تم الرد على ${num(c.outbound.answered)}، واحتُسب منها ${num(c.outbound.units)} مكالمة.</div>
     <div>الباقة: ${num(s.contract.includedOutboundCalls)} مكالمة صادرة ضمن العقد — المتبقي بعد هذا الشهر: ${num(c.outbound.includedLeft)}.</div>
     <div>طريقة الاحتساب: المكالمة من دقيقة إلى ${Math.round(s.contract.unitSeconds / 60)} دقائق تُحتسب مكالمة واحدة، وكل ${Math.round(s.contract.unitSeconds / 60)} دقائق إضافية مكالمة، والمكالمة الأقل من دقيقة لا تُحتسب. المكالمات الواردة غير محدودة.</div>
+    ${whatsappNotes(c.whatsapp).map((l) => `<div>${esc(l)}</div>`).join('')}
     <div>مدة العقد: من ${esc(arDate(s.contract.startDate))} إلى ${esc(arDate(s.contract.endDate))}.</div>
     ${c.needsQuote ? '<div style="color:#9B3B2B;">تجاوز عدد المكالمات الإضافية آخر شريحة، ويُسعَّر الزائد بموجب عرض سعر خاص.</div>' : ''}
   </td></tr>
@@ -298,6 +331,7 @@ function renderInvoiceText(s) {
     `المجموع قبل الضريبة: ${sar(c.subtotal)} ر.س`,
     c.vat > 0 ? `ضريبة القيمة المضافة (${c.vatRate}%): ${sar(c.vat)} ر.س` : null,
     `الإجمالي: ${sar(c.total)} ر.س`,
+    ...(c.whatsapp ? ['', ...whatsappNotes(c.whatsapp)] : []),
   ];
   return lines.filter((l) => l !== null).join('\n');
 }

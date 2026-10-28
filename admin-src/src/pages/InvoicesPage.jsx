@@ -32,6 +32,17 @@ const STATUS = {
 const inputCls = 'w-full h-10 px-3 rounded-xl border border-ink-200 bg-white text-[13px] focus-ring';
 const open = (url) => window.open(url, '_blank', 'noopener');
 
+// WhatsApp's Enterprise package is priced by agreement, so its figures are
+// entered per company (lib/whatsapp-billing.js).
+const WA_CUSTOM_EMPTY = { monthlyFee: '', conversations: '', messages: '', extraConversation: '', extraMessage: '' };
+const WA_CUSTOM_FIELDS = [
+  ['monthlyFee', 'السعر الشهري (ر.س)', '0.01'],
+  ['conversations', 'المحادثات المشمولة', '1'],
+  ['messages', 'الرسائل المشمولة', '1'],
+  ['extraConversation', 'سعر المحادثة الإضافية (ر.س)', '0.00001'],
+  ['extraMessage', 'سعر الرسالة الإضافية (ر.س)', '0.00001'],
+];
+
 export function InvoicesPage({ user, pinnedCompanyId }) {
   const isSuper = user?.role === 'superadmin' && !pinnedCompanyId;
   return isSuper ? <AdminInvoices /> : <CompanyInvoices companyId={pinnedCompanyId || user?.companyId} />;
@@ -116,6 +127,8 @@ function AdminInvoices() {
   const [companies, setCompanies] = useState([]);
   const [companyId, setCompanyId] = useState(null);
   const [contract, setContract] = useState(null);
+  // The WhatsApp packages (the client's table), as the server holds them.
+  const [waPackages, setWaPackages] = useState({});
   const [month, setMonth] = useState(months[1]?.value || months[0].value);
   const [preview, setPreview] = useState(null);
   const [previewError, setPreviewError] = useState('');
@@ -137,17 +150,23 @@ function AdminInvoices() {
   };
   useEffect(() => {
     if (!companyId) return;
-    api.companyContract(companyId).then((r) => setContract({
-      ...r.contract,
-      billingEmails: (r.contract.billingEmails || []).join(', '),
-      startDate: r.contract.startDate || '',
-    })).catch((e) => push(e.message, 'error'));
+    api.companyContract(companyId).then((r) => {
+      setWaPackages(r.whatsappPackages || {});
+      setContract({
+        ...r.contract,
+        billingEmails: (r.contract.billingEmails || []).join(', '),
+        startDate: r.contract.startDate || '',
+        whatsapp: { package: r.contract.whatsapp?.package || '', custom: { ...WA_CUSTOM_EMPTY, ...(r.contract.whatsapp?.custom || {}) } },
+      });
+    }).catch((e) => push(e.message, 'error'));
     loadList();
   }, [companyId]);
   useEffect(() => { loadPreview(); }, [companyId, month]);
 
   const set = (k) => (v) => setContract((c) => ({ ...c, [k]: v }));
   const setTier = (i, k, v) => setContract((c) => ({ ...c, tiers: c.tiers.map((t, j) => (j === i ? { ...t, [k]: v } : t)) }));
+  const setWa = (k) => (v) => setContract((c) => ({ ...c, whatsapp: { ...c.whatsapp, [k]: v } }));
+  const setWaCustom = (k) => (v) => setContract((c) => ({ ...c, whatsapp: { ...c.whatsapp, custom: { ...c.whatsapp.custom, [k]: v } } }));
 
   const saveContract = async () => {
     setBusy('contract');
@@ -158,6 +177,10 @@ function AdminInvoices() {
         minBillableSeconds: Number(contract.minBillableSeconds), unitSeconds: Number(contract.unitSeconds),
         monthlyFee: Number(contract.monthlyFee || 0), vatRate: Number(contract.vatRate || 0),
         tiers: contract.tiers.map((t) => ({ upTo: Number(t.upTo), price: Number(t.price) })),
+        whatsapp: contract.whatsapp.package ? {
+          package: contract.whatsapp.package,
+          custom: Object.fromEntries(Object.entries(contract.whatsapp.custom).map(([k, v]) => [k, Number(v)])),
+        } : null,
       };
       await api.saveCompanyContract(companyId, body);
       push('تم حفظ العقد', 'success');
@@ -220,6 +243,14 @@ function AdminInvoices() {
                 <Stat label="إضافية" value={n(c.outbound.extra)} hint={c.needsQuote ? 'جزء منها بعرض خاص' : ''} />
                 <Stat label="الإجمالي (ر.س)" value={fmtSar(c.total)} strong hint={c.vat ? `يشمل ضريبة ${fmtSar(c.vat)}` : 'قبل أي ضريبة'} />
               </div>
+              {c.whatsapp && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <Stat label={`محادثات واتساب (${c.whatsapp.labelAr})`} value={n(c.whatsapp.conversations)} hint={`المشمول ${n(c.whatsapp.included.conversations)}`} />
+                  <Stat label="رسائل واتساب" value={n(c.whatsapp.messages)} hint={`المشمول حتى ${n(c.whatsapp.messageAllowance)}`} />
+                  <Stat label="محادثات ورسائل إضافية" value={`${n(c.whatsapp.extraConversations)} · ${n(c.whatsapp.extraMessages)}`} />
+                  <Stat label="واتساب (ر.س)" value={fmtSar(c.whatsapp.total)} hint="الباقة والإضافي، قبل الضريبة" />
+                </div>
+              )}
               <div className="text-[12px] text-ink-500">
                 الفترة: {arDate(preview.period.from)} إلى {arDate(preview.period.to)} · الواردة: {n(c.inbound.calls)} مكالمة (غير محدودة)
               </div>
@@ -289,6 +320,35 @@ function AdminInvoices() {
               {contract.vat === 'add' && (
                 <div><Label>نسبة الضريبة (%)</Label><input type="number" min="0" max="100" value={contract.vatRate} onChange={(e) => set('vatRate')(e.target.value)} className={inputCls} /></div>
               )}
+            </div>
+
+            <div className="space-y-2">
+              <Label>باقة واتساب</Label>
+              <select value={contract.whatsapp.package} onChange={(e) => setWa('package')(e.target.value)} className={inputCls}>
+                <option value="">لا تُحتسب واتساب في الفاتورة</option>
+                {Object.entries(waPackages).map(([k, p]) => (
+                  <option key={k} value={k}>
+                    {p.labelAr} — {n(p.monthlyFee)} ر.س شهرياً: {n(p.conversations)} محادثة و{n(p.messages)} رسالة
+                  </option>
+                ))}
+                <option value="enterprise">Enterprise — تسعير خاص</option>
+              </select>
+              {waPackages[contract.whatsapp.package] && (
+                <p className="text-[11.5px] text-ink-500">
+                  المحادثة الإضافية {waPackages[contract.whatsapp.package].extraConversation} ر.س، والرسالة الإضافية {waPackages[contract.whatsapp.package].extraMessage} ر.س.
+                </p>
+              )}
+              {contract.whatsapp.package === 'enterprise' && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {WA_CUSTOM_FIELDS.map(([k, label, step]) => (
+                    <div key={k}><Label>{label}</Label><input type="number" min="0" step={step} value={contract.whatsapp.custom[k]} onChange={(e) => setWaCustom(k)(e.target.value)} className={inputCls} /></div>
+                  ))}
+                </div>
+              )}
+              <p className="text-[11.5px] text-ink-500 leading-relaxed">
+                المحادثة: رقم عميل واحد خلال 24 ساعة من أول رسالة، وتُحتسب إذا أرسل فيها المساعد رداً أو رسالة. رسائلها رسائل العميل والمساعد معاً.
+                لكل محادثة إضافية نصيبها من رسائل الباقة (8 رسائل في الباقات الأربع)، وما زاد على ذلك يُحتسب بسعر الرسالة.
+              </p>
             </div>
 
             <div>

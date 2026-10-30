@@ -20,6 +20,7 @@ process.env.LOOPCHAT_API_TOKEN = 'lc-test-token';
 // ─── Fake LoopChat ────────────────────────────────────────────────
 const sent = [];
 let sendResult = 'sent';
+let beforeAnswer = null;
 let matchedContact = 101;
 // LoopChat's per-conversation integration switch, by phone; absent = no contact.
 const integrationSwitch = new Map();
@@ -60,8 +61,11 @@ const fake = http.createServer((req, res) => {
       if (!account.channels.some((c) => c.id === ch)) {
         return json(422, { message: 'account_channel_id must belong to a WhatsApp Business API channel.', errors: { account_channel_id: ['account_channel_id must belong to a WhatsApp Business API channel.'] } });
       }
-      if (sendResult === 'sent') return json(202, { data: { status: 'sent', message_id: 900 + sent.length, contact_id: matchedContact, channel_id: ch } });
-      return json(202, { data: { status: 'failed', message_id: 5, failure_reason: 'The 24-hour window is closed. Please use a WhatsApp template to contact this customer.', contact_id: matchedContact, channel_id: ch } });
+      // What LoopChat does before it answers the send (an echo of the message).
+      return Promise.resolve(beforeAnswer?.(b)).then(() => {
+        if (sendResult === 'sent') return json(202, { data: { status: 'sent', message_id: 900 + sent.length, contact_id: matchedContact, channel_id: ch } });
+        return json(202, { data: { status: 'failed', message_id: 5, failure_reason: 'The 24-hour window is closed. Please use a WhatsApp template to contact this customer.', contact_id: matchedContact, channel_id: ch } });
+      });
     }
     json(404, {});
   });
@@ -103,7 +107,7 @@ after(() => {
   for (const s of ['', '-wal', '-shm']) fs.rmSync(DB + s, { force: true });
 });
 beforeEach(() => {
-  sent.length = 0; replies.length = 0; estatePosts.length = 0; sendResult = 'sent'; matchedContact = 101;
+  sent.length = 0; replies.length = 0; estatePosts.length = 0; sendResult = 'sent'; matchedContact = 101; beforeAnswer = null;
   require('../companies').invalidateCache();
 });
 
@@ -341,6 +345,28 @@ test('the assistant\'s own reply coming back from LoopChat is not taken for an e
   assert.deepEqual(await wa.handleEvent(incoming('وفيه تقسيط؟', { phone }), deps()), { sent: true });
   // Different words from the same number are an employee.
   assert.deepEqual(await wa.handleEvent(outgoing('سأتصل بك الآن', phone), deps()), { paused: true, by: 'نورة' });
+});
+
+// The assistant went quiet for good after one of its own replies: LoopChat
+// reported the reply before answering the send, inside the same conversation.
+test('its own reply reported before LoopChat answers the send, or with its lines rewrapped, is still its own', async () => {
+  const phone = '966502222224';
+  const echoes = [];
+  beforeAnswer = async (b) => { echoes.push(await wa.handleEvent(outgoing(String(b.content).replace(/ /, '\r\n '), phone, 77), deps())); };
+  assert.deepEqual(await wa.handleEvent(incoming('أبي أسجّل اهتمام', { phone, conversation: 77 }), deps()), { sent: true });
+  assert.deepEqual(echoes, [{ ignored: 'own reply' }]);
+  assert.deepEqual(await wa.handleEvent(incoming('اسمي فهد', { phone, conversation: 77 }), deps()), { sent: true });
+  // A reply LoopChat refused was never sent, so the same words afterwards are someone's.
+  beforeAnswer = null; sendResult = 'failed';
+  await wa.handleEvent(incoming('تمام', { phone, conversation: 77 }), deps());
+  assert.deepEqual(await wa.handleEvent(outgoing('رد على: تمام', phone, 77), deps()), { paused: true, by: 'نورة' });
+});
+
+test('a message LoopChat marks incoming is the customer\'s, whatever the event is called', async () => {
+  const phone = '966502222225';
+  const evt = { ...incoming('مرحبا', { phone, conversation: 78 }), event_type: 'message.created' };
+  assert.deepEqual(await wa.handleEvent(evt, deps()), { ignored: 'message.created' });
+  assert.deepEqual(await wa.handleEvent(incoming('أبي أسأل عن مشروع', { phone, conversation: 78 }), deps()), { sent: true });
 });
 test('the LoopChat client finds a contact by number, with its integration switch', async () => {
   integrationSwitch.set('966501010101', false);

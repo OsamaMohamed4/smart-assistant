@@ -76,7 +76,9 @@ async function handleEvent(evt, deps) {
   const type = evt?.event_type || evt?.type;
 
   const traffic = evt?.message?.traffic || evt?.traffic || evt?.message?.message?.traffic;
-  const isOutgoing = traffic === 'outgoing' || 
+  // A message LoopChat marks incoming is the customer's, whatever the event is
+  // called: taken for an employee's, it would silence the assistant.
+  const isOutgoing = traffic !== 'incoming' && (traffic === 'outgoing' ||
                      traffic === 'outbound' || 
                      evt?.message?.from_me === true || 
                      evt?.from_me === true || 
@@ -84,7 +86,7 @@ async function handleEvent(evt, deps) {
                      evt?.direction === 'outbound' ||
                      type === 'message.created' ||
                      type === 'message.sent' ||
-                     type === 'message_outbound';
+                     type === 'message_outbound');
 
   if (isOutgoing && !evt?.message?.from_api) {
     return handleStaffMessage(evt, deps);
@@ -93,7 +95,7 @@ async function handleEvent(evt, deps) {
   if (type === 'message.received' || type === 'message_received') return handleMessage(evt, deps);
   if (type === 'message_integration.stopped' || type === 'message_integration.started' || type === 'integration.stopped' || type === 'integration.started') return handleHandover(evt, deps);
 
-  if (type === 'message.created' || type === 'message.sent') {
+  if ((type === 'message.created' || type === 'message.sent') && traffic !== 'incoming') {
     return handleStaffMessage(evt, deps);
   }
 
@@ -104,20 +106,33 @@ async function handleEvent(evt, deps) {
 // LoopChat reports may be the assistant's own reply coming back, not an
 // employee writing -- and taking it for one would silence the assistant after
 // every answer. Kept in memory: an echo arrives seconds after the send.
+//
+// Noted BEFORE the send, and dropped if the send fails: LoopChat can report
+// the message before its answer to the send reaches us, and an echo that beats
+// the note looks like an employee. Compared with spacing evened out, as a
+// provider may hand back "\r\n" for "\n" or trim a line.
 const OWN_ECHO_MS = 2 * 60 * 1000;
 const ownSends = new Map();
+const echoText = (text) => String(text || '').replace(/[​-‏‪-‮⁦-⁩]/g, '').replace(/\s+/g, ' ').trim();
 function noteOwnSend(channelId, phone, text) {
   const key = `${channelId}:${phone}`;
   const now = Date.now();
   const list = (ownSends.get(key) || []).filter((s) => now - s.at < OWN_ECHO_MS);
-  list.push({ text: text == null ? null : String(text).trim(), at: now });
+  const entry = { text: text == null ? null : echoText(text), at: now };
+  list.push(entry);
   ownSends.set(key, list.slice(-10));
   if (ownSends.size > 5000) ownSends.delete(ownSends.keys().next().value);
+  return entry;
+}
+function forgetOwnSend(channelId, phone, entry) {
+  const key = `${channelId}:${phone}`;
+  const list = (ownSends.get(key) || []).filter((s) => s !== entry);
+  if (list.length) ownSends.set(key, list); else ownSends.delete(key);
 }
 // Its own text, or anything shortly after a template (whose text it does not have).
 function isOwnEcho(channelId, phone, text) {
   const now = Date.now();
-  const t = String(text || '').trim();
+  const t = echoText(text);
   return (ownSends.get(`${channelId}:${phone}`) || [])
     .some((s) => now - s.at < OWN_ECHO_MS && (s.text === null || (t && s.text === t)));
 }
@@ -276,8 +291,10 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
     return { skipped: 'empty reply' };
   }
 
-  const sent = await loopchat.sendText({ token: await tokenOf(company, deps), channelId, phone, content: answer });
-  if (sent.ok) noteOwnSend(channelId, phone, String(answer).slice(0, 4096));
+  const token = await tokenOf(company, deps);
+  const own = noteOwnSend(channelId, phone, String(answer).slice(0, 4096));
+  const sent = await loopchat.sendText({ token, channelId, phone, content: answer });
+  if (!sent.ok) forgetOwnSend(channelId, phone, own);
   const reason = sent.ok ? null : refusal(sent, contact);
   await out(sent.ok ? 'sent' : 'failed', reason, answer, sent.messageId);
   if (!sent.ok) logger.warn('whatsapp: reply not sent', { companyId: company.id, reason });
@@ -357,8 +374,9 @@ async function afterCall(company, call, deps) {
   }
   const variables = buildVariables(f.variables, { company, requests, deps });
   const header = f.headerType && f.headerUrl ? { type: f.headerType, url: f.headerUrl } : null;
+  const own = noteOwnSend(cfg.channelId, phone, null);
   const sent = await loopchat.sendTemplate({ token, channelId: cfg.channelId, templateId: f.templateId, phone, variables, header });
-  if (sent.ok) noteOwnSend(cfg.channelId, phone, null);
+  if (!sent.ok) forgetOwnSend(cfg.channelId, phone, own);
   await finish(sent.ok ? 'sent' : 'failed', sent.reason, sent.messageId);
   if (!sent.ok) logger.warn('whatsapp: follow-up not sent', { companyId: company.id, callId: call.id, reason: sent.reason });
   return sent.ok ? { sent: true } : { failed: sent.reason };

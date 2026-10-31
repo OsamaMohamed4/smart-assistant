@@ -12,6 +12,7 @@ import { Input, Label, Textarea } from '../components/ui/Input';
 import { Modal, ConfirmDialog } from '../components/ui/Modal';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useToast } from '../components/ui/Toast';
+import { DocumentsManager } from '../components/companies/DocumentsManager';
 import { api } from '../lib/api';
 import { cn, fmtDate } from '../lib/utils';
 
@@ -1049,6 +1050,9 @@ function ScenarioTab({ scenario, update }) {
       {/* ─── Optional: separate inbound prompt ─── */}
       {dir === 'in' && <InboundPromptCard scenario={scenario} update={update} />}
 
+      {/* ─── The knowledge this direction's agent reads, under its prompt ─── */}
+      <PromptKnowledgeCard key={dir} scenario={scenario} dir={dir} />
+
       {/* ─── Template variables ─── */}
       <Card>
         <div className="flex items-center justify-between mb-3">
@@ -1215,7 +1219,7 @@ function ConfigurationTab({ scenario, update }) {
           <div className="flex-1">
             <h3 className="text-[14px] font-semibold text-ink-900">قاعدة المعرفة</h3>
             <p className="text-[12px] text-ink-500 mt-0.5 leading-relaxed">
-              يستخدم الوكيل ملفات RAG المرفوعة في إعدادات الشركة تلقائياً.
+              ملفات كل اتجاه تحت تعليماته في تبويب التعليمات: ملفات الصادرة تحت تعليمات المكالمات الصادرة، وملفات الواردة وواتساب تحت تعليمات المكالمات الواردة.
             </p>
           </div>
         </div>
@@ -1291,6 +1295,42 @@ function InboundPromptCard({ scenario, update }) {
           <LintWarnings text={scenario.instructionPromptInbound || ''} />
         </div>
       )}
+    </Card>
+  );
+}
+
+// The documents the agent of this direction reads, right under its
+// instructions: the outbound agent's under the outbound prompt, the inbound
+// agent's (which WhatsApp reads too) under the inbound one. The same two
+// knowledge bases as the «قاعدة المعرفة» page (lib/kb-audience.js), so a file
+// uploaded here is there as well. They are the company's, not this
+// scenario's: another scenario of the company reads the same files.
+const PROMPT_KB = {
+  out: { audience: 'outbound', title: 'ملفات معرفة المكالمات الصادرة', hint: 'ما يعرفه المساعد حين يتصل هو بالعميل.' },
+  in : { audience: 'inbound', title: 'ملفات معرفة المكالمات الواردة وواتساب', hint: 'ما يعرفه المساعد حين يتصل العميل أو يراسل الشركة على واتساب.' },
+};
+function PromptKnowledgeCard({ scenario, dir }) {
+  const kb = PROMPT_KB[dir];
+  const single = !String(scenario.instructionPromptInbound || '').trim();
+  return (
+    <Card>
+      <div className="flex items-start gap-3 mb-3">
+        <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
+          <BookOpen className="w-4 h-4" />
+        </div>
+        <div>
+          <h3 className="text-[14px] font-semibold text-ink-900">{kb.title}</h3>
+          <p className="text-[12px] text-ink-500 mt-0.5 leading-relaxed">
+            {kb.hint} الملفات للشركة كلها، وتظهر أيضاً في صفحة «قاعدة المعرفة». تصل إلى المساعد بعد «نشر».
+          </p>
+          {single && (
+            <p className="text-[12px] text-amber-800 mt-1.5 leading-relaxed">
+              لا توجد تعليمات للمكالمات الواردة في هذا السيناريو، فيرد مساعد واحد على الاتجاهين ويقرأ ملفات الصادرة والواردة معاً.
+            </p>
+          )}
+        </div>
+      </div>
+      <DocumentsManager companyId={scenario.companyId} audience={kb.audience} />
     </Card>
   );
 }

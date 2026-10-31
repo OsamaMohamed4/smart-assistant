@@ -33,6 +33,7 @@ export const api = {
   logout            : ()     => request('/api/auth/logout',  { method: 'POST', body: '{}' }),
   me                : ()     => request('/api/auth/me'),
   changePassword    : (body) => request('/api/auth/change-password', { method: 'POST', body: JSON.stringify(body) }),
+  updateMyName      : (name) => request('/api/auth/me', { method: 'PATCH', body: JSON.stringify({ name }) }),
 
   bootstrapOpen     : () => request('/api/auth/bootstrap'),
 

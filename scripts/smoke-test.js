@@ -101,6 +101,18 @@ async function waitForBoot() {
   const cookie = (su.headers.get('set-cookie') || '').split(';')[0];
   check('bootstrap signup → 201 + session cookie', su.status === 201 && !!cookie, `status=${su.status}`);
 
+  // 4b. The account renames itself; an empty name is refused.
+  const rn = await fetch(B + '/api/auth/me', {
+    method: 'PATCH', headers: { ...XHR, cookie }, body: JSON.stringify({ name: '  العنود‏  القحطاني ' }),
+  });
+  const rnEmpty = await fetch(B + '/api/auth/me', {
+    method: 'PATCH', headers: { ...XHR, cookie }, body: JSON.stringify({ name: '   ' }),
+  });
+  const meB = await (await fetch(B + '/api/auth/me', { headers: { cookie } })).json().catch(() => ({}));
+  check('account rename → the new name, tidied, kept; empty refused',
+    rn.status === 200 && meB.user?.name === 'العنود القحطاني' && rnEmpty.status === 400,
+    `status=${rn.status}/${rnEmpty.status} name=${meB.user?.name}`);
+
   // 5. Create a company through the real API.
   const cc = await fetch(B + '/api/companies', {
     method: 'POST', headers: { ...XHR, cookie },

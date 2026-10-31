@@ -1,6 +1,52 @@
-import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen, PhoneOutgoing, ShieldCheck, ClipboardList, Zap, Inbox, Gauge, MessageCircle, Receipt } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen, PhoneOutgoing, ShieldCheck, ClipboardList, Zap, Inbox, Gauge, MessageCircle, Receipt, Pencil } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { api } from '../../lib/api';
 import { MasarLogo } from '../ui/MasarMark';
+import { Modal } from '../ui/Modal';
+import { Button } from '../ui/Button';
+import { Input, Label } from '../ui/Input';
+import { useToast } from '../ui/Toast';
+
+// The account's own name, as the sidebar shows it. The e-mail and the role
+// are not changed here.
+function AccountDialog({ open, onClose, user, onUserChange }) {
+  const { push } = useToast();
+  const [name, setName] = useState(user?.name || '');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (open) setName(user?.name || ''); }, [open]);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const r = await api.updateMyName(name);
+      onUserChange?.(r.user);
+      push('تم حفظ الاسم', 'success');
+      onClose();
+    } catch (e) { push(e.message, 'error'); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="حسابي"
+      description={user?.email}
+      size="sm"
+      footer={(
+        <>
+          <Button variant="secondary" onClick={onClose}>إلغاء</Button>
+          <Button variant="brand" onClick={save} loading={busy} disabled={!name.trim()}>حفظ</Button>
+        </>
+      )}
+    >
+      <Label>الاسم</Label>
+      <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
+      <p className="mt-1.5 text-[11.5px] text-ink-500 leading-relaxed">
+        الاسم الذي يظهر في القائمة الجانبية. البريد الإلكتروني وصلاحية الحساب لا يتغيران.
+      </p>
+    </Modal>
+  );
+}
 
 // Two-tier nav: "Build" is where you author the assistant; "Monitor" is where
 // you watch it run. Mirrors the structure of larger voice-agent dashboards
@@ -56,7 +102,8 @@ function initials(label) {
 
 const ROLE_LABELS = { superadmin: 'مدير النظام', client: 'حساب الشركة' };
 
-export function Sidebar({ active, onChange, user, onLogout, workspaceMode = false, mobileOpen = false, onClose, onSwitchCompany }) {
+export function Sidebar({ active, onChange, user, onUserChange, onLogout, workspaceMode = false, mobileOpen = false, onClose, onSwitchCompany }) {
+  const [accountOpen, setAccountOpen] = useState(false);
   // Inside a workspace there's no "list of clients" page — that's a
   // control-plane concern. 'companies' is shown but the page itself filters
   // to a single company.
@@ -153,7 +200,12 @@ export function Sidebar({ active, onChange, user, onLogout, workspaceMode = fals
       <div className="p-3 border-t border-ink-100 space-y-0.5 shrink-0">
         {user && (
           <div>
-            <div className="flex items-center gap-3 px-3 py-2">
+            <button
+              type="button"
+              onClick={() => setAccountOpen(true)}
+              title="تعديل الاسم"
+              className="group w-full flex items-center gap-3 px-3 py-2 rounded-xl text-right hover:bg-ink-50 transition-colors"
+            >
               <div className="w-7 h-7 rounded-full bg-gradient-to-br from-brand-400 to-brand-700 text-white text-[12px] font-bold flex items-center justify-center shrink-0">
                 {initials(user.name || user.email)}
               </div>
@@ -163,7 +215,9 @@ export function Sidebar({ active, onChange, user, onLogout, workspaceMode = fals
                 </div>
                 <div className="text-ink-500 text-[10.5px] mt-0.5">{ROLE_LABELS[user.role] || user.role}</div>
               </div>
-            </div>
+              <Pencil className="w-3.5 h-3.5 text-ink-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" strokeWidth={1.8} />
+            </button>
+            <AccountDialog open={accountOpen} onClose={() => setAccountOpen(false)} user={user} onUserChange={onUserChange} />
             <button
               onClick={onLogout}
               className="w-full flex items-center gap-3 px-3 h-10 rounded-xl text-[13.5px] font-medium text-rose-600 hover:bg-rose-50 transition-colors"

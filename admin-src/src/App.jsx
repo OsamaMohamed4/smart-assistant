@@ -119,6 +119,7 @@ export default function App() {
           render={({ pinnedCompanyId, onLogout }) => (
             <AdminShell
               user={user}
+              onUserChange={setUser}
               tab={tab}
               setTab={setTab}
               onLogout={onLogout}
@@ -144,6 +145,7 @@ export default function App() {
     <ToastProvider>
       <AdminShell
         user={user}
+        onUserChange={setUser}
         tab={tab}
         setTab={setTab}
         onLogout={async () => { try { await api.logout(); } catch {} setUser(null); }}
@@ -156,7 +158,7 @@ export default function App() {
 // Shared layout used by both /admin and /c/<id>. `pinnedCompanyId` locks every
 // page to a single company (workspace mode); when null, superadmin gets the
 // platform-wide view with company switchers and management tabs.
-function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
+function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId, onUserChange }) {
   const [navOpen, setNavOpen] = useState(false);
   const isSuper = user.role === 'superadmin';
   const isWorkspace = !!pinnedCompanyId;
@@ -188,6 +190,7 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId }) {
         active={activeTab}
         onChange={(t) => { setTab(t); setNavOpen(false); }}
         user={user}
+        onUserChange={onUserChange}
         onLogout={onLogout}
         workspaceMode={isWorkspace}
         mobileOpen={navOpen}

@@ -1009,6 +1009,8 @@ const sql = {
     UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = datetime('now') WHERE id = ?
   `),
   updatePassword     : db.prepare('UPDATE users SET password_hash = ? WHERE id = ?'),
+  // The name the account shows (the sidebar, invitations); set by its owner.
+  updateUserName     : db.prepare('UPDATE users SET name = ? WHERE id = ?'),
   // Lift a lockout WITHOUT claiming the user just signed in. clearFailedLogins
   // also stamps last_login_at, which is correct after a successful login and
   // wrong after an administrative reset — the client list would show someone

@@ -167,6 +167,21 @@ router.get('/me', requireAuth, async (req, res) => {
   res.json({ user: { ...req.user, companies: await companiesFor(req.user) } });
 });
 
+// The account's own name, as the sidebar and its invitations show it. Its
+// owner sets it; the e-mail and the role are not touched here.
+const NAME_MAX = 80;
+router.patch('/me', requireAuth, async (req, res) => {
+  const name = String(req.body?.name ?? '')
+    .replace(/[\u0000-\u001F\u007F​-‏‪-‮⁦-⁩﻿]/g, '')
+    .replace(/\s+/g, ' ').trim();
+  if (!name) return res.status(400).json({ error: 'اكتب الاسم' });
+  if (name.length > NAME_MAX) return res.status(400).json({ error: `الاسم أطول من ${NAME_MAX} حرفاً` });
+  await sql.updateUserName.run(name, req.user.id);
+  audit(req, 'auth.rename', `users/${req.user.id}`, { from: req.user.name || null, to: name });
+  const user = { ...req.user, name };
+  res.json({ user: { ...user, companies: await companiesFor(user) } });
+});
+
 // Move this session to another company the account may work in. Only for
 // client accounts granted more than one company (a superadmin already sees
 // every company and has nothing to switch). The grant is checked here and

@@ -1231,14 +1231,14 @@ const sql = {
   // customer's number comes from the call, as on the requests page -- or, for
   // one filed on WhatsApp, from the WhatsApp number it keeps.
   listRequestsForEstate: db.prepare(`
-    SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, r.channel,
+    SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, r.channel, c.direction AS call_direction,
            COALESCE(r.contact_phone, c.caller_number) AS caller_number
       FROM customer_requests r
       LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
      WHERE r.company_id = ? AND r.conversation_id = ? ORDER BY r.id
   `),
   getRequestForEstate: db.prepare(`
-    SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, r.channel,
+    SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, r.channel, c.direction AS call_direction,
            COALESCE(r.contact_phone, c.caller_number) AS caller_number
       FROM customer_requests r
       LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id

@@ -358,14 +358,14 @@ const sql = {
   ),
   // Estate -- see db-sqlite.js.
   listRequestsForEstate: stmt(
-    `SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, r.channel,
+    `SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, r.channel, c.direction AS call_direction,
             COALESCE(r.contact_phone, c.caller_number) AS caller_number
        FROM customer_requests r
        LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
       WHERE r.company_id = $1 AND r.conversation_id = $2 ORDER BY r.id`,
   ),
   getRequestForEstate: stmt(
-    `SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, r.channel,
+    `SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, r.channel, c.direction AS call_direction,
             COALESCE(r.contact_phone, c.caller_number) AS caller_number
        FROM customer_requests r
        LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id

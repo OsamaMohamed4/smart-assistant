@@ -56,7 +56,7 @@ function requestBodyProperties(projects = []) {
     props.project = {
       type: 'string',
       enum: names,
-      description: 'المشروع الذي يهتم به العميل، من هذه القائمة فقط. إن لم يحدد العميل مشروعاً منها فاترك الحقل فارغاً.',
+      description: 'المشروع الذي يهتم به العميل، من هذه القائمة فقط، سواء ذكره باسمه أو برقمه. إن لم يحدد العميل مشروعاً منها فاترك الحقل فارغاً.',
     };
   }
   return props;

@@ -51,7 +51,9 @@ const PLATFORM_MAX = 60;
 const PLATFORM_DEFAULT = 'ai_chat';
 const PROJECTS_MAX = 200;
 const PROJECT_NAME_MAX = 120;
-const PROJECT_CODE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,29}$/;
+// Estate's format (its note of 2026-10-31): the company's letter, a hyphen,
+// the project's number -- W-38 is Wakan's project 38, M-12 Maheer's 12.
+const PROJECT_CODE = /^[A-Z]{1,4}-\d{1,6}$/;
 
 // "https://maher.e-statee.com" from what was pasted -- the bare address or the
 // full endpoint. Only an Estate address: customer details go nowhere else.
@@ -84,10 +86,11 @@ function parseProjects(input) {
     if (!line) continue;
     const at = line.lastIndexOf('=');
     const name = (at > 0 ? line.slice(0, at) : '').trim().replace(/\s+/g, ' ');
-    const code = (at > 0 ? line.slice(at + 1) : '').trim();
-    if (!name || !code) return { error: `السطر ${i + 1}: اكتبه «اسم المشروع = رمزه في Estate»` };
+    const raw = (at > 0 ? line.slice(at + 1) : '').trim();
+    const code = cleanCode(raw);
+    if (!name || !raw) return { error: `السطر ${i + 1}: اكتبه «اسم المشروع = رمزه في Estate»` };
     if (name.length > PROJECT_NAME_MAX) return { error: `السطر ${i + 1}: اسم المشروع أطول من المسموح` };
-    if (!PROJECT_CODE.test(code)) return { error: `السطر ${i + 1}: رمز المشروع «${code.slice(0, 30)}» غير صالح، مثل M-10` };
+    if (!PROJECT_CODE.test(code)) return { error: `السطر ${i + 1}: رمز المشروع «${raw.slice(0, 30)}» ليس بصيغة Estate: حرف الشركة ثم شرطة ثم رقم المشروع، مثل W-38 أو M-12` };
     const key = normalizeName(name);
     if (seen.has(key)) return { error: `السطر ${i + 1}: المشروع «${name}» مكرر` };
     seen.add(key);
@@ -104,12 +107,24 @@ function normalizeName(s) {
     .replace(/[‐-―]/g, '-').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-// The Estate code for the project the customer named, or null.
+// A code as typed, in Estate's form: "w-38", "W–38" (another dash) and
+// "W-٣٨" are all W-38. Nothing else is changed: "W38" stays wrong, to be
+// written again, rather than guessed at.
+function cleanCode(raw) {
+  return String(raw || '').trim()
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x660))
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x6F0))
+    .replace(/\s*[‐-―−]\s*|\s*-\s*/g, '-')
+    .toUpperCase();
+}
+
+// The Estate code for the project the customer named, or null. Sent as
+// Estate writes it, whatever a list saved before the format was enforced holds.
 function projectCode(value, projects) {
   const v = normalizeName(value);
   if (!v) return null;
   const hit = (projects || []).find((p) => normalizeName(p.name) === v || normalizeName(p.code) === v);
-  return hit ? hit.code : null;
+  return hit ? cleanCode(hit.code) : null;
 }
 
 // Digits with the country code, no "+" and no local 0: 966501234567,
@@ -130,12 +145,32 @@ function parseFields(request) {
   try { return request.fields ? JSON.parse(request.fields) || {} : {}; } catch { return {}; }
 }
 
+// Where the request was made, in words.
+function sourceOf(request) {
+  if (request.channel === 'whatsapp') return 'محادثة واتساب';
+  if (request.call_direction === 'inbound') return 'مكالمة واردة';
+  if (request.call_direction === 'outbound') return 'مكالمة صادرة';
+  return 'مكالمة';
+}
+
+// The assistant the customer spoke to, as the note names it: its name and its
+// company's. Both companies' leads land on one Estate, and Estate asked
+// (2026-10-31) for the agent in the note to tell them apart.
+function agentLabel(company) {
+  if (!company) return null;
+  const { fillGlobals } = require('../companies');
+  const name = String(fillGlobals('{{agent_name}}', company) || '').trim();
+  return [name, company.name].filter(Boolean).join(' — ') || null;
+}
+
 // Every answer the customer gave, one per line, in the client's own labels,
-// under where it was made: a call, or a WhatsApp conversation.
-function buildNote(request, fields) {
+// under where it was made -- an inbound or outbound call, or a WhatsApp
+// conversation -- and with which assistant.
+function buildNote(request, fields, company = null) {
   const type = REQUEST_TYPES[request.request_type];
-  const where = request.channel === 'whatsapp' ? 'محادثة واتساب' : 'مكالمة';
-  const lines = [`${type?.labelAr || request.request_type} من ${where} مع المساعد الذكي`];
+  const agent = agentLabel(company);
+  const head = `${type?.labelAr || request.request_type} من ${sourceOf(request)}`;
+  const lines = agent ? [head, `المساعد الذكي: ${agent}`] : [`${head} مع المساعد الذكي`];
   for (const k of type?.fields || Object.keys(fields)) {
     if (k === 'customer_name' || !fields[k]) continue;
     lines.push(`${FIELDS[k]?.labelAr || k}: ${fields[k]}`);
@@ -272,7 +307,7 @@ async function pushRequest(company, request, deps, { retry = false } = {}) {
     const r = await send(cfg.url, cfg.token, buildForm({
       name, phone, platform: cfg.platform,
       projectCode: projectCode(fields.project, cfg.projects),
-      note: buildNote(request, fields),
+      note: buildNote(request, fields, company),
     }));
     if (accepted(r)) {
       await finish('sent', typeof r.data?.message === 'string' ? r.data.message.slice(0, 300) : null);

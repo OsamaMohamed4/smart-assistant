@@ -559,7 +559,7 @@ test('a customer who confirms a purchase on WhatsApp files a request that goes t
   assert.equal(f.phone, '966551112223');
   assert.equal(f['project_codes[0]'], 'M-10');
   assert.equal(f.platform, 'ai_chat');
-  assert.equal(f.note.split('\n')[0], 'طلب اهتمام من محادثة واتساب مع المساعد الذكي');
+  assert.deepEqual(f.note.split('\n').slice(0, 2), ['طلب اهتمام من محادثة واتساب', 'المساعد الذكي: ناصر — مهير العقارية']);
   assert.match(f.note, /طريقة الدفع: كاش/);
   // The customer read the confirmation the model wrote after filing.
   assert.match(sent.at(-1).body.content, /تم تسجيل الطلب/);

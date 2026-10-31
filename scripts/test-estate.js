@@ -78,7 +78,8 @@ test('a purchase-interest request goes to the company\'s Estate after the call, 
   assert.equal(posts[0].form.platform, 'ai_chat');
   assert.equal(posts[0].form['project_codes[0]'], 'M-10');
   assert.equal(posts[0].form.note, [
-    'طلب اهتمام من مكالمة مع المساعد الذكي',
+    // Where, and with which company's assistant: both companies' leads land on one Estate.
+    'طلب اهتمام من مكالمة واردة', 'المساعد الذكي: ناصر — مهير',
     'حالة الاهتمام: مهتم جداً', 'المشروع المهتم به: M-10 — أدوار، حي المغرزات', 'أبرز أسباب الاهتمام: الموقع', 'نوع العقار: شقة',
     'سبب الشراء: سكن', 'طريقة الدفع: تمويل بنكي', 'كيف سمعت عنا: سناب',
   ].join('\n'));
@@ -250,9 +251,31 @@ test('the project list is pasted as lines of "name = code", and checked line by 
   // Saved as a list, read back as one.
   assert.deepEqual(estate.parseProjects(estate.parseProjects(text).projects).projects, estate.parseProjects(text).projects);
   assert.match(estate.parseProjects('M-10').error, /السطر 1/);
-  assert.match(estate.parseProjects('أ = M-10\nب = رمز').error, /السطر 2: رمز المشروع «رمز» غير صالح/);
+  assert.match(estate.parseProjects('أ = M-10\nب = رمز').error, /السطر 2: رمز المشروع «رمز» ليس بصيغة Estate/);
   assert.match(estate.parseProjects('أ = M-10\nأ = M-11').error, /مكرر/);
   assert.match(estate.validateSettings({ url: '', projects: 'x =' }, { hasToken: false }).error, /السطر 1/);
+});
+
+// Estate's note of 2026-10-31: W-38 is Wakan's project 38, M-12 Maheer's 12, hyphen included.
+test('a project code is kept in Estate\'s form: the company\'s letter, a hyphen, the number', async () => {
+  assert.deepEqual(estate.parseProjects('وكن 38 = w-38\nمهير 12 = M–12\nوكن 40 = W - ٤٠').projects, [
+    { name: 'وكن 38', code: 'W-38' }, { name: 'مهير 12', code: 'M-12' }, { name: 'وكن 40', code: 'W-40' },
+  ]);
+  for (const bad of ['W38', 'W 38', 'وكن-38', 'W-38A', '38']) {
+    assert.match(estate.parseProjects(`وكن = ${bad}`).error, /حرف الشركة ثم شرطة ثم رقم المشروع/, bad);
+  }
+  // A list saved before the format was enforced still sends the code as Estate writes it.
+  configure({ url: 'https://maher.e-statee.com', platform: 'ai_chat', enabled: true, projects: [{ name: 'وكن 38', code: 'w–38' }] }, 'estate-key');
+  await estate.afterCall(await company(), callWith([['interest', { ...INTEREST, project: 'وكن 38' }]]), deps());
+  assert.equal(posts.at(-1).form['project_codes[0]'], 'W-38');
+});
+
+test('the note names the assistant and its company, and the direction of the call', () => {
+  const co = { id: 'wakan', name: 'وكن', settings: {} };
+  const note = (request) => estate.buildNote({ request_type: 'interest', ...request }, { customer_name: 'فهد' }, co).split('\n').slice(0, 2);
+  assert.deepEqual(note({ call_direction: 'inbound' }), ['طلب اهتمام من مكالمة واردة', 'المساعد الذكي: ناصر — وكن']);
+  assert.deepEqual(note({ call_direction: 'outbound' }), ['طلب اهتمام من مكالمة صادرة', 'المساعد الذكي: ناصر — وكن']);
+  assert.deepEqual(note({ channel: 'whatsapp' }), ['طلب اهتمام من محادثة واتساب', 'المساعد الذكي: ناصر — وكن']);
 });
 
 test('the code goes only for a project on the list; otherwise the lead goes without one', async () => {

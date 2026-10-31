@@ -280,7 +280,7 @@ function renderInvoiceHtml(s, { siteUrl = null } = {}) {
   <tr><td style="padding:28px 28px 8px;">
     <table role="presentation" width="100%"><tr>
       <td style="vertical-align:top;">
-        <div style="font-size:22px;font-weight:700;color:#8439FF;">${esc(seller.brand || 'مسار')}</div>
+        <div style="font-size:22px;font-weight:700;color:#6E59A6;">${esc(seller.brand || 'مسار')}</div>
         ${sellerLines.map((l) => `<div style="font-size:12.5px;color:#3F3D4A;line-height:1.8;">${esc(l)}</div>`).join('')}
       </td>
       <td style="vertical-align:top;text-align:left;">
@@ -311,7 +311,7 @@ function renderInvoiceHtml(s, { siteUrl = null } = {}) {
     <div>مدة العقد: من ${esc(arDate(s.contract.startDate))} إلى ${esc(arDate(s.contract.endDate))}.</div>
     ${c.needsQuote ? '<div style="color:#9B3B2B;">تجاوز عدد المكالمات الإضافية آخر شريحة، ويُسعَّر الزائد بموجب عرض سعر خاص.</div>' : ''}
   </td></tr>
-  ${siteUrl ? `<tr><td style="padding:8px 28px 4px;font-size:12.5px;color:#3F3D4A;">يمكنكم الاطلاع على فواتيركم في لوحة التحكم: <a href="${esc(siteUrl)}/login" style="color:#8439FF;">${esc(siteUrl.replace(/^https?:\/\//, ''))}/login</a></td></tr>` : ''}
+  ${siteUrl ? `<tr><td style="padding:8px 28px 4px;font-size:12.5px;color:#3F3D4A;">يمكنكم الاطلاع على فواتيركم في لوحة التحكم: <a href="${esc(siteUrl)}/login" style="color:#6E59A6;">${esc(siteUrl.replace(/^https?:\/\//, ''))}/login</a></td></tr>` : ''}
   <tr><td style="padding:16px 28px 24px;"></td></tr>
 </table>
 </td></tr></table>

@@ -25,23 +25,24 @@ export default {
           900 : '#1c1d21',
           950 : '#0e0f12',
         },
-        // MASAR new identity. Official palette: #8439FF (violet), #0017E0 (blue),
-        // #FF93EE (pink), #101010 (black), #FFFFFF. 600 is the official violet;
+        // MASAR identity. Platform colour #6E59A6 (the client's choice, 2026-10-31,
+        // replacing #8439FF); the rest of the palette: #0017E0 (blue),
+        // #FF93EE (pink), #101010 (black), #FFFFFF. 600 is the platform colour;
         // every other step is a derived tint or shade.
         brand: {
-          50  : '#F8F4FF',
-          100 : '#F1EAFF',
-          200 : '#DCCBFF',
-          300 : '#C3A2FF',
-          400 : '#A878FF',
-          500 : '#9552FF',
-          600 : '#8439FF',                            // official
-          700 : '#6A2BD6',
-          800 : '#4F1FA3',
-          900 : '#331470',
+          50  : '#F8F7FB',
+          100 : '#EFEDF5',
+          200 : '#DBD6E9',
+          300 : '#C1B8D9',
+          400 : '#A496C7',
+          500 : '#8775B5',
+          600 : '#6E59A6',                            // the platform colour (client, 2026-10-31)
+          700 : '#5B4A8A',
+          800 : '#483A6C',
+          900 : '#342A4E',
         },
         accent: {
-          violet  : '#8439FF',
+          violet  : '#6E59A6',
           pink    : '#FF93EE',
           blue    : '#0017E0',
           emerald : '#10b981',
@@ -55,7 +56,7 @@ export default {
         'card'    : '0 1px 2px rgba(16,18,27,0.04), 0 4px 12px rgba(16,18,27,0.04)',
         'pop'     : '0 4px 6px rgba(16,18,27,0.04), 0 20px 25px -5px rgba(16,18,27,0.10)',
         'inner-1' : 'inset 0 1px 0 rgba(255,255,255,0.04)',
-        'glow'    : '0 0 0 4px rgba(132,57,255,0.14)',
+        'glow'    : '0 0 0 4px rgba(110,89,166,0.14)',
       },
       borderRadius: {
         'xl'   : '14px',

@@ -198,7 +198,7 @@ export function DashboardPage({ user, pinnedCompanyId }) {
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Line type="monotone" dataKey="واردة"  stroke="#10b981" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
                   <Line type="monotone" dataKey="صادرة"  stroke="#f59e0b" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
-                  <Line type="monotone" dataKey="شات"   stroke="#8439FF" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
+                  <Line type="monotone" dataKey="شات"   stroke="#6E59A6" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
                 </LineChart>
               </ResponsiveContainer>
             )}

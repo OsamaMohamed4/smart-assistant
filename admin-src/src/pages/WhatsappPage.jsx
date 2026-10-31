@@ -45,6 +45,8 @@ export function WhatsappPage() {
   const [messages, setMessages]   = useState([]);
   const [saving, setSaving]       = useState(false);
   const [hasOwnToken, setHasOwnToken] = useState(false);
+  // Bumped after a save here, so the behaviour card below reads the switch anew.
+  const [savedAt, setSavedAt] = useState(0);
 
   // The overview is the selected company's LoopChat account: its numbers and
   // templates come through its own token when it has one.
@@ -115,6 +117,7 @@ export function WhatsappPage() {
       });
       push('تم حفظ إعدادات واتساب', 'success');
       loadCompany(companyId);
+      setSavedAt(Date.now());
     } catch (e) { push(e.message, 'error'); }
     finally { setSaving(false); }
   };
@@ -294,7 +297,9 @@ export function WhatsappPage() {
         )}
 
         {/* ─── What the assistant says, knows, and when it answers ─── */}
-        {company && <WhatsappBehavior key={companyId} companyId={companyId} />}
+        {/* The reply switch is in the card above on this page: one switch, so
+            saving one card cannot put back what the other just changed. */}
+        {company && <WhatsappBehavior key={`${companyId}-${savedAt}`} companyId={companyId} showToggle={false} />}
 
         {/* ─── Recent messages ─── */}
         {company && (

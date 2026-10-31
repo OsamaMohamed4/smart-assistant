@@ -15,7 +15,10 @@ import { cn } from '../../lib/utils';
 // Index 0 = Sunday, as the server counts.
 const DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
-export function WhatsappBehavior({ companyId }) {
+// `showToggle`: false where the page has the reply switch elsewhere (the
+// platform's «واتساب» page). The switch is then neither shown nor sent, and a
+// save here leaves it as it is.
+export function WhatsappBehavior({ companyId, showToggle = true }) {
   const { push } = useToast();
   const [data, setData]   = useState(null);
   const [form, setForm]   = useState(null);
@@ -47,7 +50,9 @@ export function WhatsappBehavior({ companyId }) {
     setSaving(true);
     try {
       const r = await api.saveWhatsappControls(companyId, {
-        autoReply: form.autoReply,
+        // Sent only when changed here: a save of the words or the hours must
+        // not switch replies back to what this card read when it opened.
+        ...(showToggle && form.autoReply !== !!data.autoReply ? { autoReply: form.autoReply } : {}),
         prompt: form.prompt,
         knowledge: form.knowledge,
         schedule: { enabled: form.scheduleOn, days: form.days },
@@ -74,6 +79,7 @@ export function WhatsappBehavior({ companyId }) {
       </div>
 
       {/* ─── on / off ─── */}
+      {showToggle && (
       <label className={cn('flex items-start gap-3 rounded-xl border px-4 py-3', data.connected ? 'border-ink-100 cursor-pointer' : 'border-ink-100 opacity-60')}>
         <input type="checkbox" className="mt-1 w-4 h-4 accent-brand-600" disabled={!data.connected}
           checked={form.autoReply && data.connected} onChange={(e) => set('autoReply')(e.target.checked)} />
@@ -84,6 +90,7 @@ export function WhatsappBehavior({ companyId }) {
           </span>
         </span>
       </label>
+      )}
 
       {/* ─── weekly hours ─── */}
       <div className="space-y-3">

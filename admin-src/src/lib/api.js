@@ -258,6 +258,14 @@ export const api = {
     return res.json();
   },
   deleteDocument    : (companyId, docId) => request(`/api/companies/${companyId}/documents/${docId}`, { method: 'DELETE' }),
+  // Bulk delete: `ids` for the selected files, or deleteAllDocuments for the
+  // whole section. `audience` scopes it to one of the two knowledge bases.
+  bulkDeleteDocuments: (companyId, ids, audience) => request(`/api/companies/${companyId}/documents/bulk-delete`, {
+    method: 'POST', body: JSON.stringify({ ids, audience }),
+  }),
+  deleteAllDocuments : (companyId, audience) => request(`/api/companies/${companyId}/documents/bulk-delete`, {
+    method: 'POST', body: JSON.stringify({ all: true, audience }),
+  }),
   // Read the company's own website into its knowledge base (and how far the read has got).
   startSiteImport   : (companyId, url) => request(`/api/companies/${companyId}/documents/from-site`, { method: 'POST', body: JSON.stringify({ url }) }),
   siteImportStatus  : (companyId) => request(`/api/companies/${companyId}/documents/from-site`),

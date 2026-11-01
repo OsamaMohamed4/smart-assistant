@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Upload, FileText, Trash2, Sparkles, X, Loader2, Download, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Upload, FileText, Trash2, Sparkles, X, Loader2, Download, RefreshCw, AlertTriangle, Search } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
@@ -10,14 +10,29 @@ import { cn, fmtNumber } from '../../lib/utils';
 const ACCEPT = '.pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown';
 const MAX_MB = 10;
 
+// Arabic-correct "N files" label (singular / dual / plural / large).
+function filesLabel(n) {
+  if (n === 1) return 'ملف واحد';
+  if (n === 2) return 'ملفان';
+  if (n >= 3 && n <= 10) return `${fmtNumber(n)} ملفات`;
+  return `${fmtNumber(n)} ملفًا`;
+}
+
 // `audience`: which of the company's two knowledge bases this manages --
 // 'inbound' (inbound calls and WhatsApp) or 'outbound'.
 export function DocumentsManager({ companyId, companyName, audience }) {
   const { push } = useToast();
-  const [docs, setDocs]         = useState(null);
+  const [docs, setDocs]           = useState(null);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver]   = useState(false);
   const [testOpen, setTestOpen]   = useState(false);
+
+  // ── Bulk-selection state ──
+  const [selected, setSelected]   = useState(() => new Set()); // doc ids
+  const [search, setSearch]       = useState('');
+  const [confirm, setConfirm]     = useState({ open: false, mode: null, count: 0 }); // mode: 'selected' | 'all'
+  const [deleting, setDeleting]   = useState(false);
+
   const inputRef = useRef(null);
   const replaceInputRef = useRef(null);
   const replaceDocRef   = useRef(null);
@@ -27,6 +42,71 @@ export function DocumentsManager({ companyId, companyName, audience }) {
     catch (e) { push(e.message, 'error'); }
   };
   useEffect(() => { load(); }, [companyId, audience]);
+
+  // Reset selection + search whenever the underlying list identity changes.
+  useEffect(() => { setSelected(new Set()); setSearch(''); }, [companyId, audience]);
+
+  // ── Derived: filtered rows + selection summary ──
+  const q = search.trim().toLowerCase();
+  const filtered = (docs || []).filter(
+    (d) => !q || String(d.filename || '').toLowerCase().includes(q),
+  );
+  const visibleIds = filtered.map((d) => d.id);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+  const someVisibleSelected = visibleIds.some((id) => selected.has(id));
+  // Only count selections that still exist in the current list.
+  const liveIds = new Set((docs || []).map((d) => d.id));
+  const selectedCount = [...selected].filter((id) => liveIds.has(id)).length;
+
+  const toggleOne = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+  const toggleAllVisible = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+  const clearSelection = () => setSelected(new Set());
+
+  const askDeleteSelected = () => {
+    if (!selectedCount) return;
+    setConfirm({ open: true, mode: 'selected', count: selectedCount });
+  };
+  const askDeleteAll = () => {
+    if (!docs || !docs.length) return;
+    setConfirm({ open: true, mode: 'all', count: docs.length });
+  };
+  const closeConfirm = () => { if (!deleting) setConfirm({ open: false, mode: null, count: 0 }); };
+
+  const doDelete = async () => {
+    setDeleting(true);
+    try {
+      const r = confirm.mode === 'all'
+        ? await api.deleteAllDocuments(companyId, audience)
+        : await api.bulkDeleteDocuments(companyId, [...selected].filter((id) => liveIds.has(id)), audience);
+
+      const done = r?.deleted || 0;
+      const failed = r?.failed || 0;
+      if (done && failed) push(`حُذف ${filesLabel(done)}، وتعذّر حذف ${fmtNumber(failed)}.`, 'warning');
+      else if (done)       push(`تم حذف ${filesLabel(done)}.`, 'success');
+      else                 push('لم يُحذف أي ملف.', 'error');
+
+      clearSelection();
+      setConfirm({ open: false, mode: null, count: 0 });
+      await load();
+    } catch (e) {
+      push(e.message, 'error');
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const handleFiles = async (files) => {
     const list = Array.from(files || []);
@@ -54,17 +134,18 @@ export function DocumentsManager({ companyId, companyName, audience }) {
   };
 
   const onDelete = async (doc) => {
-    if (!confirm(`حذف ${doc.filename}؟ ستُمسح كل المقاطع المرتبطة به.`)) return;
+    if (!confirm.open && !window.confirm(`حذف ${doc.filename}؟ ستُمسح كل المقاطع المرتبطة به.`)) return;
     try {
       await api.deleteDocument(companyId, doc.id);
       push('تم الحذف', 'success');
+      setSelected((prev) => { const n = new Set(prev); n.delete(doc.id); return n; });
       load();
     } catch (e) { push(e.message, 'error'); }
   };
 
   // Replace: upload new file first, then delete the old one
   const onReplace = (doc) => {
-    if (!confirm(`هل أنت متأكد من استبدال ${doc.filename}؟ سيتم حذف الملف القديم ورفع ملف جديد.`)) return;
+    if (!window.confirm(`هل أنت متأكد من استبدال ${doc.filename}؟ سيتم حذف الملف القديم ورفع ملف جديد.`)) return;
     replaceDocRef.current = doc;
     replaceInputRef.current.value = '';
     replaceInputRef.current.click();
@@ -160,16 +241,59 @@ export function DocumentsManager({ companyId, companyName, audience }) {
         onChange={handleReplaceFile}
       />
 
-      {/* ─── Test button ─── */}
+      {/* ─── Controls: stats · search · test · delete-all ─── */}
       {docs && docs.length > 0 && (
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="text-[11px] text-ink-500 font-semibold uppercase tracking-wider">
-            {docs.length} مستند · {docs.reduce((s, d) => s + d.chunk_count, 0)} مقطع
+            {fmtNumber(docs.length)} مستند · {fmtNumber(docs.reduce((s, d) => s + d.chunk_count, 0))} مقطع
+            {q && <span className="normal-case tracking-normal font-medium text-ink-400"> · نتائج البحث: {fmtNumber(filtered.length)}</span>}
           </div>
-          <Button variant="secondary" size="sm" onClick={() => setTestOpen(true)} className="gap-1.5">
-            <Sparkles className="w-3 h-3" strokeWidth={2} />
-            اختبار البحث
-          </Button>
+          <div className="flex items-center gap-2">
+            {/* Search / filter */}
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-ink-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="بحث باسم الملف"
+                className="h-8 w-40 sm:w-52 pr-8 pl-7 bg-white border border-ink-200 rounded-xl text-[12.5px] placeholder:text-ink-400 focus-ring focus:border-ink-300 font-arabic"
+              />
+              {search && (
+                <button
+                  onClick={() => setSearch('')}
+                  aria-label="مسح البحث"
+                  className="absolute left-2 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-700"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            <Button variant="secondary" size="sm" onClick={() => setTestOpen(true)} className="gap-1.5">
+              <Sparkles className="w-3 h-3" strokeWidth={2} />
+              اختبار البحث
+            </Button>
+            <Button variant="danger" size="sm" onClick={askDeleteAll} className="gap-1.5">
+              <Trash2 className="w-3 h-3" strokeWidth={2} />
+              حذف الكل
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Selection toolbar ─── */}
+      {selectedCount > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-brand-200 bg-brand-50/70 px-3 py-2">
+          <div className="text-[12.5px] text-ink-800">
+            <span className="font-semibold">محدد: {filesLabel(selectedCount)}</span>
+            {q && <span className="text-ink-500"> · ضمن نتائج البحث فقط</span>}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="danger" size="sm" onClick={askDeleteSelected} className="gap-1.5">
+              <Trash2 className="w-3 h-3" strokeWidth={2} />
+              حذف المحدد
+            </Button>
+            <Button variant="ghost" size="sm" onClick={clearSelection}>إلغاء التحديد</Button>
+          </div>
         </div>
       )}
 
@@ -182,11 +306,23 @@ export function DocumentsManager({ companyId, companyName, audience }) {
         <div className="text-center py-4 text-[12.5px] text-ink-500">
           لا توجد مستندات. ارفع ملفاً ليبدأ المساعد بالاستفادة منه.
         </div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-4 text-[12.5px] text-ink-500">
+          لا توجد ملفات تطابق «{search}».
+        </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-right border-collapse">
             <thead>
               <tr className="border-b border-ink-100 text-[12px] text-ink-500 font-semibold">
+                <th className="py-3 px-4 w-10">
+                  <HeaderCheckbox
+                    checked={allVisibleSelected}
+                    indeterminate={!allVisibleSelected && someVisibleSelected}
+                    onChange={toggleAllVisible}
+                    title={q ? 'تحديد كل نتائج البحث الظاهرة' : 'تحديد كل الملفات'}
+                  />
+                </th>
                 <th className="py-3 px-4 whitespace-nowrap">اسم الملف</th>
                 <th className="py-3 px-4 whitespace-nowrap">تاريخ الرفع</th>
                 <th className="py-3 px-4 whitespace-nowrap">آخر تعديل</th>
@@ -195,11 +331,13 @@ export function DocumentsManager({ companyId, companyName, audience }) {
               </tr>
             </thead>
             <tbody>
-              {docs.map((d) => (
-                <DocRow 
-                  key={d.id} 
-                  doc={d} 
-                  onDelete={() => onDelete(d)} 
+              {filtered.map((d) => (
+                <DocRow
+                  key={d.id}
+                  doc={d}
+                  selected={selected.has(d.id)}
+                  onToggle={() => toggleOne(d.id)}
+                  onDelete={() => onDelete(d)}
                   onReplace={() => onReplace(d)}
                   onDownload={() => onDownload(d)}
                 />
@@ -208,6 +346,26 @@ export function DocumentsManager({ companyId, companyName, audience }) {
           </table>
         </div>
       )}
+
+      {/* ─── Bulk-delete confirmation ─── */}
+      <Modal
+        open={confirm.open}
+        onClose={closeConfirm}
+        size="sm"
+        title="تأكيد الحذف"
+        footer={<>
+          <Button variant="danger" loading={deleting} onClick={doDelete}>
+            {deleting ? 'جارٍ الحذف…' : `حذف ${filesLabel(confirm.count)}`}
+          </Button>
+          <Button variant="ghost" disabled={deleting} onClick={closeConfirm}>إلغاء</Button>
+        </>}
+      >
+        <p className="text-[13.5px] text-ink-700 leading-relaxed">
+          {confirm.mode === 'all'
+            ? `سيتم حذف جميع الملفات في هذا القسم (${filesLabel(confirm.count)}) نهائياً، مع كل المقاطع المفهرسة المرتبطة بها، فلا يعود المساعد الذكي يصل إلى محتواها. لا يمكن التراجع عن هذا الإجراء.`
+            : `سيتم حذف ${filesLabel(confirm.count)} المحددة نهائياً، مع كل المقاطع المفهرسة المرتبطة بها، فلا يعود المساعد الذكي يصل إلى محتواها. لا يمكن التراجع عن هذا الإجراء.`}
+        </p>
+      </Modal>
 
       <RAGTestModal
         open={testOpen}
@@ -220,13 +378,42 @@ export function DocumentsManager({ companyId, companyName, audience }) {
   );
 }
 
-function DocRow({ doc, onDelete, onReplace, onDownload }) {
+// Checkbox for the table header that also renders the "indeterminate" (some
+// but not all selected) state the DOM only exposes via a ref.
+function HeaderCheckbox({ checked, indeterminate, onChange, title }) {
+  const ref = useRef(null);
+  useEffect(() => { if (ref.current) ref.current.indeterminate = !!indeterminate; }, [indeterminate]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+      title={title}
+      className="w-4 h-4 rounded border-ink-300 accent-brand-500 cursor-pointer align-middle"
+    />
+  );
+}
+
+function DocRow({ doc, selected, onToggle, onDelete, onReplace, onDownload }) {
   const sizeMB = (doc.size_bytes / (1024 * 1024)).toFixed(1);
   const uploadDate = new Date(doc.created_at).toLocaleDateString('en-GB'); // DD/MM/YYYY
   const modifiedDate = uploadDate; // DB only tracks created_at for kb_documents right now
 
   return (
-    <tr className="border-b border-ink-50 hover:bg-ink-50/30 transition-colors">
+    <tr className={cn(
+      'border-b border-ink-50 transition-colors',
+      selected ? 'bg-brand-50/50' : 'hover:bg-ink-50/30',
+    )}>
+      <td className="py-3 px-4 w-10">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggle}
+          aria-label={`تحديد ${doc.filename}`}
+          className="w-4 h-4 rounded border-ink-300 accent-brand-500 cursor-pointer align-middle"
+        />
+      </td>
       <td className="py-3 px-4">
         <div className="text-[13.5px] font-medium text-ink-900 truncate">
           <bdi>{doc.filename}</bdi>

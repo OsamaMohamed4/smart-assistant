@@ -2190,6 +2190,61 @@ app.delete('/api/companies/:id/documents/:docId', requireCompanyAccess, async (r
   res.json({ deleted: 1 });
 });
 
+// Bulk delete: a set of document ids, or every file at once. Same authority
+// as the single delete above (requireCompanyAccess) — a user who may remove
+// one file may remove many. Pass `all: true` to clear the whole section, or
+// `ids: [...]` for the selected files. `audience` (optional) scopes both to
+// one of the company's two knowledge bases. Deletion is real: the document
+// row is marked deleted and its searchable chunks are purged, then the
+// retrieval cache is invalidated so the agent forgets them at once.
+app.post('/api/companies/:id/documents/bulk-delete', requireCompanyAccess, async (req, res) => {
+  const companyId = req.params.id;
+  const body = req.body || {};
+  const audience = validAudience(body.audience);   // undefined/null => both sections
+  const deleteAll = body.all === true;
+
+  // Only ever act on the company's own live (non-deleted) documents, so ids
+  // from another company or already-removed files are ignored, not trusted.
+  const live = (await sql.listDocuments.all(companyId)).filter((d) => inAudience(d, audience));
+
+  let targets;
+  if (deleteAll) {
+    targets = live;
+  } else {
+    const ids = Array.isArray(body.ids) ? body.ids.map((x) => String(x)) : [];
+    if (!ids.length) return res.status(400).json({ error: 'لم تُحدَّد أي ملفات للحذف.' });
+    const wanted = new Set(ids);
+    targets = live.filter((d) => wanted.has(String(d.id)));
+  }
+
+  if (!targets.length) {
+    return res.json({ deleted: 0, failed: 0, remaining: live.length });
+  }
+
+  let deleted = 0, failed = 0;
+  for (const d of targets) {
+    try {
+      await withTransaction(async () => {
+        await sql.deleteDocument.run(d.id);          // soft-delete the row
+        await sql.purgeDocumentChunks.run(d.id);     // hard-delete searchable chunks
+      });
+      deleted += 1;
+    } catch (e) {
+      failed += 1;
+      req.log.error('bulk delete: one document failed', { err: e.message, companyId, docId: d.id });
+    }
+  }
+
+  if (deleted) invalidateChunkCache(companyId);   // removed chunks must leave retrieval
+  audit(req, 'document.bulk_delete', `companies/${companyId}/documents`, {
+    audience: audience || 'all', scope: deleteAll ? 'all' : 'selected',
+    requested: targets.length, deleted, failed,
+  });
+
+  const remaining = (await sql.listDocuments.all(companyId)).filter((d) => inAudience(d, audience)).length;
+  res.json({ deleted, failed, remaining });
+});
+
 // ─── Knowledge base from the company's own website ──────────────────
 // The company gives its site's address; the server reads the pages (lib/site-
 // crawler.js) and stores each as a knowledge-base document, exactly as if the

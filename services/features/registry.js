@@ -47,7 +47,10 @@ function requestBodyProperties(projects = []) {
   };
   const all = new Set(types.flatMap((t) => REQUEST_TYPES[t].fields));
   for (const key of all) {
-    props[key] = { type: 'string', description: FIELDS[key].descriptionAr };
+    // A field Estate keeps as a choice offers only Estate's own names.
+    props[key] = FIELDS[key].options
+      ? { type: 'string', enum: FIELDS[key].options, description: `${FIELDS[key].descriptionAr}. اتركه فارغاً إن لم يذكره العميل` }
+      : { type: 'string', description: FIELDS[key].descriptionAr };
   }
   // A company that lists its projects (for Estate) has the model pick one by
   // name, so the name maps to the project's code exactly; never one off the list.
@@ -68,8 +71,14 @@ function requestBodyProperties(projects = []) {
 // it decides whether to call — not in the operator's scenario, which this
 // system does not write into. `source` is where the customer's number is taken
 // from: the call, or the WhatsApp conversation.
+//
+// Who is NOT filed is said here too. A job applicant was filed as interested
+// in a project she never named (Estate, 2026-11-02): a request is a lead the
+// company's teams act on, so only a customer who wants one gets one.
 const requestToolDescription = (source = 'المكالمة') =>
-  'سجّل طلب العميل (اهتمام بالشراء، أو تأجير سكني، أو تأجير مكتبي/تجاري) ليتابعه فريق المبيعات. '
+  'سجّل طلب العميل (اهتمام بالشراء، أو تأجير سكني، أو تأجير مكتبي/تجاري، أو صيانة لوحدته) ليتابعه الفريق المختص. '
+  + 'سجّل فقط إذا طلب العميل بنفسه شراء عقار أو استئجاره أو صيانة وحدته. لا تسجّل طلباً لمن يسأل عن وظيفة أو توريد أو شراكة أو وساطة، '
+  + 'ولا لمن يستفسر فقط أو قال إنه غير مهتم. لا تملأ المشروع إلا بمشروع ذكره العميل نفسه، ولا أي حقل آخر بما لم يقله. '
   + 'اجمع الحقول المطلوبة لنوع الطلب، ثم اقرأ البيانات على العميل واطلب تأكيده الصريح، '
   + `ولا تستدعِ الأداة قبل أن يؤكد. لا تسأل عن رقم الجوال — يُسجَّل تلقائياً من ${source}.`;
 
@@ -134,7 +143,7 @@ const FEATURES = [
   {
     key: 'request_creation',
     labelAr: 'استقبال الطلبات',
-    descriptionAr: 'تسجيل طلبات العملاء (اهتمام، تأجير) وإحالتها لفريق المبيعات للمتابعة.',
+    descriptionAr: 'تسجيل طلبات العملاء (اهتمام، تأجير، صيانة) وإحالتها للفريق المختص للمتابعة.',
     status: 'implemented',
     kind: 'webhook',
     endpoint: 'request',

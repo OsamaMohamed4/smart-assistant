@@ -1816,26 +1816,57 @@ app.get('/api/companies/:id/estate', requireSuperadmin, async (req, res) => {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
   const s = estate.settingsOf(c);
-  const stored = (await sql.getCompanyEstateToken.get(c.id))?.estate_token;
-  // A glimpse of the saved key -- its first and last characters and length --
-  // to compare with what Estate sent, never the key.
+  const row = await sql.getCompanyEstateToken.get(c.id);
+  const stored = row?.estate_token;
+  // A glimpse of the saved keys -- first and last characters and length --
+  // to compare with what Estate sent, never the keys.
   const keyHint = stored ? estate.keyHint(decryptField(stored)) : null;
-  res.json({ url: s.url, platform: s.platform, enabled: s.enabled, projects: s.projects, hasToken: !!stored, keyHint });
+  const secretHint = row?.estate_secret ? estate.keyHint(decryptField(row.estate_secret)) : null;
+  res.json({
+    url: s.url, platform: s.platform, enabled: s.enabled, projects: s.projects, scopes: s.scopes,
+    hasToken: !!stored, keyHint, hasSecret: !!row?.estate_secret, secretHint,
+  });
 });
 
 app.put('/api/companies/:id/estate', requireSuperadmin, async (req, res) => {
   const row = await sql.getCompany.get(req.params.id);
   if (!row) return res.status(404).json({ error: 'not found' });
-  const hasToken = !!(await sql.getCompanyEstateToken.get(row.id))?.estate_token;
-  const v = estate.validateSettings(req.body, { hasToken });
+  const keys = await sql.getCompanyEstateToken.get(row.id);
+  const hasToken = !!keys?.estate_token;
+  const hasSecret = !!keys?.estate_secret;
+  const v = estate.validateSettings(req.body, { hasToken, hasSecret });
   if (v.error) return res.status(400).json({ error: v.error });
   let existing = {};
   try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
   await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify({ ...existing, estate: v.estate }) });
   invalidateCache();
-  audit(req, 'company.estate', `companies/${row.id}`, { url: v.estate.url, enabled: v.estate.enabled, projects: v.estate.projects.length });
+  audit(req, 'company.estate', `companies/${row.id}`, {
+    url: v.estate.url, enabled: v.estate.enabled, projects: v.estate.projects.length,
+    interest: v.estate.interest, rental: v.estate.rental, maintenance: v.estate.maintenance,
+  });
   const s = estate.settingsOf({ settings: { estate: v.estate } });
-  res.json({ url: s.url, platform: s.platform, enabled: s.enabled, projects: s.projects, hasToken });
+  res.json({ url: s.url, platform: s.platform, enabled: s.enabled, projects: s.projects, scopes: s.scopes, hasToken, hasSecret });
+});
+
+// The secret key Estate's system endpoints take beside the API key (rental
+// and maintenance). Write-only, encrypted, like the API key. Removing it stops
+// those two from sending; interest, which does not use it, goes on.
+app.put('/api/companies/:id/estate/secret', requireSuperadmin, async (req, res) => {
+  const row = await sql.getCompany.get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const secret = estate.cleanKey(req.body?.secret);
+  if (secret.length > 2000) return res.status(400).json({ error: 'المفتاح أطول من المعتاد. انسخه كما هو.' });
+  await sql.setCompanyEstateSecret.run({ id: row.id, secret: secret ? encryptField(secret) : null });
+  if (!secret) {
+    let existing = {};
+    try { if (row.settings) existing = JSON.parse(row.settings) || {}; } catch {}
+    if (existing.estate?.rental || existing.estate?.maintenance) {
+      await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify({ ...existing, estate: { ...existing.estate, rental: false, maintenance: false } }) });
+      invalidateCache();
+    }
+  }
+  audit(req, 'company.estate_secret', `companies/${row.id}`, { set: !!secret });
+  res.json({ hasSecret: !!secret, secretHint: secret ? estate.keyHint(secret) : null });
 });
 
 app.put('/api/companies/:id/estate/token', requireSuperadmin, async (req, res) => {
@@ -1862,9 +1893,11 @@ app.put('/api/companies/:id/estate/token', requireSuperadmin, async (req, res) =
 app.post('/api/companies/:id/estate/check', requireSuperadmin, async (req, res) => {
   const c = await loadCompany(req.params.id);
   if (!c) return res.status(404).json({ error: 'not found' });
-  const token = decryptField((await sql.getCompanyEstateToken.get(c.id))?.estate_token) || null;
+  const keys = await sql.getCompanyEstateToken.get(c.id);
+  const token = decryptField(keys?.estate_token) || null;
+  const secret = decryptField(keys?.estate_secret) || null;
   const url = req.body?.url !== undefined ? req.body.url : estate.settingsOf(c).url;
-  const r = await estate.check({ url, token });
+  const r = await estate.check({ url, token, secret });
   audit(req, 'company.estate_check', `companies/${c.id}`, { ok: r.ok });
   res.json(r);
 });

@@ -314,6 +314,7 @@ export const api = {
   companyEstate     : (companyId) => request(`/api/companies/${companyId}/estate`),
   saveCompanyEstate : (companyId, body) => request(`/api/companies/${companyId}/estate`, { method: 'PUT', body: JSON.stringify(body) }),
   saveCompanyEstateToken: (companyId, token) => request(`/api/companies/${companyId}/estate/token`, { method: 'PUT', body: JSON.stringify({ token }) }),
+  saveCompanyEstateSecret: (companyId, secret) => request(`/api/companies/${companyId}/estate/secret`, { method: 'PUT', body: JSON.stringify({ secret }) }),
   checkCompanyEstate: (companyId, url) => request(`/api/companies/${companyId}/estate/check`, { method: 'POST', body: JSON.stringify({ url }) }),
   sendRequestToEstate: (companyId, requestId) => request(`/api/companies/${companyId}/requests/${requestId}/estate`, { method: 'POST', body: '{}' }),
 };

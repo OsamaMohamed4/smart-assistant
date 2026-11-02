@@ -560,7 +560,7 @@ test('a customer who confirms a purchase on WhatsApp files a request that goes t
   assert.equal(f['project_codes[0]'], 'M-10');
   assert.equal(f.platform, 'ai_chat');
   assert.deepEqual(f.note.split('\n').slice(0, 2), ['طلب اهتمام من محادثة واتساب', 'المساعد الذكي: ناصر — مهير العقارية']);
-  assert.match(f.note, /طريقة الدفع: كاش/);
+  assert.equal(f.payment_method, 'cash', 'a choice in Estate\'s own field');
   // The customer read the confirmation the model wrote after filing.
   assert.match(sent.at(-1).body.content, /تم تسجيل الطلب/);
 });

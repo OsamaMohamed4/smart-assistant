@@ -283,8 +283,9 @@ export function RequestsPage({ user, pinnedCompanyId }) {
 function EstateCard({ companyId, onChange }) {
   const { push } = useToast();
   const [s, setS] = useState(null);
-  const [form, setForm] = useState({ url: '', platform: '', enabled: false, projects: '' });
+  const [form, setForm] = useState({ url: '', platform: '', enabled: false, projects: '', interest: true, rental: false, maintenance: false });
   const [token, setToken] = useState('');
+  const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState('');
   const [check, setCheck] = useState(null);
   const [open, setOpen] = useState(false);
@@ -296,10 +297,12 @@ function EstateCard({ companyId, onChange }) {
       setForm({
         url: r.url || '', platform: r.platform || '', enabled: !!r.enabled,
         projects: (r.projects || []).map((p) => `${p.name} = ${p.code}`).join('\n'),
+        interest: r.scopes?.interest !== false, rental: !!r.scopes?.rental, maintenance: !!r.scopes?.maintenance,
       });
       if (!r.enabled) setOpen(true);
-    } else if (!r.hasToken) {
-      setForm((f) => ({ ...f, enabled: false }));
+    } else {
+      if (!r.hasToken) setForm((f) => ({ ...f, enabled: false }));
+      if (!r.hasSecret) setForm((f) => ({ ...f, rental: false, maintenance: false }));
     }
   }).catch((e) => push(e.message, 'error'));
   useEffect(() => { load(); }, [companyId]);
@@ -319,6 +322,12 @@ function EstateCard({ companyId, onChange }) {
     push(r.hasToken ? 'تم حفظ مفتاح Estate' : 'أُزيل مفتاح Estate، وأُوقف الإرسال', 'success');
     await load(false); onChange?.();
   });
+  const saveSecret = (value) => run('secret', async () => {
+    const r = await api.saveCompanyEstateSecret(companyId, value);
+    setSecret('');
+    push(r.hasSecret ? 'تم حفظ المفتاح السري' : 'أُزيل المفتاح السري، وأُوقف إرسال التأجير والصيانة', 'success');
+    await load(false); onChange?.();
+  });
   const runCheck = () => run('check', async () => {
     setCheck(await api.checkCompanyEstate(companyId, form.url));
   });
@@ -331,7 +340,9 @@ function EstateCard({ companyId, onChange }) {
         <span className="text-[14px] font-semibold text-ink-900">ربط Estate</span>
         <span className="flex items-center gap-2">
           <span className={cn('text-[12px] font-medium', s.enabled ? 'text-emerald-700' : 'text-ink-500')}>
-            {s.enabled ? 'يعمل: تُرسل طلبات الاهتمام من المكالمات وواتساب' : 'غير مفعّل'}
+            {s.enabled
+              ? `يعمل: ${[s.scopes?.interest !== false && 'الاهتمام', s.scopes?.rental && 'التأجير', s.scopes?.maintenance && 'الصيانة'].filter(Boolean).join('، ') || 'لا شيء مفعّل'}`
+              : 'غير مفعّل'}
           </span>
           {open ? <ChevronUp className="w-4 h-4 text-ink-400" /> : <ChevronDown className="w-4 h-4 text-ink-400" />}
         </span>
@@ -340,9 +351,9 @@ function EstateCard({ companyId, onChange }) {
       {open && (
         <>
           <p className="text-[12px] text-ink-500 leading-relaxed">
-            يُرسل كل «طلب اهتمام» يسجّله الوكيل إلى نظام Estate الخاص بالشركة: من المكالمة بعد انتهائها، ومن واتساب حين يؤكد العميل طلبه. ويُرسل معه اسم العميل، ورقمه من المكالمة أو من واتساب، والمشروع المهتم به برمزه، وملاحظة فيها كل إجابات العميل.
-            مهير ووكن على Estate واحد: العنوان نفسه والمفتاح نفسه، ويُميَّز الطلب برمز المشروع.
-            طلبات التأجير لا تُرسل، فلها في Estate واجهة أخرى. ويظهر بجانب كل طلب ما جرى له.
+            تُرسل الطلبات التي يسجّلها الوكيل إلى نظام Estate الخاص بالشركة: من المكالمة بعد انتهائها، ومن واتساب حين يؤكد العميل طلبه، كلٌّ إلى واجهته:
+            الاهتمام بالشراء، والتأجير (سكني أو تجاري أو مكتبي)، والصيانة. وتُرسل اختيارات العميل في حقولها في Estate (نوع العقار، طريقة الدفع، كيف سمعت عنا…)،
+            وما ليس له حقل في الملاحظة مع اسم المساعد والشركة. مهير ووكن على Estate واحد، ويُميَّز الطلب برمز المشروع واسم المساعد. ويظهر بجانب كل طلب ما جرى له.
           </p>
 
           <div>
@@ -378,6 +389,31 @@ function EstateCard({ companyId, onChange }) {
           </div>
 
           <div>
+            <div className="flex items-center justify-between gap-3 mb-1">
+              <label className="block text-[12px] font-medium text-ink-700">المفتاح السري (Secret)</label>
+              <span className={cn('text-[11.5px] font-semibold', s.hasSecret ? 'text-emerald-700' : 'text-ink-500')}>
+                {s.hasSecret ? 'المفتاح محفوظ' : 'لا يوجد مفتاح'}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <input type="password" autoComplete="off" dir="ltr" value={secret} onChange={(e) => setSecret(e.target.value)}
+                placeholder={s.hasSecret ? 'لاستبدال المفتاح، الصق مفتاحاً جديداً' : 'الصق المفتاح السري الذي أعطاك إياه Estate'}
+                className={cn(input, 'flex-1 font-mono text-[12px]')} />
+              <Button variant="secondary" disabled={!secret.trim()} loading={busy === 'secret'} onClick={() => saveSecret(secret.trim())}>حفظ المفتاح</Button>
+            </div>
+            <p className="mt-1 text-[11.5px] text-ink-500">لإرسال التأجير والصيانة: يُرسل مع مفتاح API إلى واجهتيهما. لا يُعرض بعد الحفظ، ولا يصل إلى المتصفح.</p>
+            {s.secretHint && (
+              <p className="mt-1 text-[11.5px] text-ink-600">
+                المحفوظ يبدأ بـ <span dir="ltr" className="font-mono">{s.secretHint.start || '—'}</span> وينتهي بـ <span dir="ltr" className="font-mono">{s.secretHint.end || '—'}</span>، وطوله {s.secretHint.length} حرفاً.
+              </p>
+            )}
+            {s.hasSecret && (
+              <button type="button" className="mt-1 text-[11.5px] text-rose-700 underline disabled:opacity-50" disabled={!!busy}
+                onClick={() => saveSecret('')}>إزالة المفتاح السري</button>
+            )}
+          </div>
+
+          <div>
             <label className="block text-[12px] font-medium text-ink-700 mb-1">قيمة المصدر (platform)</label>
             <input dir="ltr" value={form.platform} maxLength={60} onChange={(e) => setForm((f) => ({ ...f, platform: e.target.value }))}
               className={cn(input, 'font-mono text-[12px]')} />
@@ -401,24 +437,39 @@ function EstateCard({ companyId, onChange }) {
             <input type="checkbox" className="mt-1 w-4 h-4 accent-brand-600" checked={form.enabled}
               onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))} />
             <span>
-              <span className="block text-[13px] font-medium text-ink-900">إرسال طلبات الاهتمام إلى Estate من المكالمات وواتساب</span>
-              <span className="block text-[12px] text-ink-500 mt-0.5">يحتاج العنوان والمفتاح.</span>
+              <span className="block text-[13px] font-medium text-ink-900">إرسال الطلبات إلى Estate من المكالمات وواتساب</span>
+              <span className="block text-[12px] text-ink-500 mt-0.5">يحتاج العنوان والمفتاح. واختر ما يُرسل:</span>
             </span>
           </label>
+          <div className="flex flex-wrap gap-x-6 gap-y-2 pr-11 -mt-2">
+            {[
+              ['interest', 'طلبات الاهتمام بالشراء', false],
+              ['rental', 'طلبات التأجير', true],
+              ['maintenance', 'طلبات الصيانة', true],
+            ].map(([k, label, needsSecret]) => (
+              <label key={k} className={cn('flex items-center gap-2 text-[12.5px] text-ink-800', needsSecret && !s.hasSecret ? 'opacity-50' : 'cursor-pointer')}>
+                <input type="checkbox" className="w-4 h-4 accent-brand-600" checked={!!form[k]} disabled={needsSecret && !s.hasSecret}
+                  onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.checked }))} />
+                {label}{needsSecret && !s.hasSecret ? ' (تحتاج المفتاح السري)' : ''}
+              </label>
+            ))}
+          </div>
 
-          {check && (
-            <div className={cn('rounded-xl border px-4 py-3 text-[12.5px] leading-relaxed',
-              check.ok ? (check.warn ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-emerald-50 border-emerald-200 text-emerald-800') : 'bg-rose-50 border-rose-200 text-rose-800')}>
-              {check.text}
+          {check && [check, ...(check.more || [])].map((c, i) => (
+            <div key={i} className={cn('rounded-xl border px-4 py-3 text-[12.5px] leading-relaxed',
+              c.ok ? (c.warn ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-emerald-50 border-emerald-200 text-emerald-800')
+                : c.warn ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-rose-50 border-rose-200 text-rose-800')}>
+              {c.text}
             </div>
-          )}
+          ))}
 
           <div className="flex flex-wrap justify-end gap-2">
             <Button variant="secondary" disabled={!s.hasToken || !form.url.trim()} loading={busy === 'check'} onClick={runCheck}>فحص الاتصال</Button>
             <Button variant="brand" loading={busy === 'save'} onClick={save}>حفظ</Button>
           </div>
           <p className="text-[11.5px] text-ink-500 leading-relaxed">
-            «فحص الاتصال» يرسل إلى Estate طلباً بلا بيانات، والمتوقع أن يرفضه ويذكر الحقول التي يشترطها. وإن قبله، فستظهر رسالة تطلب حذفه من Estate.
+            «فحص الاتصال» يرسل إلى واجهتي الاهتمام والتأجير طلباً بلا بيانات، والمتوقع أن يرفضه Estate ويذكر الحقول التي يشترطها، وإن قبله فستظهر رسالة تطلب حذفه.
+            ويقرأ بيانات الصيانة من Estate ويذكر عدد المشاريع والمباني والوحدات التي فيها، وبها يُعرف مشروع العميل ومبناه ووحدته عند إرسال طلب صيانة.
           </p>
         </>
       )}

@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS companies (
   -- The API key of the company's own Estate (its ERP), the same way:
   -- encrypted when the key is set, never sent to the browser. services/estate.js.
   estate_token    TEXT,
+  -- Its secret key, which Estate's system endpoints take beside the API key.
+  estate_secret   TEXT,
   last_synced_at  TEXT,
   created_at      TEXT DEFAULT ${NOW_TEXT},
   updated_at      TEXT DEFAULT ${NOW_TEXT}

@@ -887,6 +887,14 @@ if (!hasColumn('companies', 'estate_token')) {
   `);
 }
 
+// Migration 51: Estate's "system" endpoints -- rental interest and
+// maintenance -- take a secret key beside the API key (x-api-key and
+// x-secret-key). Kept like the API key: its own column, encrypted, write-only.
+// Postgres: db-pg-schema.js + lib/migrations-pg.js.
+if (!hasColumn('companies', 'estate_secret')) {
+  runMigration(51, 'companies_add_estate_secret', 'ALTER TABLE companies ADD COLUMN estate_secret TEXT');
+}
+
 // Migration 48: the LoopChat conversation a WhatsApp pause belongs to, so a
 // new message in that same conversation keeps the assistant out while one in
 // a new conversation (the old one closed) brings it back. Postgres:
@@ -1353,7 +1361,10 @@ const sql = {
   setCompanyLoopchatToken: db.prepare(
     `UPDATE companies SET loopchat_token = @token, updated_at = datetime('now') WHERE id = @id`
   ),
-  getCompanyEstateToken: db.prepare('SELECT estate_token FROM companies WHERE id = ?'),
+  getCompanyEstateToken: db.prepare('SELECT estate_token, estate_secret FROM companies WHERE id = ?'),
+  setCompanyEstateSecret: db.prepare(
+    `UPDATE companies SET estate_secret = @secret, updated_at = datetime('now') WHERE id = @id`
+  ),
   setCompanyEstateToken: db.prepare(
     `UPDATE companies SET estate_token = @token, updated_at = datetime('now') WHERE id = @id`
   ),

@@ -220,7 +220,11 @@ const sql = {
     `UPDATE companies SET loopchat_token = $1, updated_at = ${NOW} WHERE id = $2`,
     ['token', 'id'],
   ),
-  getCompanyEstateToken: stmt('SELECT estate_token FROM companies WHERE id = $1'),
+  getCompanyEstateToken: stmt('SELECT estate_token, estate_secret FROM companies WHERE id = $1'),
+  setCompanyEstateSecret: stmt(
+    `UPDATE companies SET estate_secret = $1, updated_at = ${NOW} WHERE id = $2`,
+    ['secret', 'id'],
+  ),
   setCompanyEstateToken: stmt(
     `UPDATE companies SET estate_token = $1, updated_at = ${NOW} WHERE id = $2`,
     ['token', 'id'],

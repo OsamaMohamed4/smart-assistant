@@ -894,6 +894,11 @@ if (!hasColumn('companies', 'estate_token')) {
 if (!hasColumn('companies', 'estate_secret')) {
   runMigration(51, 'companies_add_estate_secret', 'ALTER TABLE companies ADD COLUMN estate_secret TEXT');
 }
+// Migration 52: the x-api-key Estate issued for those endpoints, where it is
+// not the Make endpoint's api-key (the two were refused for each other).
+if (!hasColumn('companies', 'estate_system_key')) {
+  runMigration(52, 'companies_add_estate_system_key', 'ALTER TABLE companies ADD COLUMN estate_system_key TEXT');
+}
 
 // Migration 48: the LoopChat conversation a WhatsApp pause belongs to, so a
 // new message in that same conversation keeps the assistant out while one in
@@ -1361,7 +1366,10 @@ const sql = {
   setCompanyLoopchatToken: db.prepare(
     `UPDATE companies SET loopchat_token = @token, updated_at = datetime('now') WHERE id = @id`
   ),
-  getCompanyEstateToken: db.prepare('SELECT estate_token, estate_secret FROM companies WHERE id = ?'),
+  getCompanyEstateToken: db.prepare('SELECT estate_token, estate_secret, estate_system_key FROM companies WHERE id = ?'),
+  setCompanyEstateSystemKey: db.prepare(
+    `UPDATE companies SET estate_system_key = @key, updated_at = datetime('now') WHERE id = @id`
+  ),
   setCompanyEstateSecret: db.prepare(
     `UPDATE companies SET estate_secret = @secret, updated_at = datetime('now') WHERE id = @id`
   ),

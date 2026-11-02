@@ -283,8 +283,9 @@ export function RequestsPage({ user, pinnedCompanyId }) {
 function EstateCard({ companyId, onChange }) {
   const { push } = useToast();
   const [s, setS] = useState(null);
-  const [form, setForm] = useState({ url: '', platform: '', enabled: false, projects: '', interest: true, rental: false, maintenance: false });
+  const [form, setForm] = useState({ url: '', platform: '', enabled: false, letter: '', interest: true, rental: false, maintenance: false });
   const [token, setToken] = useState('');
+  const [systemKey, setSystemKey] = useState('');
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState('');
   const [check, setCheck] = useState(null);
@@ -296,7 +297,7 @@ function EstateCard({ companyId, onChange }) {
     if (resetForm) {
       setForm({
         url: r.url || '', platform: r.platform || '', enabled: !!r.enabled,
-        projects: (r.projects || []).map((p) => `${p.name} = ${p.code}`).join('\n'),
+        letter: r.letter || '',
         interest: r.scopes?.interest !== false, rental: !!r.scopes?.rental, maintenance: !!r.scopes?.maintenance,
       });
       if (!r.enabled) setOpen(true);
@@ -320,6 +321,12 @@ function EstateCard({ companyId, onChange }) {
     const r = await api.saveCompanyEstateToken(companyId, value);
     setToken('');
     push(r.hasToken ? 'تم حفظ مفتاح Estate' : 'أُزيل مفتاح Estate، وأُوقف الإرسال', 'success');
+    await load(false); onChange?.();
+  });
+  const saveSystemKey = (value) => run('systemKey', async () => {
+    const r = await api.saveCompanyEstateSystemKey(companyId, value);
+    setSystemKey('');
+    push(r.hasSystemKey ? 'تم حفظ مفتاح النظام' : 'أُزيل مفتاح النظام، ويُستخدم مفتاح الاهتمام مكانه', 'success');
     await load(false); onChange?.();
   });
   const saveSecret = (value) => run('secret', async () => {
@@ -364,7 +371,7 @@ function EstateCard({ companyId, onChange }) {
 
           <div>
             <div className="flex items-center justify-between gap-3 mb-1">
-              <label className="block text-[12px] font-medium text-ink-700">مفتاح Estate (API)</label>
+              <label className="block text-[12px] font-medium text-ink-700">مفتاح الاهتمام (api-key)</label>
               <span className={cn('text-[11.5px] font-semibold', s.hasToken ? 'text-emerald-700' : 'text-ink-500')}>
                 {s.hasToken ? 'المفتاح محفوظ' : 'لا يوجد مفتاح'}
               </span>
@@ -375,7 +382,7 @@ function EstateCard({ companyId, onChange }) {
                 className={cn(input, 'flex-1 font-mono text-[12px]')} />
               <Button variant="secondary" disabled={!token.trim()} loading={busy === 'token'} onClick={() => saveToken(token.trim())}>حفظ المفتاح</Button>
             </div>
-            <p className="mt-1 text-[11.5px] text-ink-500">لا يُعرض بعد الحفظ، ولا يصل إلى المتصفح.</p>
+            <p className="mt-1 text-[11.5px] text-ink-500">مفتاح واجهة طلبات الاهتمام بالشراء (Make). لا يُعرض بعد الحفظ، ولا يصل إلى المتصفح.</p>
             {s.keyHint && (
               <p className="mt-1 text-[11.5px] text-ink-600">
                 المفتاح المحفوظ يبدأ بـ <span dir="ltr" className="font-mono">{s.keyHint.start || '—'}</span> وينتهي بـ <span dir="ltr" className="font-mono">{s.keyHint.end || '—'}</span>، وطوله {s.keyHint.length} حرفاً. قارنه بالمفتاح الذي أرسله Estate.
@@ -390,7 +397,32 @@ function EstateCard({ companyId, onChange }) {
 
           <div>
             <div className="flex items-center justify-between gap-3 mb-1">
-              <label className="block text-[12px] font-medium text-ink-700">المفتاح السري (Secret)</label>
+              <label className="block text-[12px] font-medium text-ink-700">مفتاح النظام (x-api-key)</label>
+              <span className={cn('text-[11.5px] font-semibold', s.hasSystemKey ? 'text-emerald-700' : 'text-ink-500')}>
+                {s.hasSystemKey ? 'المفتاح محفوظ' : 'يُستخدم مفتاح الاهتمام'}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <input type="password" autoComplete="off" dir="ltr" value={systemKey} onChange={(e) => setSystemKey(e.target.value)}
+                placeholder={s.hasSystemKey ? 'لاستبدال المفتاح، الصق مفتاحاً جديداً' : 'الصق x-api-key الذي أعطاك إياه Estate'}
+                className={cn(input, 'flex-1 font-mono text-[12px]')} />
+              <Button variant="secondary" disabled={!systemKey.trim()} loading={busy === 'systemKey'} onClick={() => saveSystemKey(systemKey.trim())}>حفظ المفتاح</Button>
+            </div>
+            <p className="mt-1 text-[11.5px] text-ink-500">لواجهتي التأجير والصيانة، مع المفتاح السري. إن تُرك فارغاً يُرسل مفتاح الاهتمام مكانه.</p>
+            {s.systemKeyHint && (
+              <p className="mt-1 text-[11.5px] text-ink-600">
+                المحفوظ يبدأ بـ <span dir="ltr" className="font-mono">{s.systemKeyHint.start || '—'}</span> وينتهي بـ <span dir="ltr" className="font-mono">{s.systemKeyHint.end || '—'}</span>، وطوله {s.systemKeyHint.length} حرفاً.
+              </p>
+            )}
+            {s.hasSystemKey && (
+              <button type="button" className="mt-1 text-[11.5px] text-rose-700 underline disabled:opacity-50" disabled={!!busy}
+                onClick={() => saveSystemKey('')}>إزالة مفتاح النظام</button>
+            )}
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between gap-3 mb-1">
+              <label className="block text-[12px] font-medium text-ink-700">المفتاح السري (x-secret-key)</label>
               <span className={cn('text-[11.5px] font-semibold', s.hasSecret ? 'text-emerald-700' : 'text-ink-500')}>
                 {s.hasSecret ? 'المفتاح محفوظ' : 'لا يوجد مفتاح'}
               </span>
@@ -401,7 +433,7 @@ function EstateCard({ companyId, onChange }) {
                 className={cn(input, 'flex-1 font-mono text-[12px]')} />
               <Button variant="secondary" disabled={!secret.trim()} loading={busy === 'secret'} onClick={() => saveSecret(secret.trim())}>حفظ المفتاح</Button>
             </div>
-            <p className="mt-1 text-[11.5px] text-ink-500">لإرسال التأجير والصيانة: يُرسل مع مفتاح API إلى واجهتيهما. لا يُعرض بعد الحفظ، ولا يصل إلى المتصفح.</p>
+            <p className="mt-1 text-[11.5px] text-ink-500">لواجهتي التأجير والصيانة، مع مفتاح النظام. لا يُعرض بعد الحفظ، ولا يصل إلى المتصفح.</p>
             {s.secretHint && (
               <p className="mt-1 text-[11.5px] text-ink-600">
                 المحفوظ يبدأ بـ <span dir="ltr" className="font-mono">{s.secretHint.start || '—'}</span> وينتهي بـ <span dir="ltr" className="font-mono">{s.secretHint.end || '—'}</span>، وطوله {s.secretHint.length} حرفاً.
@@ -421,15 +453,13 @@ function EstateCard({ companyId, onChange }) {
           </div>
 
           <div>
-            <label className="block text-[12px] font-medium text-ink-700 mb-1">مشاريع الشركة ورموزها في Estate</label>
-            <textarea dir="auto" rows={6} value={form.projects} onChange={(e) => setForm((f) => ({ ...f, projects: e.target.value }))}
-              placeholder={'M-10 — أدوار، حي المغرزات = M-10\nوكن 038 — فلل، حي النهضة = W-38'}
-              className="w-full px-3 py-2 rounded-xl border border-ink-200 bg-white text-[12.5px] leading-relaxed focus-ring resize-y" />
+            <label className="block text-[12px] font-medium text-ink-700 mb-1">حرف الشركة في رموز مشاريع Estate</label>
+            <input dir="ltr" value={form.letter} maxLength={4}
+              onChange={(e) => setForm((f) => ({ ...f, letter: e.target.value.toUpperCase().replace(/[^A-Z]/g, '') }))}
+              placeholder="W" className={cn(input, 'w-28 font-mono text-[13px]')} />
             <p className="mt-1 text-[11.5px] text-ink-500 leading-relaxed">
-              سطر لكل مشروع: الاسم كما يعرضه الوكيل على العميل، ثم «=»، ثم رمز المشروع في Estate بصيغته:
-              حرف الشركة ثم شرطة ثم رقم المشروع (W-38 لمشروع وكن 38، وM-12 لمشروع مهير 12).
-              اكتب رقم المشروع في الاسم إن كان العميل يعرفه برقمه. يختار الوكيل المشروع من هذه الأسماء فقط، ويُرسل رمزه مع الطلب،
-              وإن لم يحدد العميل مشروعاً يُرسل الطلب بلا مشروع. بعد تعديل القائمة اضغط «نشر» للشركة حتى تصل إلى الوكيل.
+              W لوكن وM لمهير. يُبنى رمز المشروع منه ومن رقم المشروع الذي يذكره العميل: «وكن 38» يُرسل W-38، و«مهير 12» يُرسل M-12.
+              وإن لم يذكر العميل رقم مشروع يُرسل الطلب بلا مشروع، وكل شركة تُرسل مشاريعها فقط.
             </p>
           </div>
 

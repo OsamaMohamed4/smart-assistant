@@ -32,7 +32,7 @@ const { REQUEST_TYPES, FIELDS } = require('../../lib/request-types');
  * the provider fills from the line itself, so the model can neither be asked
  * for it nor supply a different one.
  */
-function requestBodyProperties(projects = []) {
+function requestBodyProperties() {
   const types = Object.keys(REQUEST_TYPES);
   const props = {
     request_type: {
@@ -51,16 +51,6 @@ function requestBodyProperties(projects = []) {
     props[key] = FIELDS[key].options
       ? { type: 'string', enum: FIELDS[key].options, description: `${FIELDS[key].descriptionAr}. اتركه فارغاً إن لم يذكره العميل` }
       : { type: 'string', description: FIELDS[key].descriptionAr };
-  }
-  // A company that lists its projects (for Estate) has the model pick one by
-  // name, so the name maps to the project's code exactly; never one off the list.
-  const names = [...new Set((projects || []).map((p) => p.name).filter(Boolean))];
-  if (props.project && names.length) {
-    props.project = {
-      type: 'string',
-      enum: names,
-      description: 'المشروع الذي يهتم به العميل، من هذه القائمة فقط، سواء ذكره باسمه أو برقمه. إن لم يحدد العميل مشروعاً منها فاترك الحقل فارغاً.',
-    };
   }
   return props;
 }
@@ -82,9 +72,6 @@ const requestToolDescription = (source = 'المكالمة') =>
   + 'اجمع الحقول المطلوبة لنوع الطلب، ثم اقرأ البيانات على العميل واطلب تأكيده الصريح، '
   + `ولا تستدعِ الأداة قبل أن يؤكد. لا تسأل عن رقم الجوال — يُسجَّل تلقائياً من ${source}.`;
 
-// The company's projects as it listed them for Estate (services/estate.js).
-// Lazy: estate.js needs lib/request-types too, and nothing here needs it at load.
-const companyProjects = (company) => require('../estate').settingsOf(company).projects;
 
 /**
  * @typedef {object} Feature
@@ -151,8 +138,9 @@ const FEATURES = [
     toolDescriptionAr: requestToolDescription('المكالمة'),
     responseTimeoutSecs: 10,
     bodyProperties: requestBodyProperties(),
-    // Per company at publish: its project list becomes the project field's choices.
-    bodyPropertiesFor: (company) => requestBodyProperties(companyProjects(company)),
+    // The same for every company: the project is named as the customer said
+    // it, and its Estate code made from it when the request is sent.
+    bodyPropertiesFor: () => requestBodyProperties(),
     bodyRequired: ['request_type', 'customer_confirmed'],
     // Opt-in. A capability that files records on a company's behalf must be
     // switched on by someone who decided they want it, never appear on every

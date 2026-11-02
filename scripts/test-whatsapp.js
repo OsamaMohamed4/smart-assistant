@@ -539,7 +539,8 @@ test('a customer who confirms a purchase on WhatsApp files a request that goes t
   // The tool the model saw: the call agent's, with this company's projects.
   const tool = replies[0].opts.tools[0].function;
   assert.equal(tool.name, 'submit_customer_request');
-  assert.ok(tool.parameters.properties.project.enum.includes(M10));
+  assert.equal(tool.parameters.properties.project.enum, undefined, 'the project as the customer named it');
+  assert.deepEqual(tool.parameters.properties.payment_method.enum, ['كاش', 'تمويل بنكي'], 'a choice from Estate\'s list');
   assert.match(tool.description, /يُسجَّل تلقائياً من محادثة واتساب/);
   assert.deepEqual(tool.parameters.required, ['request_type', 'customer_confirmed']);
 

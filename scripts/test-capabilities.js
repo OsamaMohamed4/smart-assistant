@@ -186,19 +186,18 @@ test('the request schema is generated from the request types, not hand-copied', 
   }
 });
 
-test('a company that lists its projects for Estate has the model pick one of them', () => {
+test('the project is what the customer named, and the choices are Estate\'s own', () => {
   const feature = registry.getFeature('request_creation');
-  // No list: the project is free text, as every other field.
-  assert.equal(feature.bodyPropertiesFor({ settings: {} }).project.enum, undefined);
-  const company = { settings: { estate: { projects: [
-    { name: 'M-10 — أدوار، حي المغرزات', code: 'M-10' }, { name: 'M-11 — شقق، حي الحمراء', code: 'M-11' },
-  ] } } };
-  const props = feature.bodyPropertiesFor(company);
-  assert.deepEqual(props.project.enum, ['M-10 — أدوار، حي المغرزات', 'M-11 — شقق، حي الحمراء']);
-  assert.match(props.project.description, /من هذه القائمة فقط/);
-  // Everything else is untouched, and the codes never reach the model.
+  // The project goes as the customer named it; its Estate code is made from
+  // the number in it when the request is sent (services/estate.js), so no list.
+  const props = feature.bodyPropertiesFor({ settings: { estate: { letter: 'M' } } });
+  assert.equal(props.project.enum, undefined);
+  assert.match(props.project.description, /باسمه أو برقمه/);
   assert.deepEqual(Object.keys(props).sort(), Object.keys(feature.bodyProperties).sort());
-  assert.ok(!JSON.stringify(props).includes('"M-10"'));
+  // A field Estate keeps as a choice offers only Estate's names.
+  assert.ok(props.referral_source.enum.includes('سناب شات'));
+  assert.ok(props.maintenance_issue.enum.includes('سباكة — مواسير'));
+  assert.equal(props.customer_name.enum, undefined);
 });
 
 test('pickFields keeps only the fields the type defines, bounded', () => {

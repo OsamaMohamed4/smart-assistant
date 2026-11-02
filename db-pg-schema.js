@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS companies (
   estate_token    TEXT,
   -- Its secret key, which Estate's system endpoints take beside the API key.
   estate_secret   TEXT,
+  -- The x-api-key for those endpoints, where it is not the api-key above.
+  estate_system_key TEXT,
   last_synced_at  TEXT,
   created_at      TEXT DEFAULT ${NOW_TEXT},
   updated_at      TEXT DEFAULT ${NOW_TEXT}

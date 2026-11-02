@@ -1822,9 +1822,11 @@ app.get('/api/companies/:id/estate', requireSuperadmin, async (req, res) => {
   // to compare with what Estate sent, never the keys.
   const keyHint = stored ? estate.keyHint(decryptField(stored)) : null;
   const secretHint = row?.estate_secret ? estate.keyHint(decryptField(row.estate_secret)) : null;
+  const systemKeyHint = row?.estate_system_key ? estate.keyHint(decryptField(row.estate_system_key)) : null;
   res.json({
-    url: s.url, platform: s.platform, enabled: s.enabled, projects: s.projects, scopes: s.scopes,
+    url: s.url, platform: s.platform, enabled: s.enabled, letter: s.letter, scopes: s.scopes,
     hasToken: !!stored, keyHint, hasSecret: !!row?.estate_secret, secretHint,
+    hasSystemKey: !!row?.estate_system_key, systemKeyHint,
   });
 });
 
@@ -1841,11 +1843,23 @@ app.put('/api/companies/:id/estate', requireSuperadmin, async (req, res) => {
   await sql.updateCompanySettings.run({ id: row.id, settings: JSON.stringify({ ...existing, estate: v.estate }) });
   invalidateCache();
   audit(req, 'company.estate', `companies/${row.id}`, {
-    url: v.estate.url, enabled: v.estate.enabled, projects: v.estate.projects.length,
+    url: v.estate.url, enabled: v.estate.enabled, letter: v.estate.letter,
     interest: v.estate.interest, rental: v.estate.rental, maintenance: v.estate.maintenance,
   });
   const s = estate.settingsOf({ settings: { estate: v.estate } });
-  res.json({ url: s.url, platform: s.platform, enabled: s.enabled, projects: s.projects, scopes: s.scopes, hasToken, hasSecret });
+  res.json({ url: s.url, platform: s.platform, enabled: s.enabled, letter: s.letter, scopes: s.scopes, hasToken, hasSecret });
+});
+
+// The x-api-key Estate issued for its system endpoints, where it is not the
+// Make endpoint's api-key above. Empty: those endpoints get that api-key.
+app.put('/api/companies/:id/estate/system-key', requireSuperadmin, async (req, res) => {
+  const row = await sql.getCompany.get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const key = estate.cleanKey(req.body?.key);
+  if (key.length > 2000) return res.status(400).json({ error: 'المفتاح أطول من المعتاد. انسخه كما هو.' });
+  await sql.setCompanyEstateSystemKey.run({ id: row.id, key: key ? encryptField(key) : null });
+  audit(req, 'company.estate_system_key', `companies/${row.id}`, { set: !!key });
+  res.json({ hasSystemKey: !!key, systemKeyHint: key ? estate.keyHint(key) : null });
 });
 
 // The secret key Estate's system endpoints take beside the API key (rental
@@ -1896,8 +1910,9 @@ app.post('/api/companies/:id/estate/check', requireSuperadmin, async (req, res) 
   const keys = await sql.getCompanyEstateToken.get(c.id);
   const token = decryptField(keys?.estate_token) || null;
   const secret = decryptField(keys?.estate_secret) || null;
+  const systemKey = decryptField(keys?.estate_system_key) || null;
   const url = req.body?.url !== undefined ? req.body.url : estate.settingsOf(c).url;
-  const r = await estate.check({ url, token, secret });
+  const r = await estate.check({ url, token, systemKey, secret });
   audit(req, 'company.estate_check', `companies/${c.id}`, { ok: r.ok });
   res.json(r);
 });

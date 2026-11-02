@@ -287,7 +287,7 @@ test('a refusal keeps Estate\'s own words; sending again by hand goes once it is
   // And a sent one is never sent again, even by hand.
   const sentRow = sql.getRequestForEstate.get(row.id, 'maheer');
   assert.deepEqual(await estate.pushRequest(await company(), sentRow, deps(), { retry: true }), { duplicate: true });
-  assert.equal(posts.length, 3);                            // refused with its choices and without, then by hand
+  assert.equal(posts.length, 4);                            // refused with its choices, without, without the project; then by hand
 });
 
 test('a 2xx that says status: false is a refusal, not a success', async () => {
@@ -380,40 +380,44 @@ test('numbers go as digits with the country code, never a "+" or a local 0', () 
 });
 
 test('switching it on needs the address and the key; platform is ai_chat unless set', () => {
-  const ok = { url: 'https://maher.e-statee.com', platform: '', enabled: true, projects: '' };
-  assert.deepEqual(estate.validateSettings(ok, { hasToken: true }).estate, { url: 'https://maher.e-statee.com', platform: null, enabled: true, projects: [], interest: true, rental: false, maintenance: false });
+  const ok = { url: 'https://maher.e-statee.com', platform: '', enabled: true, letter: 'w' };
+  assert.deepEqual(estate.validateSettings(ok, { hasToken: true }).estate, { url: 'https://maher.e-statee.com', platform: null, enabled: true, letter: 'W', interest: true, rental: false, maintenance: false });
+  assert.match(estate.validateSettings({ ...ok, letter: 'و' }, { hasToken: true }).error, /بالإنجليزية/);
   assert.equal(estate.settingsOf({ settings: { estate: { platform: null } } }).platform, 'ai_chat');
   assert.equal(estate.settingsOf({ settings: { estate: { platform: 'other' } } }).platform, 'other');
   assert.match(estate.validateSettings(ok, { hasToken: false }).error, /المفتاح/);
   assert.match(estate.validateSettings({ ...ok, url: 'https://x.com' }, { hasToken: true }).error, /غير صالح/);
-  assert.deepEqual(estate.validateSettings({ url: '', platform: '', enabled: false }, { hasToken: false }).estate, { url: null, platform: null, enabled: false, projects: [], interest: true, rental: false, maintenance: false });
-});
-
-test('the project list is pasted as lines of "name = code", and checked line by line', () => {
-  const text = 'M-10 — أدوار، حي المغرزات = M-10\n\n  وكن 038 — فلل، حي النهضة   =   W-38  \n';
-  assert.deepEqual(estate.parseProjects(text).projects, [
-    { name: 'M-10 — أدوار، حي المغرزات', code: 'M-10' }, { name: 'وكن 038 — فلل، حي النهضة', code: 'W-38' },
-  ]);
-  // Saved as a list, read back as one.
-  assert.deepEqual(estate.parseProjects(estate.parseProjects(text).projects).projects, estate.parseProjects(text).projects);
-  assert.match(estate.parseProjects('M-10').error, /السطر 1/);
-  assert.match(estate.parseProjects('أ = M-10\nب = رمز').error, /السطر 2: رمز المشروع «رمز» ليس بصيغة Estate/);
-  assert.match(estate.parseProjects('أ = M-10\nأ = M-11').error, /مكرر/);
-  assert.match(estate.validateSettings({ url: '', projects: 'x =' }, { hasToken: false }).error, /السطر 1/);
+  assert.deepEqual(estate.validateSettings({ url: '', platform: '', enabled: false }, { hasToken: false }).estate, { url: null, platform: null, enabled: false, letter: null, interest: true, rental: false, maintenance: false });
 });
 
 // Estate's note of 2026-10-31: W-38 is Wakan's project 38, M-12 Maheer's 12, hyphen included.
-test('a project code is kept in Estate\'s form: the company\'s letter, a hyphen, the number', async () => {
-  assert.deepEqual(estate.parseProjects('وكن 38 = w-38\nمهير 12 = M–12\nوكن 40 = W - ٤٠').projects, [
-    { name: 'وكن 38', code: 'W-38' }, { name: 'مهير 12', code: 'M-12' }, { name: 'وكن 40', code: 'W-40' },
-  ]);
-  for (const bad of ['W38', 'W 38', 'وكن-38', 'W-38A', '38']) {
-    assert.match(estate.parseProjects(`وكن = ${bad}`).error, /حرف الشركة ثم شرطة ثم رقم المشروع/, bad);
-  }
-  // A list saved before the format was enforced still sends the code as Estate writes it.
-  configure({ url: 'https://maher.e-statee.com', platform: 'ai_chat', enabled: true, projects: [{ name: 'وكن 38', code: 'w–38' }] }, 'estate-key');
-  await estate.afterCall(await company(), callWith([['interest', { ...INTEREST, project: 'وكن 38' }]]), deps());
-  assert.equal(posts.at(-1).form['project_codes[0]'], 'W-38');
+test('the project code is the company\'s letter and the number the customer gave', async () => {
+  assert.equal(estate.projectCode('وكن 38', 'W'), 'W-38');
+  assert.equal(estate.projectCode('وكن 038 — فلل، حي النهضة', 'W'), 'W-38');
+  assert.equal(estate.projectCode('مهير ١٢', 'M'), 'M-12');
+  assert.equal(estate.projectCode('المشروع رقم 46', 'W'), 'W-46');
+  assert.equal(estate.projectCode('w–38', 'W'), 'W-38', 'a code given outright, in any dash');
+  assert.equal(estate.projectCode('M-10 — أدوار، حي المغرزات', 'M'), 'M-10');
+  // Not guessed: another company's code, no number, two numbers, no letter set.
+  assert.equal(estate.projectCode('M-12', 'W'), null);
+  assert.equal(estate.projectCode('مشروع النرجس', 'W'), null);
+  assert.equal(estate.projectCode('وكن 38 أو 40', 'W'), null);
+  assert.equal(estate.projectCode('وكن 38', null), null);
+  assert.equal(estate.projectCode('', 'W'), null);
+  // A company saved before the letter existed: its old list's codes say it.
+  assert.equal(estate.settingsOf({ settings: { estate: { projects: [{ name: 'x', code: 'W-38' }] } } }).letter, 'W');
+  assert.equal(estate.settingsOf({ settings: { estate: { letter: 'M', projects: [{ name: 'x', code: 'W-38' }] } } }).letter, 'M');
+});
+
+test('a project number Estate does not know does not cost the lead', async () => {
+  configure({ url: 'https://maher.e-statee.com', enabled: true, letter: 'M' }, 'estate-key');
+  answer = () => (posts.at(-1)?.form['project_codes[0]']
+    ? { status: 422, data: { errors: { 'project_codes.0': ['المشروع غير موجود'] } } }
+    : { status: 200, data: { status: true, message: 'تمت العملية بنجاح' } });
+  const call = callWith([['interest', { customer_name: 'فهد', project: 'مهير 99', payment_method: 'كاش' }]]);
+  assert.deepEqual(await estate.afterCall(await company(), call, deps()), [{ sent: true }]);
+  assert.deepEqual(posts.map((p) => [p.form['project_codes[0]'], p.form.payment_method]), [['M-99', 'cash'], ['M-99', undefined], [undefined, undefined]]);
+  assert.match(posts.at(-1).form.note, /المشروع المهتم به: مهير 99/);
 });
 
 test('the note names the assistant and its company, and the direction of the call', () => {
@@ -424,16 +428,20 @@ test('the note names the assistant and its company, and the direction of the cal
   assert.deepEqual(note({ channel: 'whatsapp' }), ['طلب اهتمام من محادثة واتساب', 'المساعد الذكي: ناصر — وكن']);
 });
 
-test('the code goes only for a project on the list; otherwise the lead goes without one', async () => {
-  assert.equal(estate.projectCode('M-10 — أدوار، حي المغرزات', PROJECTS), 'M-10');
-  assert.equal(estate.projectCode('  وكن 038 — فلل،  حي النهضة ', PROJECTS), 'W-38');   // spacing
-  assert.equal(estate.projectCode('M-10', PROJECTS), 'M-10');                              // its own code
-  assert.equal(estate.projectCode('مشروع لا نعرفه', PROJECTS), null);
-  assert.equal(estate.projectCode('', PROJECTS), null);
+test('without a project number the lead goes without a project, named in the note', async () => {
   const call = callWith([['interest', { ...INTEREST, project: 'مشروع لا نعرفه' }]]);
   await estate.afterCall(await company(), call, deps());
   assert.equal(posts.at(-1).form['project_codes[0]'], undefined);
-  assert.match(posts.at(-1).form.note, /المشروع المهتم به: مشروع لا نعرفه/);   // still told, in the note
+  assert.match(posts.at(-1).form.note, /المشروع المهتم به: مشروع لا نعرفه/);
+});
+
+test('the system endpoints take their own x-api-key where Estate issued one', async () => {
+  configure({ url: 'https://maher.e-statee.com', enabled: true, rental: true, letter: 'M' }, 'make-key', 'the-secret');
+  db.prepare("UPDATE companies SET estate_system_key = 'system-key' WHERE id = 'maheer'").run();
+  await estate.afterCall(await company(), callWith([['leasing', { customer_name: 'سارة' }], ['interest', { customer_name: 'سارة' }]]), deps());
+  assert.deepEqual(systemPosts[0].keys, { key: 'system-key', secret: 'the-secret' });
+  assert.equal(posts[0].token, 'make-key', 'the purchase endpoint keeps its api-key');
+  db.prepare("UPDATE companies SET estate_system_key = NULL WHERE id = 'maheer'").run();
 });
 
 test('the key never rides along with the company, and the requests list carries each outcome', () => {

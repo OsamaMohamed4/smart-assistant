@@ -16,18 +16,13 @@
 // as an id. Both companies' projects live on one Estate, Maheer's address,
 // with one key -- told apart by the project code.
 //
-// What goes, and what does not:
-//   - Purchase-interest requests only. That endpoint makes sales leads; Estate
-//     keeps rental requests in a module of their own, not linked here.
+// What goes:
 //   - name, phone (from the call record, never from the model), platform,
-//     project_codes[0] when the customer named a project on the company's
-//     list, and note: every answer the customer gave, labelled as on the
-//     requests page. The call collects no rooms, district or budget, so none
-//     is sent; whatever the customer said goes in the note.
-//   - The project list -- name as the agent offers it, Estate's code -- is set
-//     per company by a superadmin. The model picks from those names (the
-//     request tool's enum, rebuilt on «نشر»), so a name maps to its code
-//     exactly; nothing is guessed from free text.
+//     project_codes[0] for the project the customer named, and a note with
+//     whatever has no field of its own, labelled as on the requests page.
+//   - The project code is Estate's form, made from the company's letter (W for
+//     Wakan, M for Maheer -- a superadmin sets it) and the project's number as
+//     the customer said it (projectCode). Each company files its own projects.
 //   - After the call ends: the customer's number is attached from the call
 //     record, which exists only then. A request made on WhatsApp carries the
 //     WhatsApp number instead, and goes as soon as the customer confirms it
@@ -72,11 +67,6 @@ const SCOPE_LABEL = { interest: 'طلبات الاهتمام', rental: 'طلبا
 const PLATFORM_MAX = 60;
 // Estate's value for a lead from the assistant (its reply of 2026-10-21).
 const PLATFORM_DEFAULT = 'ai_chat';
-const PROJECTS_MAX = 200;
-const PROJECT_NAME_MAX = 120;
-// Estate's format (its note of 2026-10-31): the company's letter, a hyphen,
-// the project's number -- W-38 is Wakan's project 38, M-12 Maheer's 12.
-const PROJECT_CODE = /^[A-Z]{1,4}-\d{1,6}$/;
 
 // "https://maher.e-statee.com" from what was pasted -- the bare address or the
 // full endpoint. Only an Estate address: customer details go nowhere else.
@@ -87,69 +77,44 @@ function estateOrigin(raw) {
   return `https://${u.hostname.toLowerCase()}`;
 }
 
+// The company's letter in Estate's project codes: W for Wakan, M for Maheer.
+const LETTER = /^[A-Z]{1,4}$/;
+// A company saved before the letter existed had a project list; its codes say it.
+const letterFromList = (projects) => (Array.isArray(projects) ? projects : [])
+  .map((p) => /^([A-Z]{1,4})-/.exec(String(p?.code || '').toUpperCase())?.[1]).find(Boolean) || null;
+
 function settingsOf(company) {
   const e = company?.settings?.estate || {};
+  const letter = String(e.letter || '').trim().toUpperCase();
   return {
     url: estateOrigin(e.url),
     platform: String(e.platform || '').trim().slice(0, PLATFORM_MAX) || PLATFORM_DEFAULT,
     enabled: e.enabled === true,
-    projects: Array.isArray(e.projects) ? e.projects.filter((p) => p?.name && p?.code) : [],
+    letter: LETTER.test(letter) ? letter : letterFromList(e.projects),
     // Interest went before the other two existed, so it stays on unless turned off.
     scopes: { interest: e.interest !== false, rental: e.rental === true, maintenance: e.maintenance === true },
   };
 }
 
-// The project list as pasted: one per line, "name = code" (the code after the
-// last "="). Returns { projects } or { error } naming the line.
-function parseProjects(input) {
-  if (Array.isArray(input)) input = input.map((p) => `${p?.name || ''} = ${p?.code || ''}`).join('\n');
-  const projects = [];
-  const seen = new Set();
-  const lines = String(input || '').split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    const at = line.lastIndexOf('=');
-    const name = (at > 0 ? line.slice(0, at) : '').trim().replace(/\s+/g, ' ');
-    const raw = (at > 0 ? line.slice(at + 1) : '').trim();
-    const code = cleanCode(raw);
-    if (!name || !raw) return { error: `السطر ${i + 1}: اكتبه «اسم المشروع = رمزه في Estate»` };
-    if (name.length > PROJECT_NAME_MAX) return { error: `السطر ${i + 1}: اسم المشروع أطول من المسموح` };
-    if (!PROJECT_CODE.test(code)) return { error: `السطر ${i + 1}: رمز المشروع «${raw.slice(0, 30)}» ليس بصيغة Estate: حرف الشركة ثم شرطة ثم رقم المشروع، مثل W-38 أو M-12` };
-    const key = normalizeName(name);
-    if (seen.has(key)) return { error: `السطر ${i + 1}: المشروع «${name}» مكرر` };
-    seen.add(key);
-    projects.push({ name, code });
-  }
-  if (projects.length > PROJECTS_MAX) return { error: `الحد الأعلى ${PROJECTS_MAX} مشروعاً` };
-  return { projects };
-}
+const toLatin = (s) => String(s || '').replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x660))
+  .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x6F0));
 
-// For matching what the model sent against the list: the enum makes it the
-// same text, but spacing, diacritics and the kashida are not worth a miss.
-function normalizeName(s) {
-  return String(s || '').normalize('NFKC').replace(/[ً-ٰٟـ]/g, '')
-    .replace(/[‐-―]/g, '-').replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-// A code as typed, in Estate's form: "w-38", "W–38" (another dash) and
-// "W-٣٨" are all W-38. Nothing else is changed: "W38" stays wrong, to be
-// written again, rather than guessed at.
-function cleanCode(raw) {
-  return String(raw || '').trim()
-    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x660))
-    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x6F0))
-    .replace(/\s*[‐-―−]\s*|\s*-\s*/g, '-')
-    .toUpperCase();
-}
-
-// The Estate code for the project the customer named, or null. Sent as
-// Estate writes it, whatever a list saved before the format was enforced holds.
-function projectCode(value, projects) {
-  const v = normalizeName(value);
-  if (!v) return null;
-  const hit = (projects || []).find((p) => normalizeName(p.name) === v || normalizeName(p.code) === v);
-  return hit ? cleanCode(hit.code) : null;
+/**
+ * The project's Estate code, in Estate's form (its note of 2026-10-31): the
+ * company's letter, a hyphen, the project's number -- "وكن 38" and "وكن 038"
+ * are W-38 for Wakan, "مهير ١٢" is M-12 for Maheer. A code the customer gave
+ * outright ("W-38") goes as given, unless it is another company's. Nothing is
+ * guessed: no number, or more than one, and the lead goes without a project
+ * (named in the note all the same).
+ */
+function projectCode(value, letter) {
+  const s = toLatin(value).toUpperCase().replace(/[\u2010-\u2015\u2212]/g, '-');
+  if (!s.trim()) return null;
+  const given = /(?:^|[^A-Z])([A-Z]{1,4})\s*-\s*0*(\d{1,6})(?!\d)/.exec(s);
+  if (given) return letter && given[1] !== letter ? null : `${given[1]}-${Number(given[2])}`;
+  const nums = s.match(/\d+/g);
+  if (!letter || !nums || nums.length !== 1 || nums[0].length > 6) return null;
+  return `${letter}-${Number(nums[0])}`;
 }
 
 // Digits with the country code, no "+" and no local 0: 966501234567,
@@ -229,23 +194,34 @@ function interestChoices(fields) {
 // choice's name -- without them, everything in the note. A lead is never lost
 // to a name Estate spells differently.
 function interestForms({ request, fields, name, phone, cfg, company }) {
-  const code = projectCode(fields.project, cfg.projects);
-  const base = () => {
+  const code = projectCode(fields.project, cfg.letter);
+  const base = (withCode) => {
     const form = new URLSearchParams();
     form.set('name', name);
     form.set('phone', phone);
     form.set('platform', cfg.platform);
-    if (code) form.set('project_codes[0]', code);
+    if (withCode && code) form.set('project_codes[0]', code);
     return form;
   };
+  const forms = [];
   const choices = interestChoices(fields);
-  const plain = base();
+  if (choices.length) {
+    const rich = base(true);
+    for (const [k, v] of choices) rich.append(k, v);
+    rich.set('note', buildNote(request, fields, company, { omit: choices.map((c) => c[2]) }));
+    forms.push(rich);
+  }
+  const plain = base(true);
   plain.set('note', buildNote(request, fields, company));
-  if (!choices.length) return [plain];
-  const rich = base();
-  for (const [k, v] of choices) rich.append(k, v);
-  rich.set('note', buildNote(request, fields, company, { omit: choices.map((c) => c[2]) }));
-  return [rich, plain];
+  forms.push(plain);
+  // A project number Estate has no project for: the lead still goes, the
+  // project named in its note.
+  if (code) {
+    const bare = base(false);
+    bare.set('note', buildNote(request, fields, company));
+    forms.push(bare);
+  }
+  return forms;
 }
 
 // ─── Rental interest: the system endpoint, by Estate's ids ────────
@@ -344,8 +320,6 @@ async function maintenanceFormData(cfg, keys, query, deps) {
   return r.data;
 }
 
-// The company's letter in Estate's codes (M, W), from its own project list.
-const companyLetter = (cfg) => (cfg.projects || []).map((p) => /^([A-Z]+)-/.exec(String(p.code))?.[1]).find(Boolean) || null;
 
 /**
  * Estate's ids for the unit the customer named: { projectId, buildingId,
@@ -359,7 +333,7 @@ async function locateUnit({ cfg, keys, fields, deps }) {
   if (!said) return { error: 'لا يُرسل: لم يذكر العميل المشروع' };
   const projects = recordsUnder(listsIn(await maintenanceFormData(cfg, keys, null, deps)), /project/i);
   if (!projects.length) return { error: 'لا يُرسل: لم نجد قائمة المشاريع في بيانات الصيانة من Estate' };
-  const letter = companyLetter(cfg);
+  const { letter } = cfg;
   const nums = numbersIn(said);
   const plainSaid = estateName(said);
   const matches = projects.filter((p) => labelsOf(p).some((l) => {
@@ -543,18 +517,25 @@ const unreachable = (e) => (/^blocked url:/.test(e.message)
   ? 'عنوان Estate المحفوظ غير مسموح'
   : `تعذّر الوصول إلى Estate: ${e.code || e.message}`).slice(0, 500);
 
-// The company's API key and secret key, decrypted.
+// The company's keys, decrypted: the Make endpoint's api-key, and the system
+// endpoints' pair -- their own x-api-key where Estate issued one, else the
+// same api-key -- with the secret key.
 async function keysOf(company, deps) {
   const row = await deps.sql.getCompanyEstateToken.get(company.id);
-  return { key: deps.decryptField(row?.estate_token) || null, secret: deps.decryptField(row?.estate_secret) || null };
+  const key = deps.decryptField(row?.estate_token) || null;
+  return {
+    key,
+    systemKey: deps.decryptField(row?.estate_system_key) || key,
+    secret: deps.decryptField(row?.estate_secret) || null,
+  };
 }
 
 // Ready to send: everything a superadmin sets is set. The secret key is
 // needed only by rental and maintenance, and is checked there.
 async function readiness(company, deps) {
   const cfg = settingsOf(company);
-  const { key, secret } = await keysOf(company, deps);
-  return { ...cfg, token: key, secret, ready: !!(cfg.enabled && cfg.url && cfg.platform && key) };
+  const { key, systemKey, secret } = await keysOf(company, deps);
+  return { ...cfg, token: key, systemKey, secret, ready: !!(cfg.enabled && cfg.url && cfg.platform && key) };
 }
 
 // One request on to Estate. `retry` takes back one that failed or was
@@ -581,7 +562,7 @@ async function pushRequest(company, request, deps, { retry = false } = {}) {
   if (!phone) return skip('لا يُرسل بعد: رقم العميل يُضاف من سجل المكالمة عند انتهائها');
 
   try {
-    const ctx = { request, fields, name, phone, cfg, company, keys: { key: cfg.token, secret: cfg.secret }, deps };
+    const ctx = { request, fields, name, phone, cfg, company, keys: { key: cfg.systemKey, secret: cfg.secret }, deps };
     // Each attempt: where it goes, and the form. More than one for interest:
     // the second, without Estate's choices, if Estate refuses one by name.
     let attempts;
@@ -650,13 +631,13 @@ async function checkEmptyStore(fn, what) {
     return { ok: false, text: `${what}: ${unreachable(e)}` };
   }
 }
-async function check({ url, token, secret = null, send = post, sendSystem = postSystem, getForm = getSystem }) {
+async function check({ url, token, systemKey = null, secret = null, send = post, sendSystem = postSystem, getForm = getSystem }) {
   const origin = estateOrigin(url);
   if (!origin) return { ok: false, text: 'عنوان Estate غير صالح. مثال: https://maher.e-statee.com' };
   if (!token) return { ok: false, text: 'لم يُحفظ مفتاح Estate لهذه الشركة بعد.' };
   const interest = await checkEmptyStore(() => send(origin, token, new URLSearchParams()), 'الاهتمام');
   if (!secret) return { ...interest, more: [{ ok: false, warn: true, text: 'التأجير والصيانة: احفظ المفتاح السري (x-secret-key) ليُفحصا.' }] };
-  const keys = { key: token, secret };
+  const keys = { key: systemKey || token, secret };
   const rental = await checkEmptyStore(() => sendSystem(`${origin}${SYSTEM.rental}`, keys, new URLSearchParams()), 'التأجير');
   let maintenance;
   try {
@@ -685,8 +666,8 @@ function validateSettings(body, { hasToken, hasSecret = false }) {
   if (rawUrl && !url) return { error: 'عنوان Estate غير صالح. يجب أن يكون مثل https://maher.e-statee.com' };
   const platform = String(b.platform || '').trim();
   if (platform.length > PLATFORM_MAX) return { error: 'قيمة المصدر (platform) أطول من المسموح' };
-  const p = parseProjects(b.projects);
-  if (p.error) return { error: p.error };
+  const letter = String(b.letter || '').trim().toUpperCase();
+  if (letter && !LETTER.test(letter)) return { error: 'حرف الشركة في رموز Estate حرف أو أكثر بالإنجليزية، مثل W لوكن وM لمهير' };
   const enabled = b.enabled === true;
   if (enabled && (!url || !hasToken)) {
     return { error: 'للتشغيل: احفظ عنوان Estate والمفتاح أولاً' };
@@ -697,12 +678,12 @@ function validateSettings(body, { hasToken, hasSecret = false }) {
   if (enabled && (rental || maintenance) && !hasSecret) {
     return { error: 'التأجير والصيانة يحتاجان المفتاح السري (x-secret-key): احفظه أولاً' };
   }
-  return { estate: { url, platform: platform || null, enabled, projects: p.projects, interest, rental, maintenance } };
+  return { estate: { url, platform: platform || null, enabled, letter: letter || null, interest, rental, maintenance } };
 }
 
 module.exports = {
   afterCall, pushRequest, check, validateSettings, settingsOf, readiness,
-  estateOrigin, estatePhone, buildNote, buildForm, estateReason, estateHeaders, systemHeaders, cleanKey, keyHint, parseProjects, projectCode,
+  estateOrigin, estatePhone, buildNote, buildForm, estateReason, estateHeaders, systemHeaders, cleanKey, keyHint, projectCode,
   interestForms, rentalForm, rentalSizeId, interestReasonIds, locateUnit, listsIn, buildingKey,
   PATH, SYSTEM, PLATFORM_DEFAULT,
 };

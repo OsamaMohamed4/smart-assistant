@@ -899,6 +899,12 @@ if (!hasColumn('companies', 'estate_secret')) {
 if (!hasColumn('companies', 'estate_system_key')) {
   runMigration(52, 'companies_add_estate_system_key', 'ALTER TABLE companies ADD COLUMN estate_system_key TEXT');
 }
+// Migration 53: what was sent to Estate for a request, field by field, and
+// what Estate answered -- to put before Estate, or replay in Postman. No key
+// is in it; encrypted like the phone it carries.
+if (!hasColumn('customer_requests', 'estate_trace')) {
+  runMigration(53, 'customer_requests_add_estate_trace', 'ALTER TABLE customer_requests ADD COLUMN estate_trace TEXT');
+}
 
 // Migration 48: the LoopChat conversation a WhatsApp pause belongs to, so a
 // new message in that same conversation keeps the assistant out while one in
@@ -1254,7 +1260,7 @@ const sql = {
   `),
   getRequestForEstate: db.prepare(`
     SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, r.channel, c.direction AS call_direction,
-           COALESCE(r.contact_phone, c.caller_number) AS caller_number
+           r.estate_trace, COALESCE(r.contact_phone, c.caller_number) AS caller_number
       FROM customer_requests r
       LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
      WHERE r.id = ? AND r.company_id = ?
@@ -1264,7 +1270,7 @@ const sql = {
   // sent, nor one in flight.
   claimRequestEstate: db.prepare(`
     UPDATE customer_requests
-       SET estate_status = 'pending', estate_detail = NULL, estate_at = datetime('now')
+       SET estate_status = 'pending', estate_detail = NULL, estate_trace = NULL, estate_at = datetime('now')
      WHERE id = @id AND company_id = @company_id
        AND (estate_status IS NULL OR (@retry = 1 AND estate_status IN ('failed', 'skipped')))
   `),
@@ -1272,6 +1278,9 @@ const sql = {
     UPDATE customer_requests
        SET estate_status = @status, estate_detail = @detail, estate_at = datetime('now')
      WHERE id = @id AND company_id = @company_id
+  `),
+  traceRequestEstate: db.prepare(`
+    UPDATE customer_requests SET estate_trace = @trace WHERE id = @id AND company_id = @company_id
   `),
 
   // ─── Publish pipeline ───────────────────────────────────────────

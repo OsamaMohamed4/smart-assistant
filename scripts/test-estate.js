@@ -270,6 +270,52 @@ test('a choice Estate refuses by name sends the lead again with everything in th
   assert.match(posts[1].form.note, /نوع العقار: شقة[\s\S]*طريقة الدفع: تمويل بنكي/);
 });
 
+// ─── What was sent, kept to show and replay ───────────────────────
+test('what was sent and what Estate answered are kept on the request, without the key', async () => {
+  answer = () => (posts.length === 1
+    ? { status: 422, data: { message: 'invalid', errors: { property_type: ['نوع العقار غير صحيح'] } } }
+    : { status: 200, data: { status: true, message: 'تمت العملية بنجاح', response: { call_id: 77 } } });
+  const call = callWith([['interest', INTEREST]]);
+  const enc = { ...deps(), encryptField: (v) => `enc:${v}`, decryptField: (v) => String(v || '').replace(/^enc:/, '') };
+  await estate.afterCall(await company(), call, enc);
+  const row = sql.getRequestForEstate.get(requestsOf(call.id)[0].id, 'maheer');
+  assert.match(row.estate_trace, /^enc:/, 'encrypted like the phone it carries');
+  assert.doesNotMatch(row.estate_trace, /estate-key/);
+  const t = await estate.requestTrace(await company(), row, enc);
+  assert.equal(t.rebuilt, false);
+  assert.deepEqual(t.attempts.map((a) => [a.as, a.status]), [['form', 422], ['form', 200]]);
+  assert.equal(t.attempts[0].url, 'https://maher.e-statee.com/api/v1/make/attention-request/attention-request-store');
+  assert.deepEqual(t.attempts[0].fields.find(([k]) => k === 'property_type'), ['property_type', 'شقة']);
+  assert.deepEqual(t.attempts[1].answer.response, { call_id: 77 });
+  assert.deepEqual(Object.fromEntries(t.attempts[1].fields), posts[1].form);
+});
+
+test('a request sent before traces were kept is rebuilt from what it holds', async () => {
+  configure({ url: 'https://maher.e-statee.com', enabled: true, rental: true, letter: 'M' }, 'estate-key', 'estate-secret');
+  const call = callWith([['leasing', { customer_name: 'سارة', unit_area: '300' }]]);
+  const id = requestsOf(call.id)[0].id;
+  assert.equal(await estate.requestTrace(await company(), sql.getRequestForEstate.get(id, 'maheer'), deps()), null, 'never sent: nothing to show');
+  db.prepare("UPDATE customer_requests SET estate_status = 'sent' WHERE id = ?").run(id);
+  const t = await estate.requestTrace(await company(), sql.getRequestForEstate.get(id, 'maheer'), deps());
+  assert.equal(t.rebuilt, true);
+  assert.equal(t.attempts[0].url, 'https://maher.e-statee.com/api/v1/system/rental-attention-requests/store');
+  assert.equal(t.attempts[0].as, 'multipart');
+  assert.ok(!('status' in t.attempts[0]), 'no answer is made up for it');
+  assert.deepEqual(t.attempts[0].fields.find(([k]) => k === 'unit_size_range_option_id'), ['unit_size_range_option_id', '103']);
+  assert.equal(posts.length + systemPosts.length, 0, 'rebuilding sends nothing');
+});
+
+test('an Estate that cannot be reached still leaves what was being sent', async () => {
+  answer = () => Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' });
+  const call = callWith([['interest', INTEREST]]);
+  const [r] = await estate.afterCall(await company(), call, deps());
+  assert.match(r.failed, /ETIMEDOUT/);
+  const t = await estate.requestTrace(await company(), sql.getRequestForEstate.get(requestsOf(call.id)[0].id, 'maheer'), deps());
+  assert.equal(t.attempts.length, 1);
+  assert.ok(!('status' in t.attempts[0]));
+  assert.match(t.error, /ETIMEDOUT/);
+});
+
 test('a refusal keeps Estate\'s own words; sending again by hand goes once it is fixed', async () => {
   answer = () => ({ status: 422, data: { message: 'The given data was invalid.', errors: { email: ['حقل البريد الإلكتروني مطلوب.'], project_ids: ['حقل المشاريع مطلوب.'] } } });
   const call = callWith([['interest', INTEREST]]);

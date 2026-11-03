@@ -334,6 +334,8 @@ CREATE TABLE IF NOT EXISTS customer_requests (
   estate_status   TEXT,
   estate_detail   TEXT,
   estate_at       TEXT,
+  -- What was sent and what Estate answered (JSON, encrypted). No key in it.
+  estate_trace    TEXT,
   -- NULL: filed on a call. 'whatsapp': filed in a WhatsApp conversation.
   channel         TEXT,
   contact_phone   TEXT,

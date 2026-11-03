@@ -32,14 +32,96 @@ const ESTATE_TONE = {
   skipped: 'text-amber-800',
 };
 function estateLine(e) {
-  if (e.status === 'sent') return 'أُرسل إلى Estate';
+  if (e.status === 'sent') return e.detail ? `أُرسل إلى Estate، وردّ: ${e.detail}` : 'أُرسل إلى Estate';
   if (e.status === 'pending') return 'قيد الإرسال إلى Estate';
   if (e.status === 'failed') return `لم يُرسل إلى Estate: ${e.detail || 'سبب غير معروف'}`;
   return e.detail || 'لم يُرسل إلى Estate';
 }
 
-function RequestRow({ r, statuses, onUpdate, busy, canSendToEstate, onSendToEstate }) {
+// A request as sent to Estate, as a curl command Postman imports (Import →
+// Raw text). The keys are never in the trace: placeholders stand where they go.
+const shellQuote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+function curlOf(a) {
+  const headers = a.as === 'form'
+    ? ['api-key: <مفتاح الاهتمام>', 'Authorization: Bearer <مفتاح الاهتمام>', 'Accept: application/json', 'Content-Type: application/x-www-form-urlencoded']
+    : ['x-api-key: <مفتاح النظام>', 'x-secret-key: <المفتاح السري>', 'X-Requested-With: XMLHttpRequest', 'Accept: application/json'];
+  const flag = a.as === 'form' ? '--data-urlencode' : '-F';
+  return [
+    `curl -X POST ${shellQuote(a.url)}`,
+    ...headers.map((h) => `  -H ${shellQuote(h)}`),
+    ...a.fields.map(([k, v]) => `  ${flag} ${shellQuote(`${k}=${v}`)}`),
+  ].join(' \\\n');
+}
+// The fields as JSON; a repeated key (how_hear_about_us[]) keeps all its values.
+function fieldsJson(fields) {
+  const out = {};
+  for (const [k, v] of fields) out[k] = k in out ? [].concat(out[k], v) : v;
+  return JSON.stringify(out, null, 2);
+}
+const answerText = (a) => (typeof a === 'string' ? a : JSON.stringify(a, null, 2));
+
+function EstateTrace({ companyId, requestId }) {
+  const { push } = useToast();
+  const [state, setState] = useState({ loading: true });
+  useEffect(() => {
+    let live = true;
+    api.requestEstateTrace(companyId, requestId)
+      .then((r) => live && setState({ trace: r.trace }))
+      .catch((e) => live && setState({ error: e.message }));
+    return () => { live = false; };
+  }, [companyId, requestId]);
+  const copy = (text, what) => navigator.clipboard.writeText(text).then(() => push(`تم نسخ ${what}`, 'success'), () => {});
+
+  if (state.loading) return <p className="text-[12px] text-ink-500">جارِ التحميل…</p>;
+  if (state.error) return <p className="text-[12px] text-rose-700">{state.error}</p>;
+  const t = state.trace;
+  if (!t) return <p className="text-[12px] text-ink-500">لم يُرسل هذا الطلب إلى Estate بعد.</p>;
+  if (t.skip) return <p className="text-[12px] text-amber-800">{t.skip}</p>;
+  return (
+    <div className="space-y-3">
+      <p className="text-[11.5px] text-ink-500 leading-relaxed">
+        {t.rebuilt
+          ? 'لم تُحفظ تفاصيل إرسال هذا الطلب لأنه أُرسل قبل حفظها. هذا ما يُبنى منه الآن بالإعدادات الحالية، وهو نفسه ما أُرسل ما لم تتغير الإعدادات بعده.'
+          : `هذا ما أُرسل فعلاً إلى Estate${t.at ? ` (${relTime(t.at)})` : ''}، وما ردّ به.`}
+        {' '}المفاتيح لا تُحفظ هنا: في الأمر المنسوخ مكانها بين {'< >'}، فضعها قبل التجربة في Postman (Import ثم Raw text). والتجربة تُنشئ طلباً حقيقياً في Estate.
+      </p>
+      {t.attempts.length > 1 && (
+        <p className="text-[11.5px] text-ink-500">لهذا الطلب أكثر من صيغة: تُرسل الأولى، ولا تُرسل التالية إلا إذا رفض Estate السابقة (422).</p>
+      )}
+      {t.attempts.map((a, i) => (
+        <div key={i} className="rounded-xl border border-ink-100 p-3 space-y-2 min-w-0">
+          <div className="flex flex-wrap items-center gap-2 text-[12px]">
+            <span className="font-medium text-ink-800">{t.attempts.length > 1 ? `الصيغة ${i + 1}` : 'الطلب'}</span>
+            {a.status != null && (
+              <span className={cn('px-2 py-0.5 rounded-full', a.status >= 200 && a.status < 300 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700')} dir="ltr">
+                HTTP {a.status}
+              </span>
+            )}
+            <span className="text-ink-500 truncate min-w-0" dir="ltr">{a.url}</span>
+          </div>
+          <pre dir="ltr" className="text-[11.5px] bg-ink-50 rounded-lg p-2.5 overflow-x-auto max-h-64 whitespace-pre-wrap break-words">{fieldsJson(a.fields)}</pre>
+          {'answer' in a && (
+            <>
+              <div className="text-[11.5px] text-ink-500">ردّ Estate</div>
+              <pre dir="ltr" className="text-[11.5px] bg-ink-50 rounded-lg p-2.5 overflow-x-auto max-h-64 whitespace-pre-wrap break-words">{a.answer == null ? '—' : answerText(a.answer)}</pre>
+            </>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => copy(curlOf(a), 'الأمر')}
+              className="h-7 px-3 rounded-lg border border-ink-200 bg-white text-ink-800 text-[11.5px]">نسخ كأمر curl لـ Postman</button>
+            <button type="button" onClick={() => copy(fieldsJson(a.fields), 'الحقول')}
+              className="h-7 px-3 rounded-lg border border-ink-200 bg-white text-ink-800 text-[11.5px]">نسخ الحقول JSON</button>
+          </div>
+        </div>
+      ))}
+      {t.error && <p className="text-[12px] text-rose-700">{t.error}</p>}
+    </div>
+  );
+}
+
+function RequestRow({ r, statuses, onUpdate, busy, canSendToEstate, onSendToEstate, canSeeEstate, companyId }) {
   const [open, setOpen] = useState(false);
+  const [showTrace, setShowTrace] = useState(false);
   const [notes, setNotes] = useState(r.staffNotes || '');
   useEffect(() => { setNotes(r.staffNotes || ''); }, [r.staffNotes]);
 
@@ -110,6 +192,16 @@ function RequestRow({ r, statuses, onUpdate, busy, canSendToEstate, onSendToEsta
             </dl>
           ) : (
             <p className="text-[12.5px] text-ink-500">لم يُجمع أي حقل في هذا الطلب.</p>
+          )}
+
+          {canSeeEstate && r.estate && (
+            <div className="space-y-2">
+              <button type="button" onClick={() => setShowTrace((v) => !v)}
+                className="text-[12px] text-brand-700 hover:underline" aria-expanded={showTrace}>
+                {showTrace ? 'إخفاء ما أُرسل إلى Estate' : 'عرض ما أُرسل إلى Estate وردّه'}
+              </button>
+              {showTrace && <EstateTrace key={`${r.estate.status}-${r.estate.at}`} companyId={companyId} requestId={r.id} />}
+            </div>
           )}
 
           <div className="space-y-1.5">
@@ -267,7 +359,8 @@ export function RequestsPage({ user, pinnedCompanyId }) {
           <Card className="overflow-hidden">
             {data.requests.map((r) => (
               <RequestRow key={r.id} r={r} statuses={data.statuses} onUpdate={onUpdate} busy={busyId === r.id}
-                canSendToEstate={isSuper && data.estateReady} onSendToEstate={onSendToEstate} />
+                canSendToEstate={isSuper && data.estateReady} onSendToEstate={onSendToEstate}
+                canSeeEstate={isSuper} companyId={companyId} />
             ))}
           </Card>
         )}

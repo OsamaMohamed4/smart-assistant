@@ -318,4 +318,5 @@ export const api = {
   saveCompanyEstateSecret: (companyId, secret) => request(`/api/companies/${companyId}/estate/secret`, { method: 'PUT', body: JSON.stringify({ secret }) }),
   checkCompanyEstate: (companyId, url) => request(`/api/companies/${companyId}/estate/check`, { method: 'POST', body: JSON.stringify({ url }) }),
   sendRequestToEstate: (companyId, requestId) => request(`/api/companies/${companyId}/requests/${requestId}/estate`, { method: 'POST', body: '{}' }),
+  requestEstateTrace: (companyId, requestId) => request(`/api/companies/${companyId}/requests/${requestId}/estate`),
 };

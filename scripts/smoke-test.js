@@ -130,6 +130,10 @@ async function waitForBoot() {
   const lsB = await ls.json().catch(() => []);
   check('list companies includes the new one', ls.status === 200 && lsB.some((x) => x.id === companyId));
 
+  // 6b. What was sent to Estate for a request: a request of another id is 404.
+  const tr = await fetch(B + `/api/companies/${companyId}/requests/999999/estate`, { headers: { cookie } });
+  check('estate trace of a request that is not there → 404', tr.status === 404, `status=${tr.status}`);
+
   // 7. Per-company API key lifecycle.
   const mk = await fetch(B + `/api/companies/${companyId}/api-keys`, {
     method: 'POST', headers: { ...XHR, cookie }, body: JSON.stringify({ name: 'smoke' }),

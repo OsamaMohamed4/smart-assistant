@@ -107,7 +107,7 @@ async function processCallEvent(ev, log) {
         // Requests filed on the call go on to the company's Estate, now that
         // the call record carries the customer's number. Each request is sent
         // once; a replayed event finds them claimed.
-        require('./estate').afterCall(company, finalRow, { sql, logger, decryptField })
+        require('./estate').afterCall(company, finalRow, { sql, logger, decryptField, encryptField })
           .catch((e) => logger.warn('estate push failed', { err: e.message, callId: finalRow.id }));
       }
     } catch (e) {

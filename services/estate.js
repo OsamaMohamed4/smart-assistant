@@ -538,6 +538,74 @@ async function readiness(company, deps) {
   return { ...cfg, token: key, systemKey, secret, ready: !!(cfg.enabled && cfg.url && cfg.platform && key) };
 }
 
+// What a request sends: each attempt's address, encoding ('form' for the
+// Make endpoint, 'multipart' for the system ones) and fields -- or why it
+// does not go. More than one attempt for interest: the next, without Estate's
+// choices or the project, only if Estate refuses the one before (422). The
+// keys ride in headers, never in here. Maintenance reads Estate's form data
+// to find the unit, so this may call Estate (a GET) and may throw.
+async function planRequest(cfg, company, request, deps) {
+  const scope = SCOPE_OF[request.request_type];
+  if (!scope) return { skip: 'لا يُرسل: ليس لهذا النوع من الطلبات واجهة في Estate' };
+  if (!cfg.scopes[scope]) return { skip: `لا يُرسل: إرسال ${SCOPE_LABEL[scope]} إلى Estate غير مفعّل لهذه الشركة` };
+  if (scope !== 'interest' && !cfg.secret) return { skip: `لا يُرسل: ${SCOPE_LABEL[scope]} تحتاج المفتاح السري (x-secret-key)، ولم يُحفظ لهذه الشركة` };
+  const fields = parseFields(request);
+  const name = String(request.customer_name || fields.customer_name || '').trim();
+  // Estate's maintenance form takes a request without a name; the others do not.
+  if (!name && scope !== 'maintenance') return { skip: 'لا يُرسل: الطلب بلا اسم عميل، وEstate يشترط الاسم' };
+  const phone = estatePhone(deps.decryptField(request.caller_number));
+  if (!phone) return { skip: 'لا يُرسل بعد: رقم العميل يُضاف من سجل المكالمة عند انتهائها' };
+
+  const ctx = { request, fields, name, phone, cfg, company, keys: { key: cfg.systemKey, secret: cfg.secret }, deps };
+  if (scope === 'interest') {
+    return { scope, attempts: interestForms(ctx).map((form) => ({ url: cfg.url + PATH, as: 'form', form })) };
+  }
+  const built = scope === 'rental' ? { form: rentalForm(ctx) } : await maintenanceForm(ctx);
+  if (built.error) return { skip: built.error };
+  return { scope, attempts: [{ url: `${cfg.url}${SYSTEM[scope]}`, as: 'multipart', form: built.form }] };
+}
+
+// Estate's answer as kept in the trace: its JSON, cut short past a few KB.
+const TRACE_ANSWER_MAX = 4000;
+function traceAnswer(data) {
+  if (data == null) return null;
+  const text = typeof data === 'string' ? data : JSON.stringify(data);
+  return text.length <= TRACE_ANSWER_MAX ? data : `${text.slice(0, TRACE_ANSWER_MAX)}…`;
+}
+const traceAttempt = (a, r) => ({ url: a.url, as: a.as, fields: [...a.form], ...(r ? { status: r.status, answer: traceAnswer(r.data) } : {}) });
+
+// Kept on the request, encrypted as its phone is. Never fails the sending.
+async function keepTrace(company, request, trace, deps) {
+  try {
+    const text = JSON.stringify(trace);
+    await deps.sql.traceRequestEstate.run({ id: request.id, company_id: company.id, trace: deps.encryptField ? deps.encryptField(text) : text });
+  } catch (e) {
+    deps.logger.warn('estate: trace not kept', { companyId: company.id, requestId: request.id, err: e.message });
+  }
+}
+
+/**
+ * What was sent to Estate for a request and what it answered, as kept when
+ * it was sent. One sent before traces were kept has none: it is rebuilt from
+ * the request with today's settings (`rebuilt: true`) -- the same, unless
+ * the settings changed since. Null for one never sent.
+ */
+async function requestTrace(company, request, deps) {
+  if (request.estate_trace) {
+    try { return { rebuilt: false, ...JSON.parse(deps.decryptField(request.estate_trace)) }; } catch {}
+  }
+  if (!request.estate_status) return null;
+  const cfg = await readiness(company, deps);
+  if (!cfg.ready) return { rebuilt: true, skip: 'ربط Estate غير مكتمل أو غير مفعّل لهذه الشركة' };
+  try {
+    const plan = await planRequest(cfg, company, request, deps);
+    if (plan.skip) return { rebuilt: true, skip: plan.skip };
+    return { rebuilt: true, attempts: plan.attempts.map((a) => traceAttempt(a)) };
+  } catch (e) {
+    return { rebuilt: true, skip: /^تعذّر جلب بيانات الصيانة/.test(e.message) ? e.message : unreachable(e) };
+  }
+}
+
 // One request on to Estate. `retry` takes back one that failed or was
 // skipped; a request already sent, or being sent, is never sent again.
 async function pushRequest(company, request, deps, { retry = false } = {}) {
@@ -550,34 +618,24 @@ async function pushRequest(company, request, deps, { retry = false } = {}) {
   const finish = (status, detail) => sql.finishRequestEstate.run({ id: request.id, company_id: company.id, status, detail });
   const skip = async (detail) => { await finish('skipped', detail); return { skipped: detail }; };
 
-  const scope = SCOPE_OF[request.request_type];
-  if (!scope) return skip('لا يُرسل: ليس لهذا النوع من الطلبات واجهة في Estate');
-  if (!cfg.scopes[scope]) return skip(`لا يُرسل: إرسال ${SCOPE_LABEL[scope]} إلى Estate غير مفعّل لهذه الشركة`);
-  if (scope !== 'interest' && !cfg.secret) return skip(`لا يُرسل: ${SCOPE_LABEL[scope]} تحتاج المفتاح السري (x-secret-key)، ولم يُحفظ لهذه الشركة`);
-  const fields = parseFields(request);
-  const name = String(request.customer_name || fields.customer_name || '').trim();
-  // Estate's maintenance form takes a request without a name; the others do not.
-  if (!name && scope !== 'maintenance') return skip('لا يُرسل: الطلب بلا اسم عميل، وEstate يشترط الاسم');
-  const phone = estatePhone(deps.decryptField(request.caller_number));
-  if (!phone) return skip('لا يُرسل بعد: رقم العميل يُضاف من سجل المكالمة عند انتهائها');
-
+  const trace = { at: new Date().toISOString(), attempts: [] };
+  let sending = null;                                          // the attempt Estate has not answered yet
   try {
-    const ctx = { request, fields, name, phone, cfg, company, keys: { key: cfg.systemKey, secret: cfg.secret }, deps };
-    // Each attempt: where it goes, and the form. More than one for interest:
-    // the second, without Estate's choices, if Estate refuses one by name.
-    let attempts;
-    if (scope === 'interest') {
-      attempts = interestForms(ctx).map((form) => () => (deps.post || post)(cfg.url, cfg.token, form));
-    } else {
-      const built = scope === 'rental' ? { form: rentalForm(ctx) } : await maintenanceForm(ctx);
-      if (built.error) return skip(built.error);
-      attempts = [() => (deps.postSystem || postSystem)(`${cfg.url}${SYSTEM[scope]}`, ctx.keys, built.form)];
-    }
+    const plan = await planRequest(cfg, company, request, deps);
+    if (plan.skip) return skip(plan.skip);
+    const keys = { key: cfg.systemKey, secret: cfg.secret };
     let r;
-    for (let i = 0; i < attempts.length; i++) {
-      r = await attempts[i]();
+    for (const a of plan.attempts) {
+      sending = a;
+      r = a.as === 'form'
+        ? await (deps.post || post)(cfg.url, cfg.token, a.form)
+        : await (deps.postSystem || postSystem)(a.url, keys, a.form);
+      sending = null;
+      trace.attempts.push(traceAttempt(a, r));
       if (accepted(r) || r.status !== 422) break;
     }
+    await keepTrace(company, request, trace, deps);
+    const { scope } = plan;
     if (accepted(r)) {
       await finish('sent', typeof r.data?.message === 'string' ? r.data.message.slice(0, 300) : null);
       logger.info('estate: request sent', { companyId: company.id, requestId: request.id, scope });
@@ -594,6 +652,8 @@ async function pushRequest(company, request, deps, { retry = false } = {}) {
       return { failed: e.message };
     }
     const reason = unreachable(e);
+    if (sending) trace.attempts.push(traceAttempt(sending));
+    if (trace.attempts.length) await keepTrace(company, request, { ...trace, error: reason }, deps);
     await finish('failed', reason);
     logger.warn('estate: request not sent', { companyId: company.id, requestId: request.id, err: e.message });
     return { failed: reason };
@@ -682,7 +742,7 @@ function validateSettings(body, { hasToken, hasSecret = false }) {
 }
 
 module.exports = {
-  afterCall, pushRequest, check, validateSettings, settingsOf, readiness,
+  afterCall, pushRequest, requestTrace, check, validateSettings, settingsOf, readiness,
   estateOrigin, estatePhone, buildNote, buildForm, estateReason, estateHeaders, systemHeaders, cleanKey, keyHint, projectCode,
   interestForms, rentalForm, rentalSizeId, interestReasonIds, locateUnit, listsIn, buildingKey,
   PATH, SYSTEM, PLATFORM_DEFAULT,

@@ -375,14 +375,14 @@ const sql = {
   ),
   getRequestForEstate: stmt(
     `SELECT r.id, r.request_type, r.customer_name, r.fields, r.estate_status, r.channel, c.direction AS call_direction,
-            COALESCE(r.contact_phone, c.caller_number) AS caller_number
+            r.estate_trace, COALESCE(r.contact_phone, c.caller_number) AS caller_number
        FROM customer_requests r
        LEFT JOIN calls c ON c.id = r.conversation_id AND c.company_id = r.company_id
       WHERE r.id = $1 AND r.company_id = $2`,
   ),
   claimRequestEstate: stmt(
     `UPDATE customer_requests
-        SET estate_status = 'pending', estate_detail = NULL, estate_at = ${NOW}
+        SET estate_status = 'pending', estate_detail = NULL, estate_trace = NULL, estate_at = ${NOW}
       WHERE id = $1 AND company_id = $2
         AND (estate_status IS NULL OR ($3::int = 1 AND estate_status IN ('failed', 'skipped')))`,
     ['id', 'company_id', 'retry'],
@@ -392,6 +392,10 @@ const sql = {
         SET estate_status = $1, estate_detail = $2, estate_at = ${NOW}
       WHERE id = $3 AND company_id = $4`,
     ['status', 'detail', 'id', 'company_id'],
+  ),
+  traceRequestEstate: stmt(
+    `UPDATE customer_requests SET estate_trace = $1 WHERE id = $2 AND company_id = $3`,
+    ['trace', 'id', 'company_id'],
   ),
 
   // ─── Publish pipeline ───────────────────────────────────────────

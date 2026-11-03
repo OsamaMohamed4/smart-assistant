@@ -1926,11 +1926,24 @@ app.post('/api/companies/:id/requests/:requestId/estate', requireSuperadmin, asy
   const request = await sql.getRequestForEstate.get(id, c.id);
   if (!request) return res.status(404).json({ error: 'not found' });
   if (request.estate_status === 'sent') return res.status(409).json({ error: 'أُرسل هذا الطلب إلى Estate من قبل' });
-  const r = await estate.pushRequest(c, request, { sql, logger, decryptField }, { retry: true });
+  const r = await estate.pushRequest(c, request, { sql, logger, decryptField, encryptField }, { retry: true });
   if (r.skipped === 'not configured') return res.status(400).json({ error: 'ربط Estate غير مكتمل أو غير مفعّل لهذه الشركة' });
   if (r.duplicate) return res.status(409).json({ error: 'الطلب قيد الإرسال الآن' });
   audit(req, 'request.estate_send', `companies/${c.id}/requests/${id}`, { sent: !!r.sent });
   res.json(r);
+});
+
+// What was sent to Estate for one request, field by field, and what Estate
+// answered -- to put before Estate, or replay in Postman. The keys are never
+// in it; the screen puts placeholders where they go.
+app.get('/api/companies/:id/requests/:requestId/estate', requireSuperadmin, async (req, res) => {
+  const c = await loadCompany(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  const id = Number(req.params.requestId);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid id' });
+  const request = await sql.getRequestForEstate.get(id, c.id);
+  if (!request) return res.status(404).json({ error: 'not found' });
+  res.json({ trace: await estate.requestTrace(c, request, { sql, logger, decryptField }) });
 });
 
 app.patch('/api/companies/:id/requests/:requestId', requireCompanyAccess, async (req, res) => {

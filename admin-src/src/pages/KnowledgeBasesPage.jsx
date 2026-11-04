@@ -12,10 +12,14 @@ import { api } from '../lib/api';
 // layout). Superadmin sees a company switcher; clients are pinned to their
 // workspace and skip straight to their company's documents.
 //
-// Two knowledge bases per company, one per agent (lib/kb-audience.js).
+// Four knowledge bases per company (lib/kb-audience.js): a shared general base
+// every channel reads, plus one base per channel. Each channel's agent reads
+// its own files PLUS the general base.
 const KB_SECTIONS = [
-  { audience: 'inbound', title: 'ملفات المكالمات الواردة وواتساب', hint: 'ما يعرفه المساعد حين يتصل العميل أو يراسل الشركة على واتساب.' },
-  { audience: 'outbound', title: 'ملفات المكالمات الصادرة', hint: 'ما يعرفه المساعد حين يتصل هو بالعميل، كالحملات.' },
+  { audience: 'general',  title: 'المعرفة العامة المشتركة', hint: 'يقرأها كل القنوات (الصادرة والواردة والواتساب). ضع هنا ما يخص الشركة كلها، كالعنوان وأوقات العمل.' },
+  { audience: 'outbound', title: 'ملفات المكالمات الصادرة',  hint: 'ما يعرفه المساعد حين يتصل هو بالعميل، كالحملات.' },
+  { audience: 'inbound',  title: 'ملفات المكالمات الواردة',  hint: 'ما يعرفه المساعد حين يتصل العميل على الشركة.' },
+  { audience: 'whatsapp', title: 'ملفات واتساب',             hint: 'ما يعرفه المساعد حين يراسل العميل الشركة على واتساب.' },
 ];
 export function KnowledgeBasesPage({ pinnedCompanyId }) {
   const { push } = useToast();
@@ -67,11 +71,11 @@ export function KnowledgeBasesPage({ pinnedCompanyId }) {
         ) : (
           <>
             <p className="text-[12.5px] text-ink-500 leading-relaxed">
-              لكل شركة قاعدتا معرفة: واحدة لمساعد المكالمات الواردة وواتساب، وواحدة لمساعد المكالمات الصادرة، ولا يرى أحدهما ملفات الآخر.
-              الملف الذي يحتاجه الاثنان يُرفع في المكانين. بعد أي تغيير اضغط «نشر» للشركة حتى يصل إلى المساعد الصوتي.
-              وإن لم يكن في سيناريو الشركة تعليمات للمكالمات الواردة، فالمساعد واحد ويستخدم ملفات المكانين.
+              لكل قناة قاعدة معرفة مستقلة (الصادرة، الواردة، الواتساب)، ولا ترى قناة ملفات أخرى.
+              وما تضعه في «المعرفة العامة المشتركة» تقرأه القنوات الثلاث جميعاً، فلا تحتاج تكرار الملف العام في كل قناة.
+              بعد أي تغيير اضغط «نشر» للشركة حتى يصل إلى المساعد الصوتي.
             </p>
-            {/* The company's own site is for both agents: its pages go into both places. */}
+            {/* The company's own site still feeds the inbound and outbound bases. */}
             <SiteImport key={companyId} companyId={companyId} onDone={() => setListVersion((v) => v + 1)} />
             {KB_SECTIONS.map((s) => (
               <section key={s.audience} className="space-y-3">

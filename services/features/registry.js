@@ -69,11 +69,8 @@ const requestToolDescription = (source = 'المكالمة') =>
   'سجّل طلب العميل (اهتمام بالشراء، أو تأجير سكني، أو تأجير مكتبي/تجاري، أو صيانة لوحدته) ليتابعه الفريق المختص. '
   + 'سجّل فقط إذا طلب العميل بنفسه شراء عقار أو استئجاره أو صيانة وحدته. لا تسجّل طلباً لمن يسأل عن وظيفة أو توريد أو شراكة أو وساطة، '
   + 'ولا لمن يستفسر فقط أو قال إنه غير مهتم. لا تملأ المشروع إلا بمشروع ذكره العميل نفسه، ولا أي حقل آخر بما لم يقله. '
-  + 'اجمع الحقول المطلوبة لنوع الطلب، واسأل العميل عن اسمه الكريم صراحةً (لا تأخذ الاسم من جهة الاتصال ولا تخمّنه). '
-  + 'ثم اقرأ عليه ملخّص طلبه واطلب تأكيده الصريح بسؤاله: هل أؤكّد الطلب؟ '
-  + 'فإذا وافق، استدعِ الأداة فوراً بـ customer_confirmed=true قبل أي رسالة أخرى. '
-  + 'لا تُنهِ المحادثة ولا تَعِد العميل بأن الفريق سيتواصل معه قبل أن تُسجّل الطلب فعلاً عبر استدعاء الأداة — الوعد بالتواصل لا يُسجّل الطلب. '
-  + `لا تستدعِ الأداة قبل أن يؤكد العميل. لا تسأل عن رقم الجوال — يُسجَّل تلقائياً من ${source}.`;
+  + 'اجمع الحقول المطلوبة لنوع الطلب، ثم اقرأ البيانات على العميل واطلب تأكيده الصريح، '
+  + `ولا تستدعِ الأداة قبل أن يؤكد. لا تسأل عن رقم الجوال — يُسجَّل تلقائياً من ${source}.`;
 
 
 /**
@@ -144,9 +141,7 @@ const FEATURES = [
     // The same for every company: the project is named as the customer said
     // it, and its Estate code made from it when the request is sent.
     bodyPropertiesFor: () => requestBodyProperties(),
-    // customer_name is required: Estate rejects a nameless request (except
-    // maintenance), so the agent must take the customer's name before filing.
-    bodyRequired: ['request_type', 'customer_confirmed', 'customer_name'],
+    bodyRequired: ['request_type', 'customer_confirmed'],
     // Opt-in. A capability that files records on a company's behalf must be
     // switched on by someone who decided they want it, never appear on every
     // agent because the code shipped.

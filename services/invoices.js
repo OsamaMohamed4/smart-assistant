@@ -132,8 +132,9 @@ async function buildInvoice(company, month, deps) {
   const unitsBefore = unitsFor(before.map((r) => r.duration_sec), c);
   const month_ = await deps.sql.listOutboundDurations.all(company.id, from, to);
   const inbound = (await deps.sql.inboundTotals.get(company.id, from, to)) || { calls: 0, seconds: 0 };
-  // WhatsApp, when the contract names a package: its conversations and
-  // messages over the same period, priced by the package.
+  // WhatsApp, when the contract names a package: its messages over the same
+  // period, priced per message by the package. The conversation grouping still
+  // decides which messages count and in which month (lib/whatsapp-billing.js).
   const waTerms = waBilling.termsOf(c);
   const whatsapp = waTerms
     ? waBilling.compute(waTerms, waBilling.countConversations(
@@ -231,11 +232,9 @@ function invoiceRows(s) {
   if (c.monthlyFee > 0) rows.push(['الرسوم الشهرية', '1', sar(c.monthlyFee), sar(c.monthlyFee)]);
   const w = c.whatsapp;
   if (w) {
-    rows.push([`باقة واتساب ${w.labelAr} (${num(w.included.conversations)} محادثة و${num(w.included.messages)} رسالة)`, '1', sar(w.fee), sar(w.fee)]);
+    rows.push([`باقة واتساب ${w.labelAr} (${num(w.included.messages)} رسالة مشمولة)`, '1', sar(w.fee), sar(w.fee)]);
     for (const l of w.lines) {
-      rows.push(l.key === 'conversations'
-        ? ['محادثات واتساب إضافية', `${num(l.units)} محادثة`, waBilling.unitSar(l.unitPrice), sar(l.amount)]
-        : ['رسائل واتساب إضافية', `${num(l.units)} رسالة`, waBilling.unitSar(l.unitPrice), sar(l.amount)]);
+      rows.push(['رسائل واتساب إضافية', `${num(l.units)} رسالة`, waBilling.unitSar(l.unitPrice), sar(l.amount)]);
     }
   }
   return rows;
@@ -245,8 +244,8 @@ function invoiceRows(s) {
 function whatsappNotes(w) {
   if (!w) return [];
   return [
-    `واتساب هذا الشهر: ${num(w.conversations)} محادثة و${num(w.messages)} رسالة. المشمول: ${num(w.included.conversations)} محادثة، ورسائل حتى ${num(w.messageAllowance)}${w.extraConversations ? ' مع رسائل المحادثات الإضافية' : ''}.`,
-    'طريقة الاحتساب: المحادثة رقم عميل واحد خلال 24 ساعة من أول رسالة، وتُحتسب إذا أرسل فيها المساعد رداً أو رسالة. رسائلها رسائل العميل والمساعد معاً، ولكل محادثة إضافية رسائلها من الباقة.',
+    `واتساب هذا الشهر: ${num(w.messages)} رسالة. المشمول: ${num(w.included.messages)} رسالة${w.extraMessages ? `، والزائد ${num(w.extraMessages)} رسالة` : ''}.`,
+    'طريقة الاحتساب: تُحتسب رسائل المحادثات التي شارك فيها المساعد (رد أو رسالة بعد مكالمة)، رسائل العميل والمساعد معاً، وتُنسب لشهر بدء المحادثة. ما زاد على الرصيد المشمول يُسعَّر بسعر الرسالة الإضافية في الباقة.',
   ];
 }
 

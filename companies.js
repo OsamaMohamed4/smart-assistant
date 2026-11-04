@@ -71,9 +71,10 @@ async function buildSystemPromptWithRAG(company, userQuery, vars, { inbound = fa
   if (!chunkCount) return base;
   try {
     const { retrieve, formatChunksForPrompt } = require('./lib/rag');
-    // The documents of the agent whose instructions these are: inbound for a
-    // customer who wrote first (WhatsApp), as for an inbound call.
-    const audience = scenarioAudience(scenario, inbound);
+    // The documents of the channel whose instructions these are. WhatsApp has
+    // its own base now; voice uses the scenario's inbound/outbound split. Each
+    // also reads the shared 'general' base (lib/kb-audience.js inReadAudience).
+    const audience = channel === 'whatsapp' ? 'whatsapp' : scenarioAudience(scenario, inbound);
     const chunks = await retrieve(company.id, userQuery, { audience });
     if (!chunks.length) return base;
     return foldPresentationForms(base + formatChunksForPrompt(chunks));

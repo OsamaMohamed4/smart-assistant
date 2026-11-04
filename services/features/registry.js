@@ -1,187 +1,127 @@
-// The capability registry: what a company's agent is ALLOWED to do.
+// The request types an agent may file, and the fields each one carries.
 //
-// Configuration, not branches. Adding a capability means adding an entry here
-// plus a handler — it must never mean another `if` in the publish pipeline or
-// another column on `companies`.
+// Every type and field below comes from the client's own requirements sheet
+// (متطلبات تفعيل وتشغيل الذكاء الاصطناعي.xlsx, question 10), in their wording --
+// except maintenance, whose fields are those of Estate's maintenance form (its
+// guide of 2026-11-01, relayed by the client), where the request goes. Nothing
+// is inferred: a complaint has no type, its fields never having been given.
 //
-// Two states matter and are not the same thing:
+// `options`: Estate keeps these as choices, not words (lib/estate-options.js),
+// so the model picks from Estate's own names and each maps to Estate's id.
 //
-//   status: 'implemented'  the backend can actually perform it
-//   status: 'planned'      declared so the UI can show the roadmap, but the
-//                          server REFUSES to enable it. A planned capability
-//                          can never produce a tool, so a half-built feature
-//                          cannot reach a caller.
+// Why "appointments" became "requests": the same sheet answers the booking
+// questions with "فوري (كرفع طلب)" for duration, an unlimited number in
+// parallel, and "تم رفع طلب وسيتم التواصل معك خلال 72 ساعة عمل" as the lead
+// time. There are no slots to allocate. What the client calls an appointment is
+// a request their sales team follows up on, so that is what gets built.
 //
-// `defaultEnabled` exists for one specific reason. Before this registry,
-// knowledge_base and call_transfer were implicit — attached whenever their data
-// happened to be present. If "no row" meant "disabled", every existing company
-// would silently lose its knowledge-base tool the next time it published. So
-// those two default to enabled: absent configuration means "behave exactly as
-// before", and `requires` still decides whether a tool is actually attached.
+// No field is enforced as mandatory. The sheet asked which ones were and the
+// answer did not say, and turning away a real lead because one answer was
+// missing is the worse failure: the caller's number is attached from the call
+// record regardless, so even a sparse request can be followed up. The agent is
+// told to gather every field; the server keeps whatever it got.
 
-const KB_TOOL_DESCRIPTION = 'البحث في قاعدة معرفة الشركة عن معلومة محددة (أسعار، مشاريع، مواصفات، عروض) عندما لا تكون المعلومة متوفرة في تعليماتك. استخدمها قبل أن تقول إن المعلومة غير متوفرة.';
+// Shared definitions, so a field means the same thing in every type it
+// appears in and reads the same in the dashboard.
+const EO = require('./estate-options');
 
-const { REQUEST_TYPES, FIELDS } = require('../../lib/request-types');
+const F = {
+  customer_name   : { labelAr: 'الاسم', descriptionAr: 'اسم العميل كما يذكره هو. اسأله عن اسمه صراحةً قبل التسجيل؛ لا تستخدم اسم جهة الاتصال أو الحساب ولا تخمّن الاسم' },
+  interest_status : {
+    labelAr: 'حالة الاهتمام',
+    descriptionAr: 'حالة اهتمام العميل: «مهتم» إن كان يريد الشراء الآن، و«محتمل» إن كان متردداً أو يقارن، و«مهتم مستقبلاً» إن كان يريد الشراء لاحقاً',
+    options: EO.INTEREST_STATUS.map((x) => x.name),
+  },
+  interest_reasons: {
+    labelAr: 'أبرز أسباب الاهتمام',
+    // The client's "(الموقع – السعر – المواصفات وجودة التصميم)", in Estate's words.
+    descriptionAr: `أبرز أسباب اهتمام العميل، واحد أو أكثر من: ${EO.INTEREST_REASONS.map((x) => x.name).join('، ')}. افصل بينها بفاصلة`,
+  },
+  property_type   : { labelAr: 'نوع العقار', descriptionAr: 'نوع العقار الذي يبحث عنه العميل', options: ['فيلا', 'دور', 'شقة', 'تاون هاوس', 'مكتب', 'معرض تجاري'] },
+  purchase_reason : { labelAr: 'سبب الشراء', descriptionAr: 'سبب رغبة العميل في الشراء', options: ['سكن', 'استثمار'] },
+  payment_method  : { labelAr: 'طريقة الدفع', descriptionAr: 'طريقة الدفع التي يفضلها العميل', options: ['كاش', 'تمويل بنكي'] },
+  referral_source : { labelAr: 'كيف سمعت عنا', descriptionAr: 'كيف عرف العميل عن الشركة، الأقرب لما قاله', options: EO.HOW_HEARD.map((x) => x.name) },
+  unit_area       : { labelAr: 'المساحة المطلوبة للوحدة', descriptionAr: 'مساحة الوحدة التي يحتاجها العميل، بالمتر المربع كما ذكرها' },
+  business_activity: { labelAr: 'نوع النشاط التجاري', descriptionAr: 'نوع النشاط التجاري الذي ستُستخدم له الوحدة' },
+  // Estate files an office and a shop apart (the rental guide's `type`).
+  rental_category : { labelAr: 'قسم التأجير', descriptionAr: 'مكتبي إن كانت الوحدة مكتباً، وتجاري إن كانت محلاً أو معرضاً', options: ['مكتبي', 'تجاري'] },
+  // Not on the requirements sheet: Estate, the client's ERP, needs it for a
+  // lead (its reply of 2026-10-21: name, phone, the project, notes). Its code
+  // (W-38) is made from the number the customer gave (services/estate.js).
+  project         : { labelAr: 'المشروع المهتم به', descriptionAr: 'المشروع الذي يهتم به العميل، باسمه أو برقمه كما ذكره هو، مثل: وكن 38. اتركه فارغاً إن لم يحدد مشروعاً' },
+  // Whatever else the customer asked for that has no field of its own ("إيجار
+  // منتهٍ بالتمليك"): kept apart, so a choice above stays a choice.
+  customer_notes  : { labelAr: 'ملاحظات العميل', descriptionAr: 'أي تفصيل آخر طلبه العميل يخص طلبه وليس له حقل هنا' },
+  // Maintenance: where the unit is, as the customer names it -- Estate's ids
+  // for it are looked up when the request is sent (services/estate.js).
+  residence_project: { labelAr: 'المشروع', descriptionAr: 'المشروع الذي فيه وحدة العميل، باسمه أو برقمه كما ذكره، مثل: مهير 10' },
+  building        : { labelAr: 'المبنى', descriptionAr: 'المبنى أو العمارة كما ذكرها العميل، مثل: A أو مبنى ب' },
+  unit            : { labelAr: 'رقم الوحدة', descriptionAr: 'رقم الوحدة أو الشقة كما ذكره العميل. يُترك فارغاً للفيلا' },
+  maintenance_issue: { labelAr: 'نوع المشكلة', descriptionAr: 'نوع مشكلة الصيانة، الأقرب لما وصفه العميل', options: EO.MAINTENANCE_ISSUES.map((x) => x.name) },
+  issue_description: { labelAr: 'وصف المشكلة', descriptionAr: 'وصف المشكلة كما شرحها العميل' },
+};
+
+const REQUEST_TYPES = {
+  // "طلب الاهتمام (حالة الاهتمام - الاسم - رقم الجوال - أبرز أسباب الاهتمام -
+  //  نوع العقار - سبب الشراء - طريقة الدفع - كيف سمعت عنا)"
+  interest: {
+    labelAr: 'طلب اهتمام',
+    fields: ['interest_status', 'customer_name', 'project', 'interest_reasons', 'property_type',
+      'purchase_reason', 'payment_method', 'referral_source', 'customer_notes'],
+  },
+  // "طلب التأجير: اسمك الكريم، رقم الجوال، ما المساحة المطلوبة للوحدة؟،
+  //  ما أبرز أسباب اهتمامك؟، كيف سمعت عنا؟"
+  leasing: {
+    labelAr: 'طلب تأجير',
+    fields: ['customer_name', 'unit_area', 'interest_reasons', 'referral_source', 'customer_notes'],
+  },
+  // "بيانات مطلوبة (التأجير المكتبي والتجاري): اسمك الكريم، رقم الجوال،
+  //  مساحة الوحدة، نوع النشاط التجاري، ما أبرز أسباب اهتمامك؟، كيف سمعت عنا"
+  leasing_commercial: {
+    labelAr: 'طلب تأجير مكتبي أو تجاري',
+    fields: ['customer_name', 'rental_category', 'unit_area', 'business_activity', 'interest_reasons', 'referral_source', 'customer_notes'],
+  },
+  // Estate's maintenance form: the project, building and unit, the problem
+  // type, a description, and who reported it.
+  maintenance: {
+    labelAr: 'طلب صيانة',
+    fields: ['customer_name', 'residence_project', 'building', 'unit', 'maintenance_issue', 'issue_description'],
+  },
+};
+
+// "رقم الجوال" appears in every list above and is deliberately absent from the
+// field arrays: question 11 answers "اعتمد مباشره", so it is never asked for
+// and never taken from the model. It comes from the call record, which the
+// provider fills from the line itself.
+
+// Statuses a request moves through once a person picks it up. Question 37
+// ("تحفظ") says changes are stored for staff review rather than applied, so a
+// request lands as `new` and only a person moves it on.
+const STATUSES = {
+  new      : 'جديد',
+  in_review: 'قيد المراجعة',
+  contacted: 'تم التواصل',
+  closed   : 'مغلق',
+};
+
+const FIELD_MAX = 500;
 
 /**
- * The request tool's body, generated from lib/request-types.js so the schema
- * the model sees can never drift from the fields the server keeps.
- *
- * The caller's phone number is deliberately NOT a property. Question 11 says
- * to take it directly from the call; it is joined from the call record, which
- * the provider fills from the line itself, so the model can neither be asked
- * for it nor supply a different one.
+ * Keep only the fields this type defines, as trimmed, bounded strings.
+ * Everything the model sends is untrusted text: unknown keys are dropped
+ * rather than stored, so a model that invents a field cannot widen the record.
  */
-function requestBodyProperties() {
-  const types = Object.keys(REQUEST_TYPES);
-  const props = {
-    request_type: {
-      type: 'string',
-      enum: types,
-      description: 'نوع الطلب: ' + types.map((t) => `${t} = ${REQUEST_TYPES[t].labelAr}`).join('، '),
-    },
-    customer_confirmed: {
-      type: 'boolean',
-      description: 'true فقط إذا قرأت البيانات على العميل وأكدها صراحة',
-    },
-  };
-  const all = new Set(types.flatMap((t) => REQUEST_TYPES[t].fields));
-  for (const key of all) {
-    // A field Estate keeps as a choice offers only Estate's own names.
-    props[key] = FIELDS[key].options
-      ? { type: 'string', enum: FIELDS[key].options, description: `${FIELDS[key].descriptionAr}. اتركه فارغاً إن لم يذكره العميل` }
-      : { type: 'string', description: FIELDS[key].descriptionAr };
+function pickFields(type, body) {
+  const def = REQUEST_TYPES[type];
+  if (!def) return null;
+  const out = {};
+  for (const key of def.fields) {
+    const v = body?.[key];
+    if (v === undefined || v === null) continue;
+    const s = String(v).replace(/\s+/g, ' ').trim().slice(0, FIELD_MAX);
+    if (s) out[key] = s;
   }
-  return props;
+  return out;
 }
 
-// The client's answer to question 31: interest and a visit with a sales
-// representative both need the customer's explicit confirmation. Said in the
-// tool's own description, because that is what the model reads at the moment
-// it decides whether to call — not in the operator's scenario, which this
-// system does not write into. `source` is where the customer's number is taken
-// from: the call, or the WhatsApp conversation.
-//
-// Who is NOT filed is said here too. A job applicant was filed as interested
-// in a project she never named (Estate, 2026-11-02): a request is a lead the
-// company's teams act on, so only a customer who wants one gets one.
-const requestToolDescription = (source = 'المكالمة') =>
-  'سجّل طلب العميل (اهتمام بالشراء، أو تأجير سكني، أو تأجير مكتبي/تجاري، أو صيانة لوحدته) ليتابعه الفريق المختص. '
-  + 'سجّل فقط إذا طلب العميل بنفسه شراء عقار أو استئجاره أو صيانة وحدته. لا تسجّل طلباً لمن يسأل عن وظيفة أو توريد أو شراكة أو وساطة، '
-  + 'ولا لمن يستفسر فقط أو قال إنه غير مهتم. لا تملأ المشروع إلا بمشروع ذكره العميل نفسه، ولا أي حقل آخر بما لم يقله. '
-  + 'اجمع الحقول المطلوبة لنوع الطلب، واسأل العميل عن اسمه الكريم صراحةً — لا تأخذ الاسم من اسم جهة الاتصال أو الحساب ولا تخمّنه — '
-  + 'ثم اقرأ البيانات على العميل واطلب تأكيده الصريح، '
-  + `ولا تستدعِ الأداة قبل أن يؤكد. لا تسأل عن رقم الجوال — يُسجَّل تلقائياً من ${source}.`;
-
-
-/**
- * @typedef {object} Feature
- * @property {string}  key            stable id, also the company_features row key
- * @property {string}  labelAr        client-facing name (business terms, not internals)
- * @property {string}  descriptionAr  one line for the admin UI
- * @property {'implemented'|'planned'} status
- * @property {'webhook'|'system'} kind webhook => a provider tool; system => a
- *                                     built-in provider tool with no endpoint
- * @property {?string} endpoint        path segment under /webhook/elevenlabs/tools/
- * @property {?string} toolName        the name the model sees
- * @property {boolean} defaultEnabled  applies when the company has no explicit row
- * @property {?function} requires      (ctx) => true | string reason-it-cannot-attach
- */
-const FEATURES = [
-  {
-    key: 'knowledge_base',
-    labelAr: 'قاعدة المعرفة',
-    descriptionAr: 'البحث في مستندات الشركة أثناء المكالمة للإجابة بمعلومات رسمية.',
-    status: 'implemented',
-    kind: 'webhook',
-    // DELIBERATELY 'kb', not 'knowledge_base'. This path is baked into the tool
-    // config of every already-published agent; renaming it would break live
-    // companies until each was republished, for no gain.
-    endpoint: 'kb',
-    toolName: 'search_knowledge_base',
-    toolDescriptionAr: KB_TOOL_DESCRIPTION,
-    responseTimeoutSecs: 10,
-    // The ONLY model-authored field. Everything else on the request is filled
-    // by the provider from its own system variables.
-    bodyProperties: {
-      query: { type: 'string', description: 'نص السؤال أو الكلمات المفتاحية للبحث' },
-    },
-    bodyRequired: ['query'],
-    defaultEnabled: true,
-    requires: (ctx) => {
-      if (!ctx.publicBaseUrl) return 'PUBLIC_BASE_URL غير مضبوط';
-      if (!(ctx.kbChunkCount > 0)) return 'لا توجد مستندات مفهرسة';
-      return true;
-    },
-  },
-  {
-    key: 'call_transfer',
-    labelAr: 'تحويل المكالمات',
-    descriptionAr: 'تحويل المكالمة إلى موظف بشري عند الحاجة.',
-    status: 'implemented',
-    // A provider-native tool: no endpoint of ours, so nothing to authenticate
-    // and nothing to store in company_tools.
-    kind: 'system',
-    endpoint: null,
-    toolName: 'transfer_to_number',
-    defaultEnabled: true,
-    requires: (ctx) => (ctx.transferNumber ? true : 'لم يُضبط رقم التحويل في الإعدادات'),
-  },
-
-  {
-    key: 'request_creation',
-    labelAr: 'استقبال الطلبات',
-    descriptionAr: 'تسجيل طلبات العملاء (اهتمام، تأجير، صيانة) وإحالتها للفريق المختص للمتابعة.',
-    status: 'implemented',
-    kind: 'webhook',
-    endpoint: 'request',
-    toolName: 'submit_customer_request',
-    toolDescriptionAr: requestToolDescription('المكالمة'),
-    responseTimeoutSecs: 10,
-    bodyProperties: requestBodyProperties(),
-    // The same for every company: the project is named as the customer said
-    // it, and its Estate code made from it when the request is sent.
-    bodyPropertiesFor: () => requestBodyProperties(),
-    // customer_name is required: Estate rejects a nameless request (except
-    // maintenance), so the agent must take the customer's name before filing.
-    bodyRequired: ['request_type', 'customer_confirmed', 'customer_name'],
-    // Opt-in. A capability that files records on a company's behalf must be
-    // switched on by someone who decided they want it, never appear on every
-    // agent because the code shipped.
-    defaultEnabled: false,
-    requires: (ctx) => (ctx.publicBaseUrl ? true : 'PUBLIC_BASE_URL غير مضبوط'),
-  },
-
-  // ── Declared for the roadmap; the server refuses to enable these. ──
-  // Kept as separate capabilities from the company's point of view even where
-  // they will later share backend infrastructure — the client's configuration
-  // should not expose our internal groupings.
-  //
-  // appointment_booking stays planned: the client's answers describe request
-  // capture, not slot allocation, and every calendar question (lead time,
-  // horizon, buffers, alternatives, holidays, cancellation, rescheduling) was
-  // answered "مب الان".
-  { key: 'appointment_booking', labelAr: 'حجز المواعيد',        descriptionAr: 'حجز المواعيد للعملاء أثناء المكالمة.',              status: 'planned', kind: 'webhook' },
-  { key: 'ticket_creation',     labelAr: 'فتح البلاغات',         descriptionAr: 'فتح بلاغ أو شكوى وتتبّعها.',                        status: 'planned', kind: 'webhook' },
-  { key: 'customer_update',     labelAr: 'تحديث بيانات العملاء', descriptionAr: 'تحديث بيانات العميل في سجلات الشركة.',              status: 'planned', kind: 'webhook' },
-  { key: 'send_message',        labelAr: 'إرسال الرسائل',        descriptionAr: 'إرسال رسالة للعميل من قوالب معتمدة.',               status: 'planned', kind: 'webhook' },
-  { key: 'workflow_action',     labelAr: 'تنفيذ الإجراءات',      descriptionAr: 'تنفيذ إجراء تشغيلي معرّف مسبقاً.',                  status: 'planned', kind: 'webhook' },
-  { key: 'system_integration',  labelAr: 'الربط مع الأنظمة',     descriptionAr: 'الاتصال بأنظمة الشركة الداخلية.',                   status: 'planned', kind: 'webhook' },
-  { key: 'data_exchange',       labelAr: 'تبادل البيانات',       descriptionAr: 'قراءة بيانات من أنظمة الشركة أثناء المكالمة.',      status: 'planned', kind: 'webhook' },
-];
-
-const BY_KEY = new Map(FEATURES.map((f) => [f.key, f]));
-const BY_ENDPOINT = new Map(FEATURES.filter((f) => f.endpoint).map((f) => [f.endpoint, f]));
-
-const getFeature   = (key) => BY_KEY.get(String(key || '')) || null;
-const featureByEndpoint = (ep) => BY_ENDPOINT.get(String(ep || '')) || null;
-const isImplemented = (key) => getFeature(key)?.status === 'implemented';
-const allFeatures  = () => FEATURES.slice();
-
-/** Keys a company may actually turn on. Anything else is refused server-side. */
-const enableableKeys = () => FEATURES.filter((f) => f.status === 'implemented').map((f) => f.key);
-
-module.exports = {
-  FEATURES, getFeature, featureByEndpoint, isImplemented, allFeatures, enableableKeys,
-  requestToolDescription,
-};
+module.exports = { REQUEST_TYPES, FIELDS: F, STATUSES, pickFields, FIELD_MAX };

@@ -4,6 +4,7 @@ const requestTool = require('./requests');
 const { connectedCall } = require('../../lib/call-status');
 const { REQUEST_TYPES } = require('../../lib/request-types');
 const schedule = require('./schedule');
+const media = require('../../lib/media-understanding');
 
 const FOLLOWUP_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
@@ -187,6 +188,51 @@ function describeMedia(msg) {
   return `[${msg?.type || 'media'}${a?.name ? `: ${a.name}` : ''}]`;
 }
 
+// Pull a downloadable media reference out of an incoming message. LoopChat's
+// exact field names for inbound media are not documented here, so several
+// common spellings are accepted; if none match, understandMedia logs the raw
+// message so the field can be pinned down. Returns { url, mime, hint } or null.
+function extractMedia(msg) {
+  const a = Array.isArray(msg?.attachments) ? msg.attachments[0] : msg?.attachments;
+  const url = a?.url || a?.media_url || a?.link || a?.file || a?.file_url || a?.download_url || a?.src
+           || msg?.url || msg?.media_url || msg?.file_url || null;
+  const mime = a?.mime_type || a?.content_type || a?.mime || a?.type
+            || msg?.mime_type || msg?.content_type || null;
+  const hint = msg?.type || a?.type || null;   // coarse: 'audio' | 'voice' | 'video' | 'image' | ...
+  return url ? { url: String(url), mime: mime ? String(mime) : null, hint: hint ? String(hint) : null } : null;
+}
+
+// Download an incoming voice note / video / image and reduce it to text the
+// assistant can answer (lib/media-understanding.js). On any problem it returns
+// { ok:false, reason } so the message falls back to the staff, exactly as a
+// media message did before this feature.
+async function understandMedia(msg, company, deps) {
+  const { logger } = deps;
+  const info = extractMedia(msg);
+  if (!info) {
+    // The one thing not derivable from the code: where LoopChat puts the media
+    // URL. Log the raw message once so the field can be confirmed.
+    let shape = ''; try { shape = JSON.stringify(msg).slice(0, 800); } catch {}
+    logger.warn('whatsapp: media without a downloadable url', { companyId: company.id, type: msg?.type, shape });
+    return { ok: false, reason: 'media: no url' };
+  }
+  if (!media.mediaKind(info.mime, info.hint)) return { ok: false, reason: 'media: unsupported type' };
+  try {
+    const token = await tokenOf(company, deps);
+    const { buffer, mime } = await loopchat.fetchMedia({ url: info.url, token });
+    const u = await media.understand({ buffer, mime: mime || info.mime, hint: info.hint });
+    if (u.error || !u.text) {
+      logger.warn('whatsapp: media not understood', { companyId: company.id, kind: u.kind, err: u.error });
+      return { ok: false, reason: 'media: not understood' };
+    }
+    logger.info('whatsapp: media understood', { companyId: company.id, kind: u.kind, chars: u.text.length });
+    return { ok: true, text: u.text, kind: u.kind };
+  } catch (e) {
+    logger.error('whatsapp: media handling failed', { companyId: company.id, err: e.message });
+    return { ok: false, reason: 'media: fetch/understand failed' };
+  }
+}
+
 async function handleMessage(evt, deps) {
   const { sql, logger } = deps;
   const traffic = evt.message?.traffic || evt.traffic || evt.message?.message?.traffic;
@@ -233,12 +279,20 @@ async function handleMessage(evt, deps) {
   const done = (r) => (resumed ? { ...r, resumed } : r);
   if (!cfg.autoReply) return done({ skipped: 'auto-reply off' });
   if (!phone) return done({ skipped: 'no phone' });
-  if (!isText) return done({ skipped: 'not text' });
   if (!schedule.isOpenNow(cfg.schedule)) {
     return done(await outsideHours({ company, channelId, phone }, deps));
   }
 
-  return done(await serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text, contact: evt.contact }, deps)));
+  // Text answers directly; a voice note, video or image is first turned into
+  // text (transcription / vision) and then answered through the same pipeline.
+  let replyText = text;
+  if (!isText) {
+    const u = await understandMedia(msg, company, deps);
+    if (!u.ok) return done({ skipped: u.reason || 'not text' });
+    replyText = u.text;
+  }
+
+  return done(await serialize(`${channelId}:${phone}`, () => reply({ company, channelId, phone, text: replyText, contact: evt.contact }, deps)));
 }
 
 // A message that arrives while the company's reply hours say the assistant is
@@ -405,6 +459,10 @@ const SKIPPED = {
   'auto-reply off'     : 'رد المساعد غير مفعّل لهذه الشركة',
   'no phone'           : 'لم يصل رقم العميل مع الرسالة',
   'not text'           : 'ليست رسالة نصية، فتُترك للفريق',
+  'media: no url'      : 'وصلت وسائط بلا رابط ملف يمكن تنزيله، فتُركت للفريق',
+  'media: unsupported type': 'نوع وسائط غير مدعوم (المدعوم: صوت، فيديو، صورة)، فتُرك للفريق',
+  'media: not understood'  : 'تعذّر فهم محتوى الوسائط، فتُركت للفريق',
+  'media: fetch/understand failed': 'تعذّر تنزيل الوسائط أو معالجتها، فتُركت للفريق',
   'taken over by staff': 'المحادثة عند موظف في LoopChat',
   'daily cap'          : 'بلغت الشركة الحد اليومي للرسائل',
   'empty reply'        : 'رد فارغ من المساعد',

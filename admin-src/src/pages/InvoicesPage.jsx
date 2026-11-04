@@ -34,12 +34,10 @@ const open = (url) => window.open(url, '_blank', 'noopener');
 
 // WhatsApp's Enterprise package is priced by agreement, so its figures are
 // entered per company (lib/whatsapp-billing.js).
-const WA_CUSTOM_EMPTY = { monthlyFee: '', conversations: '', messages: '', extraConversation: '', extraMessage: '' };
+const WA_CUSTOM_EMPTY = { monthlyFee: '', messages: '', extraMessage: '' };
 const WA_CUSTOM_FIELDS = [
   ['monthlyFee', 'السعر الشهري (ر.س)', '0.01'],
-  ['conversations', 'المحادثات المشمولة', '1'],
   ['messages', 'الرسائل المشمولة', '1'],
-  ['extraConversation', 'سعر المحادثة الإضافية (ر.س)', '0.00001'],
   ['extraMessage', 'سعر الرسالة الإضافية (ر.س)', '0.00001'],
 ];
 
@@ -245,9 +243,8 @@ function AdminInvoices() {
               </div>
               {c.whatsapp && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <Stat label={`محادثات واتساب (${c.whatsapp.labelAr})`} value={n(c.whatsapp.conversations)} hint={`المشمول ${n(c.whatsapp.included.conversations)}`} />
-                  <Stat label="رسائل واتساب" value={n(c.whatsapp.messages)} hint={`المشمول حتى ${n(c.whatsapp.messageAllowance)}`} />
-                  <Stat label="محادثات ورسائل إضافية" value={`${n(c.whatsapp.extraConversations)} · ${n(c.whatsapp.extraMessages)}`} />
+                  <Stat label={`رسائل واتساب (${c.whatsapp.labelAr})`} value={n(c.whatsapp.messages)} hint={`المشمول ${n(c.whatsapp.included.messages)}`} />
+                  <Stat label="رسائل إضافية" value={n(c.whatsapp.extraMessages)} />
                   <Stat label="واتساب (ر.س)" value={fmtSar(c.whatsapp.total)} hint="الباقة والإضافي، قبل الضريبة" />
                 </div>
               )}
@@ -328,14 +325,14 @@ function AdminInvoices() {
                 <option value="">لا تُحتسب واتساب في الفاتورة</option>
                 {Object.entries(waPackages).map(([k, p]) => (
                   <option key={k} value={k}>
-                    {p.labelAr} — {n(p.monthlyFee)} ر.س شهرياً: {n(p.conversations)} محادثة و{n(p.messages)} رسالة
+                    {p.labelAr} — {n(p.monthlyFee)} ر.س شهرياً: {n(p.messages)} رسالة مشمولة
                   </option>
                 ))}
                 <option value="enterprise">Enterprise — تسعير خاص</option>
               </select>
               {waPackages[contract.whatsapp.package] && (
                 <p className="text-[11.5px] text-ink-500">
-                  المحادثة الإضافية {waPackages[contract.whatsapp.package].extraConversation} ر.س، والرسالة الإضافية {waPackages[contract.whatsapp.package].extraMessage} ر.س.
+                  الرسالة الإضافية {waPackages[contract.whatsapp.package].extraMessage} ر.س.
                 </p>
               )}
               {contract.whatsapp.package === 'enterprise' && (
@@ -346,8 +343,8 @@ function AdminInvoices() {
                 </div>
               )}
               <p className="text-[11.5px] text-ink-500 leading-relaxed">
-                المحادثة: رقم عميل واحد خلال 24 ساعة من أول رسالة، وتُحتسب إذا أرسل فيها المساعد رداً أو رسالة. رسائلها رسائل العميل والمساعد معاً.
-                لكل محادثة إضافية نصيبها من رسائل الباقة (8 رسائل في الباقات الأربع)، وما زاد على ذلك يُحتسب بسعر الرسالة.
+                الفوترة بعدد الرسائل: ما زاد على الرصيد المشمول في الباقة يُحتسب بسعر الرسالة الإضافية.
+                تُحتسب رسائل المحادثات التي شارك فيها المساعد (رد أو رسالة بعد مكالمة)، رسائل العميل والمساعد معاً، وتُنسب لشهر بدء المحادثة.
               </p>
             </div>
 

@@ -25,6 +25,32 @@ const TIMEOUT_MS = 15_000;
 const serverToken = () => String(process.env.LOOPCHAT_API_TOKEN || '').trim();
 const isConfigured = () => !!serverToken();
 
+// Download an incoming media file (voice note, video, image) by its URL.
+// Provider media links are sometimes signed public URLs and sometimes
+// token-gated, so try plain first and only retry with the account's bearer
+// token on 401/403. Returns { buffer, mime }; throws on any other failure.
+const MEDIA_TIMEOUT_MS = 30_000;
+const MAX_MEDIA_BYTES  = 30 * 1024 * 1024;
+async function fetchMedia({ url, token }) {
+  const u = String(url || '').trim();
+  if (!/^https?:\/\//i.test(u)) throw new Error('رابط وسائط غير صالح');
+  const base = { timeout: MEDIA_TIMEOUT_MS, responseType: 'arraybuffer', maxContentLength: MAX_MEDIA_BYTES, maxBodyLength: MAX_MEDIA_BYTES };
+  let r;
+  try {
+    r = await axios.get(u, base);
+  } catch (e) {
+    const st = e?.response?.status;
+    const t = String(token || '').trim() || serverToken();
+    if ((st === 401 || st === 403) && t) {
+      r = await axios.get(u, { ...base, headers: { Authorization: `Bearer ${t}` } });
+    } else {
+      throw e;
+    }
+  }
+  const mime = String(r.headers?.['content-type'] || '').split(';')[0].trim() || null;
+  return { buffer: Buffer.from(r.data), mime };
+}
+
 function client(token) {
   const t = String(token || '').trim() || serverToken();
   if (!t) throw Object.assign(new Error('لا يوجد مفتاح LoopChat لهذه الشركة ولا على الخادم'), { code: 'NOT_CONFIGURED' });
@@ -142,4 +168,4 @@ async function sendTemplate({ token, channelId, templateId, phone, variables, he
   }
 }
 
-module.exports = { isConfigured, listChannels, listTemplates, findContact, sendText, sendTemplate, templateVariableCount, errText, BASE };
+module.exports = { isConfigured, listChannels, listTemplates, findContact, sendText, sendTemplate, fetchMedia, templateVariableCount, errText, BASE };

@@ -141,7 +141,9 @@ const FEATURES = [
     // The same for every company: the project is named as the customer said
     // it, and its Estate code made from it when the request is sent.
     bodyPropertiesFor: () => requestBodyProperties(),
-    bodyRequired: ['request_type', 'customer_confirmed'],
+    // customer_name is required: Estate rejects a nameless request (except
+    // maintenance), so the agent must take the customer's name before filing.
+    bodyRequired: ['request_type', 'customer_confirmed', 'customer_name'],
     // Opt-in. A capability that files records on a company's behalf must be
     // switched on by someone who decided they want it, never appear on every
     // agent because the code shipped.

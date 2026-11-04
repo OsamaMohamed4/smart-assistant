@@ -12,7 +12,7 @@ const { db, sql, get: dataGet, all: dataAll, run: dataRun, withTransaction, init
 const { loadCompany, listCompaniesFull, invalidateCache, buildSystemPromptWithRAG, fillGlobals } = require('./companies');
 const { summarize, chatToTranscript } = require('./summarize');
 const { ingestDocument, retrieve, repairMojibake, invalidateChunkCache } = require('./lib/rag');
-const { scenarioAudience, inAudience, validAudience } = require('./lib/kb-audience');
+const { scenarioAudience, inAudience, inReadAudience, validAudience } = require('./lib/kb-audience');
 const { END_CALL_TOOL_RULE } = require('./lib/master-prompt');
 const { foldPresentationForms } = require('./lib/pdf-text');
 const { renderFactsBlock, businessProfileSchema, parseBusinessProfile } = require('./lib/business-profile');
@@ -701,10 +701,11 @@ async function composeSystemPrompt(company, instructionPrompt, { audience = null
   // Behaviour stays operator-authored — this block states data only.
   systemContent += renderFactsBlock(company, company.businessProfile);
 
-  // A document in both halves is put in once.
+  // The channel's own documents plus the shared 'general' base; a text that
+  // appears in more than one is put in once.
   const seenText = new Set();
   const chunks = (await sql.listAllChunksForCompany.all(company.id))
-    .filter((ch) => inAudience(ch, audience))
+    .filter((ch) => inReadAudience(ch, audience))
     .filter((ch) => (seenText.has(ch.text) ? false : seenText.add(ch.text)));
   if (chunks.length) {
     const header = '\n\n---\n\n## قاعدة معرفة الشركة\n\nاستخدم المعلومات التالية كمصدر حقائق رسمي. لا تختلق أسعاراً أو معلومات غير موجودة هنا:\n\n';
@@ -2178,9 +2179,10 @@ app.post('/api/companies/:id/documents', requireCompanyAccess, uploadDocument, a
   // Multer stores originalname as latin1 bytes; decode to UTF-8 so Arabic /
   // Unicode filenames display correctly instead of appearing as mojibake.
   const filename = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
-  // Which of the company's two knowledge bases it goes in (lib/kb-audience.js).
+  // Which of the company's knowledge bases it goes in (lib/kb-audience.js):
+  // outbound, inbound, whatsapp, or the shared general base.
   const audience = validAudience(req.body?.audience ?? req.query.audience);
-  if (!audience) return res.status(400).json({ error: 'حدّد لمن الملف: المكالمات الواردة وواتساب، أو المكالمات الصادرة.' });
+  if (!audience) return res.status(400).json({ error: 'حدّد لمن الملف: الصادرة، أو الواردة، أو الواتساب، أو المعرفة العامة المشتركة.' });
 
   try {
     const result = await ingestDocument({
@@ -3402,7 +3404,7 @@ app.post('/api/companies/:id/scenarios/preview-prompt', requireCompanyAccess, as
   if (prompt === undefined) prompt = row?.instruction_prompt || '';
   const audience = scenarioAudience(row, false);
   const composed = await composeSystemPrompt(c, String(prompt).slice(0, 30000), { audience });
-  const chunks = (await sql.listAllChunksForCompany.all(c.id)).filter((ch) => inAudience(ch, audience));
+  const chunks = (await sql.listAllChunksForCompany.all(c.id)).filter((ch) => inReadAudience(ch, audience));
   res.json({
     prompt    : composed,
     length    : composed.length,

@@ -22,6 +22,7 @@ import { UsagePage } from './pages/UsagePage';
 import { WhatsappPage } from './pages/WhatsappPage';
 import { WhatsappBehaviorPage } from './pages/WhatsappBehaviorPage';
 import { InvoicesPage } from './pages/InvoicesPage';
+import { SiteLeadsPage } from './pages/SiteLeadsPage';
 import { ToastProvider } from './components/ui/Toast';
 import { api, setUnauthenticatedHandler } from './lib/api';
 
@@ -170,10 +171,11 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId, onUserChange
   // is the company's own content, and a workspace owner edits their own.
   // 'requests' is open to clients too: the leads are theirs to work.
   // 'usage' too: a client sees their own consumption, the server pins it.
+  // 'site-leads' is platform-only: superadmin on /admin, never a client.
   const allowedTabs = isWorkspace
     ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'wabehavior', 'sessions', 'requests', 'campaigns', 'usage', 'invoices'])
     : isSuper
-      ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'clients', 'whatsapp', 'sessions', 'requests', 'campaigns', 'usage', 'invoices', 'audit'])
+      ? new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'companies', 'clients', 'whatsapp', 'sessions', 'requests', 'campaigns', 'usage', 'invoices', 'audit', 'site-leads'])
       : new Set(['dashboard', 'scenarios', 'knowledge', 'profile', 'capabilities', 'playground', 'sessions', 'requests', 'campaigns', 'usage', 'invoices', 'wabehavior']);
   const activeTab = allowedTabs.has(tab) ? tab : 'dashboard';
 
@@ -226,6 +228,7 @@ function AdminShell({ user, tab, setTab, onLogout, pinnedCompanyId, onUserChange
         {activeTab === 'usage'     && <UsagePage pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'invoices'  && <InvoicesPage user={user} pinnedCompanyId={pinnedCompanyId} />}
         {activeTab === 'audit'     && isSuper && !isWorkspace && <AuditPage />}
+        {activeTab === 'site-leads' && isSuper && !isWorkspace && <SiteLeadsPage />}
         </main>
       </div>
     </div>

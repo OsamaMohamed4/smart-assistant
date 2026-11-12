@@ -131,6 +131,16 @@ publicRouter.post('/apply', leadLimiter, cvUpload, async (req, res, next) => {
 // ══ Admin (superadmin only; mounted after the auth gate) ═══════════
 const adminRouter = express.Router();
 
+// Superadmin only. req.user is set by the global `app.use('/api', requireAuth)`
+// gate before this router runs, so the guard lives here rather than relying on
+// a middleware defined later in server.js. Client accounts never see leads.
+adminRouter.use((req, res, next) => {
+  if (!req.user || req.user.role !== 'superadmin') {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  next();
+});
+
 // GET /api/site-leads?kind=contact|join&page=1&limit=25 — list without the CV
 // bytes (only whether one exists), newest first.
 adminRouter.get('/', async (req, res, next) => {

@@ -319,4 +319,16 @@ export const api = {
   checkCompanyEstate: (companyId, url) => request(`/api/companies/${companyId}/estate/check`, { method: 'POST', body: JSON.stringify({ url }) }),
   sendRequestToEstate: (companyId, requestId) => request(`/api/companies/${companyId}/requests/${requestId}/estate`, { method: 'POST', body: '{}' }),
   requestEstateTrace: (companyId, requestId) => request(`/api/companies/${companyId}/requests/${requestId}/estate`),
+    
+  // ── Site leads (public marketing-site forms) — superadmin only ──
+  siteLeads         : ({ kind, page = 1, limit = 25 } = {}) => {
+    const q = new URLSearchParams({ page: String(page), limit: String(limit) });
+    if (kind) q.set('kind', kind);
+    return request(`/api/site-leads?${q.toString()}`);
+  },
+  setSiteLeadStatus : (id, status) => request(`/api/site-leads/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  deleteSiteLead    : (id) => request(`/api/site-leads/${id}`, { method: 'DELETE' }),
+  // A CV download is a file, so it is a URL opened directly (the session cookie
+  // rides along same-origin), not a JSON request.
+  siteLeadCvUrl     : (id) => `/api/site-leads/${id}/cv`,
 };

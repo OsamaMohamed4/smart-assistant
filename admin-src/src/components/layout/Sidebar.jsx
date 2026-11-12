@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen, PhoneOutgoing, ShieldCheck, ClipboardList, Zap, Inbox, Gauge, MessageCircle, Receipt, Pencil } from 'lucide-react';
+import { Building2, MessageSquare, ChevronsLeft, LogOut, Users, LayoutDashboard, FileText, Sparkles, BookOpen, PhoneOutgoing, ShieldCheck, ClipboardList, Zap, Inbox, Gauge, MessageCircle, Receipt, Pencil, Globe } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
 import { MasarLogo } from '../ui/MasarMark';
@@ -89,6 +89,9 @@ const NAV_GROUPS = [
       { id: 'usage',      label: 'الاستهلاك',   icon: Gauge,           hint: 'وارد + صادر',         roles: ['superadmin', 'client'] },
       { id: 'invoices',   label: 'الفواتير',    icon: Receipt,         hint: 'شهرية',               roles: ['superadmin', 'client'] },
       { id: 'audit',      label: 'سجل العمليات', icon: ShieldCheck,    hint: 'audit',               roles: ['superadmin'] },
+      // Leads from the public marketing site (contact + job applications).
+      // Platform-level data, so superadmin only — clients never see it.
+      { id: 'site-leads', label: 'طلبات الموقع', icon: Globe,          hint: 'تواصل + توظيف',       roles: ['superadmin'] },
     ],
   },
 ];

@@ -33,6 +33,7 @@ const clientsRoutes = require('./routes/clients');
 const { router: webhookRoutes, getRecentWebhookAttempts } = require('./routes/webhook');
 const campaignsRoutes = require('./routes/campaigns');
 const evalsRoutes = require('./routes/evals');
+const siteLeads = require('./routes/site-leads');
 const { startDrainTimer, backfillRecentCalls, refreshCall, recordingLinkFor } = require('./services/call-events');
 const voice = require('./services/voice');
 const { publishCompany } = require('./services/publish/pipeline');
@@ -314,7 +315,10 @@ app.get('/reset-password', (_req, res) => {
 
 // Auth routes mount BEFORE the global /api auth gate.
 app.use('/api/auth', authRoutes);
-
+// Public marketing-site forms (contact + careers). Public on purpose, so it
+// mounts BEFORE the /api auth gate; it stays behind the CSRF gate and a tight
+// rate limit inside the router.
+app.use('/api/public', siteLeads.publicRouter);
 // Public-safe view of a company. Used by the client login page to render the
 // company branding before the user is authenticated, and by the post-login
 // customer experience to render the phone-call panel. `phoneNumber` is
@@ -485,6 +489,9 @@ app.use('/api', requireAuth);
 
 // Per-company client accounts (superadmin only — owners no longer exist).
 app.use('/api/companies/:id/clients', clientsRoutes);
+// Leads from the public site, read in the dashboard by a superadmin only
+// (the guard is inside the router).
+app.use('/api/site-leads', siteLeads.adminRouter);
 
 // Outbound campaigns + eval harness (both tenant-scoped via :id).
 app.use('/api/companies/:id/campaigns', campaignsRoutes);

@@ -1,17 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Copy, CheckCircle2, AlertTriangle, ArrowDownLeft, ArrowUpRight, RefreshCw } from 'lucide-react';
+import { Copy, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Label } from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { api } from '../lib/api';
-import { cn, fmtDate } from '../lib/utils';
+import { cn } from '../lib/utils';
 import { WhatsappBehavior } from '../components/companies/WhatsappBehavior';
 
 // WhatsApp per company, through the client's LoopChat account. Superadmin
 // only: the channel is what ties incoming messages to a company, the same way
 // a phone number ties calls to one.
+//
+// The live message feed («آخر الرسائل») and the LoopChat event log
+// («آخر ما وصل من LoopChat») were removed from this control panel on purpose:
+// that activity is for monitoring, not configuration, and it already lives in
+// «السجلات» (SessionsPage), where WhatsApp conversations appear with the rest.
 
 const TRIGGERS = [
   { value: 'off',      label: 'لا ترسل' },
@@ -25,14 +30,6 @@ const SOURCES = [
   { value: 'request_type',  label: 'نوع الطلب' },
   { value: 'fixed',         label: 'نص ثابت' },
 ];
-const STATUS = {
-  received: { label: 'استُلمت', tone: 'bg-ink-100 text-ink-700' },
-  sent    : { label: 'أُرسلت', tone: 'bg-emerald-50 text-emerald-700' },
-  failed  : { label: 'لم تُرسل', tone: 'bg-rose-50 text-rose-700' },
-  skipped : { label: 'لم تُرسل', tone: 'bg-amber-50 text-amber-800' },
-  pending : { label: 'قيد الإرسال', tone: 'bg-sky-50 text-sky-700' },
-};
-const KIND = { text: 'نص', media: 'وسائط', template: 'قالب' };
 
 const isApproved = (t) => String(t.status || '').toUpperCase() === 'APPROVED';
 
@@ -42,7 +39,6 @@ export function WhatsappPage() {
   const [companies, setCompanies] = useState([]);
   const [companyId, setCompanyId] = useState(null);
   const [form, setForm]           = useState(null);
-  const [messages, setMessages]   = useState([]);
   const [saving, setSaving]       = useState(false);
   const [hasOwnToken, setHasOwnToken] = useState(false);
   // Bumped after a save here, so the behaviour card below reads the switch anew.
@@ -71,7 +67,6 @@ export function WhatsappPage() {
       headerUrl: r.followup?.headerUrl || '',
     });
     setHasOwnToken(!!r.hasOwnToken);
-    setMessages(r.messages || []);
   }).catch((e) => push(e.message, 'error'));
 
   useEffect(() => {
@@ -183,7 +178,6 @@ export function WhatsappPage() {
                     في LoopChat: الإعدادات ← Integrations ← أضف Webhook بهذا الرابط، واختر حدث «Incoming Message» وقناة واتساب.
                     إيقاف التكامل واستئنافه يُرسَلان تلقائياً: إذا استلم موظف محادثة من LoopChat يتوقف المساعد فيها حتى يعيدها.
                   </p>
-                  <RecentEvents events={overview.recentEvents || []} since={overview.recentSince} onRefresh={() => refreshOverview()} />
                 </>
               ) : (
                 <p className="text-[12px] text-rose-700">رابط الخادم العام غير مضبوط (PUBLIC_BASE_URL)، فلا يمكن تكوين الرابط.</p>
@@ -300,97 +294,7 @@ export function WhatsappPage() {
         {/* The reply switch is in the card above on this page: one switch, so
             saving one card cannot put back what the other just changed. */}
         {company && <WhatsappBehavior key={`${companyId}-${savedAt}`} companyId={companyId} showToggle={false} />}
-
-        {/* ─── Recent messages ─── */}
-        {company && (
-          <Card className="overflow-x-auto">
-            <div className="px-5 pt-4 pb-2 text-[13px] font-semibold text-ink-900">آخر الرسائل</div>
-            {!messages.length ? (
-              <div className="px-5 pb-5 text-[12.5px] text-ink-500">لا توجد رسائل بعد.</div>
-            ) : (
-              <table className="w-full text-[12.5px]">
-                <tbody>
-                  {messages.map((m) => {
-                    const st = STATUS[m.status] || STATUS.failed;
-                    return (
-                      <tr key={m.id} className="border-t border-ink-100 align-top">
-                        <td className="px-5 py-2.5 whitespace-nowrap text-ink-500 tabular-nums">{fmtDate(m.created_at)}</td>
-                        <td className="px-3 py-2.5 whitespace-nowrap">
-                          {m.direction === 'in'
-                            ? <span className="inline-flex items-center gap-1 text-emerald-700"><ArrowDownLeft className="w-3 h-3" />واردة</span>
-                            : <span className="inline-flex items-center gap-1 text-amber-700"><ArrowUpRight className="w-3 h-3" />صادرة</span>}
-                          <div className="text-[11px] text-ink-400">{KIND[m.kind] || m.kind}</div>
-                        </td>
-                        <td className="px-3 py-2.5 whitespace-nowrap font-mono text-ink-600" dir="ltr">{m.contact_phone || '—'}</td>
-                        <td className="px-3 py-2.5 text-ink-800 max-w-[340px]"><div className="line-clamp-2">{m.body || '—'}</div></td>
-                        <td className="px-5 py-2.5">
-                          <span className={cn('inline-block px-2 py-0.5 rounded-md text-[11px] font-semibold', st.tone)}>{st.label}</span>
-                          {m.detail && <div className="mt-1 text-[11px] text-ink-500 max-w-[220px]">{m.detail}</div>}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </Card>
-        )}
       </div>
-    </div>
-  );
-}
-
-const EVENT_TYPES = {
-  'message.received'           : 'رسالة واردة',
-  'message_integration.stopped': 'موظف استلم محادثة',
-  'message_integration.started': 'محادثة أُعيدت للمساعد',
-};
-
-// Every event LoopChat delivered since the server started, and what became of
-// it: an empty list means LoopChat sent nothing to the address above. Events
-// from every LoopChat account that has the URL arrive here, whichever company
-// is on screen.
-function RecentEvents({ events, since, onRefresh }) {
-  const [busy, setBusy] = useState(false);
-  const refresh = () => { setBusy(true); Promise.resolve(onRefresh()).finally(() => setBusy(false)); };
-  return (
-    <div className="mt-5">
-      <div className="flex items-center justify-between gap-3 mb-2">
-        <Label>آخر ما وصل من LoopChat</Label>
-        <Button variant="secondary" size="sm" onClick={refresh} loading={busy}>
-          {!busy && <RefreshCw className="w-3.5 h-3.5" />} تحديث
-        </Button>
-      </div>
-      {!events.length ? (
-        <p className="text-[12px] text-ink-500 leading-relaxed">
-          لم يصل أي حدث منذ آخر تشغيل للخادم ({fmtDate(since)}). أرسل رسالة واتساب إلى رقم الشركة ثم اضغط «تحديث»؛
-          إذا بقيت القائمة فارغة فإن LoopChat لم يرسل شيئاً إلى الرابط أعلاه.
-        </p>
-      ) : (
-        <ul className="rounded-xl border border-ink-100 divide-y divide-ink-100">
-          {events.map((e, i) => (
-            <li key={`${e.at}-${i}`} className="px-4 py-2.5 text-[12.5px] flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="text-ink-500 tabular-nums whitespace-nowrap">{fmtDate(e.at)}</span>
-              <span className="font-medium text-ink-800">{EVENT_TYPES[e.type] || e.type || 'بلا نوع'}</span>
-              {e.channelId && (
-                <span className="text-ink-500">القناة <span dir="ltr" className="font-mono">#{e.channelId}</span>{e.channelName ? ` (${e.channelName})` : ''}</span>
-              )}
-              {e.contact && (
-                <span className="text-ink-500">العميل <span dir="ltr" className="font-mono">{e.contact}</span></span>
-              )}
-              {e.conversation && (
-                <span className="text-ink-500">المحادثة <span dir="ltr" className="font-mono">#{e.conversation}</span></span>
-              )}
-              <span className={cn('basis-full', e.ok ? 'text-emerald-700' : 'text-amber-800')}>{e.text}</span>
-              {e.unmapped && (
-                <span className="basis-full text-[11.5px] text-ink-500">
-                  إن كان رقم إحدى الشركات: اخترها من أعلى الصفحة، وأدخل مفتاح حسابها في LoopChat إن كان حساباً آخر، ثم اختر رقمها في «رقم واتساب الشركة».
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 }

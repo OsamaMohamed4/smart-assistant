@@ -184,7 +184,7 @@ app.use(cookieParser());
 // calls, webhooks, tool callbacks and assets are answered on whatever host
 // they arrive at, so nothing already configured with the old address — the
 // voice provider, LoopChat — stops working when the domain changes.
-const PAGE_PATHS = /^\/(?:$|login\/?$|reset-password\/?$|c\/|admin(?:\/|$)|contact\/?$|privacy\/?$|terms\/?$)/;
+const PAGE_PATHS = /^\/(?:$|login\/?$|reset-password\/?$|c\/|admin(?:\/|$)|contact\/?$|privacy\/?$|terms\/?$|join\/?$)/;
 app.use((req, res, next) => {
   if (!CANONICAL_HOST || req.method !== 'GET' || !PAGE_PATHS.test(req.path)) return next();
   const host = String(req.hostname || '').toLowerCase();

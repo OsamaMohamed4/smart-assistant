@@ -7,7 +7,7 @@
 
 const DAY_COUNT = 7;                       // index 0 = Sunday, as Date#getUTCDay
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
-const PROMPT_MAX = 10000;
+const PROMPT_MAX = 40000;
 const KNOWLEDGE_MAX = 20000;
 
 // Saudi Arabia is UTC+3 all year. Same offset the rest of the server uses.

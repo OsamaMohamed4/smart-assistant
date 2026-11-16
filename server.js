@@ -2863,6 +2863,7 @@ app.get('/api/usage', async (req, res) => {
 app.get('/api/conversations', async (req, res) => {
   const period       = String(req.query.period   || 'all');
   const typeFilter   = String(req.query.type     || 'all');     // all | chat | voice
+  const channelFilter= String(req.query.channel  || 'all');     // all | whatsapp | voice | chat(web)
   const statusFilter = String(req.query.status   || 'all');     // all | completed | in_progress | no_answer | failed
   const outcomeFilter= String(req.query.outcome  || 'all');     // all | success | not_available
   const search       = String(req.query.search   || '').trim().toLowerCase();
@@ -2993,6 +2994,10 @@ app.get('/api/conversations', async (req, res) => {
   // in SQL because they're derived fields.
   if (statusFilter  !== 'all') items = items.filter((i) => i.status  === statusFilter);
   if (outcomeFilter !== 'all') items = items.filter((i) => i.outcome === outcomeFilter);
+  // Channel: واتساب (chat with channel==whatsapp) / صوت (calls) / شات (web chat).
+  if (channelFilter === 'voice')         items = items.filter((i) => i.type === 'voice');
+  else if (channelFilter === 'whatsapp') items = items.filter((i) => i.channel === 'whatsapp');
+  else if (channelFilter === 'chat')     items = items.filter((i) => i.type === 'chat' && i.channel !== 'whatsapp');
   if (search) {
     // Deep content search in SQL (LIKE over transcripts + chat messages) so
     // "the agent said X yesterday" is findable — not just metadata fields.

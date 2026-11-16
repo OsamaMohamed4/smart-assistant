@@ -21,12 +21,22 @@ import { cn, fmtDate, fmtDuration } from '../lib/utils';
 export function SessionsPage({ user, pinnedCompanyId }) {
   const { push } = useToast();
   const [filters, setFilters] = useState({
-    period : 'all',
-    type   : 'all',
-    status : 'all',
-    outcome: 'all',
-    search : '',
+    period   : 'all',
+    channel  : 'all',
+    status   : 'all',
+    outcome  : 'all',
+    company  : 'all',
+    search   : '',
   });
+  // Company list for the «الشركة» filter — superadmin only; a workspace user is
+  // pinned to one company and sees no company filter.
+  const [companies, setCompanies] = useState([]);
+  useEffect(() => {
+    if (pinnedCompanyId) return;
+    api.listCompanies().then((r) => setCompanies(Array.isArray(r) ? r : (r?.items || []))).catch(() => {});
+  }, [pinnedCompanyId]);
+  // The company actually queried: the workspace pin wins; otherwise the filter.
+  const effectiveCompany = pinnedCompanyId || (filters.company !== 'all' ? filters.company : undefined);
   const [page, setPage]     = useState(1);
   const [limit, setLimit]   = useState(10);
   const [data, setData]     = useState({ items: [], total: 0 });
@@ -44,7 +54,7 @@ export function SessionsPage({ user, pinnedCompanyId }) {
     setLoading(true);
     api.conversations({
       ...filters,
-      companyId: pinnedCompanyId,
+      companyId: effectiveCompany,
       page,
       limit,
     })
@@ -96,7 +106,7 @@ export function SessionsPage({ user, pinnedCompanyId }) {
       let p = 1;
       const PAGE = 100;
       while (true) {
-        const r = await api.conversations({ ...filters, companyId: pinnedCompanyId, page: p, limit: PAGE });
+        const r = await api.conversations({ ...filters, companyId: effectiveCompany, page: p, limit: PAGE });
         all.push(...r.items);
         if (all.length >= r.total || r.items.length < PAGE) break;
         p += 1;
@@ -162,13 +172,23 @@ export function SessionsPage({ user, pinnedCompanyId }) {
             ]}
           />
           <FilterSelect
-            value={filters.type} onChange={setFilter('type')}
+            value={filters.channel} onChange={setFilter('channel')}
             options={[
-              { v: 'all',   l: 'كل الأنواع' },
-              { v: 'chat',  l: 'شات' },
-              { v: 'voice', l: 'صوت' },
+              { v: 'all',      l: 'كل القنوات' },
+              { v: 'whatsapp', l: 'واتساب' },
+              { v: 'voice',    l: 'صوت' },
+              { v: 'chat',     l: 'شات' },
             ]}
           />
+          {!pinnedCompanyId && (
+            <FilterSelect
+              value={filters.company} onChange={setFilter('company')}
+              options={[
+                { v: 'all', l: 'كل الشركات' },
+                ...companies.map((c) => ({ v: c.id, l: c.name })),
+              ]}
+            />
+          )}
           <div className="flex-1" />
           <Button variant="secondary" onClick={() => setRefreshKey((k) => k + 1)} className="gap-1.5">
             <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} strokeWidth={2} />

@@ -93,11 +93,11 @@ export const api = {
 
   // conversations (chats + calls, unified)
   conversations     : ({
-    period = 'all', type = 'all', status = 'all', outcome = 'all',
+    period = 'all', type = 'all', channel = 'all', status = 'all', outcome = 'all',
     search = '', companyId, page = 1, limit = 10,
   } = {}) => {
     const params = new URLSearchParams({
-      period, type, status, outcome,
+      period, type, channel, status, outcome,
       page: String(page), limit: String(limit),
     });
     if (companyId) params.set('companyId', companyId);

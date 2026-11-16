@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>سياسة الخصوصية — مسار</title>
 <meta name="description" content="كيف تجمع منصة مسار البيانات الشخصية وتعالجها وتحفظها وتحميها، وحقوق أصحاب البيانات.">
-<meta name="theme-color" content="#6E59A6">
+<meta name="theme-color" content="#0B0B10">
 <!-- A legal page carries no marketing value and should not compete with the
      site itself in search results. -->
 <meta name="robots" content="noindex, follow">
@@ -14,7 +14,7 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=Readex+Pro:wght@400;500;600;700&display=swap">
 
 <link rel="stylesheet" href="/site/styles.css">
 </head>
@@ -28,11 +28,32 @@
 
 <header class="site-header">
   <div class="container nav">
+    <input type="checkbox" id="navToggle" class="nav-toggle" aria-hidden="true">
     <a class="brand" href="/" aria-label="مسار — الصفحة الرئيسية">
       <img class="brand-logo" src="/site/assets/masar-logo.png" width="488" height="217" alt="مسار">
     </a>
+    <ul class="nav-links">
+      <li><a href="/">الرئيسية</a></li>
+      <li><a href="/#why">ما الذي يفعله مسار</a></li>
+      <li><a href="/#sectors">القطاعات</a></li>
+      <li><a href="/blog">المدونة</a></li>
+      <li><a href="/join">انضم إلينا</a></li>
+    </ul>
     <span class="nav-spacer"></span>
-    <a class="btn btn-ghost" href="/">الرئيسية</a>
+    <a class="nav-login" href="/login">لوحة التحكم</a>
+    <a class="btn btn-primary nav-cta" href="/#register">سجّل اهتمامك</a>
+    <label class="nav-burger" for="navToggle" aria-label="القائمة"><span></span><span></span><span></span></label>
+    <nav class="nav-drawer" aria-label="القائمة">
+      <ul>
+        <li><a href="/">الرئيسية</a></li>
+        <li><a href="/#why">ما الذي يفعله مسار</a></li>
+        <li><a href="/#sectors">القطاعات</a></li>
+        <li><a href="/blog">المدونة</a></li>
+        <li><a href="/join">انضم إلينا</a></li>
+        <li><a href="/login">لوحة التحكم</a></li>
+      </ul>
+      <div class="drawer-cta"><a class="btn btn-primary" href="/#register">سجّل اهتمامك</a></div>
+    </nav>
   </div>
 </header>
 
@@ -234,17 +255,45 @@
 </main>
 
 <footer class="site-footer">
-  <div class="container footer-row">
-    <span class="brand" aria-hidden="true">
-      <img class="brand-logo" src="/site/assets/masar-logo.png" width="488" height="217" alt="">
-    </span>
-    <a class="footer-link" href="/login">لوحة التحكم</a>
-    <a class="footer-link" href="/contact">تواصل معنا</a>
-    <a class="footer-link" href="/privacy">سياسة الخصوصية</a>
-    <a class="footer-link" href="/terms">شروط الخدمة</a>
-    <a class="footer-link" href="https://www.linkedin.com/company/getmasar-sa/" target="_blank" rel="noopener noreferrer">لينكدإن</a>
-    <span class="footer-spacer"></span>
-    <small>© 2026  جميع الحقوق محفظة لمسار   -</small>
+  <div class="container">
+    <div class="footer-main">
+      <div class="footer-brand">
+        <a class="brand" href="/" aria-label="مسار">
+          <img class="brand-logo" src="/site/assets/masar-logo.png" width="488" height="217" alt="مسار">
+        </a>
+        <p class="footer-tagline">ذكاء اصطناعي يعمل داخل أعمالك.</p>
+        <ul class="footer-social">
+          <li><a href="https://www.linkedin.com/company/getmasar-sa/" target="_blank" rel="noopener noreferrer" aria-label="لينكدإن"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4.98 3.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5ZM3 9.75h4v10.75H3V9.75Zm6.5 0h3.83v1.47h.05a4.2 4.2 0 0 1 3.78-2.08c4.04 0 4.79 2.66 4.79 6.12v5.24h-4v-4.65c0-1.11-.02-2.54-1.55-2.54-1.55 0-1.79 1.21-1.79 2.46v4.73h-3.99V9.75Z"/></svg></a></li>
+          <li><a href="https://x.com/" target="_blank" rel="noopener noreferrer" aria-label="إكس"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 3h3.2l-7 8 8.2 10.9h-6.4l-5-6.5-5.7 6.5H1.6l7.5-8.6L1 3h6.6l4.5 6 5.4-6Zm-1.1 16.9h1.8L7.1 4.9H5.2l11.2 15Z"/></svg></a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>روابط هامة</h4>
+        <ul>
+          <li><a href="/">الرئيسية</a></li>
+          <li><a href="/#problem">المشكلة</a></li>
+          <li><a href="/#why">ما الذي يفعله مسار</a></li>
+          <li><a href="/#sectors">القطاعات</a></li>
+          <li><a href="/blog">المدونة</a></li>
+          <li><a href="/join">انضم إلينا</a></li>
+          <li><a href="/#faq">الأسئلة الشائعة</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>تواصل معنا</h4>
+        <ul>
+          <li><span class="contact-line" dir="ltr">9200 33842</span></li>
+          <li><a href="mailto:info@getmasar.sa" dir="ltr">info@getmasar.sa</a></li>
+          <li><span class="contact-line">المملكة العربية السعودية</span></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <small>© 2026 مؤسسة العنود محمد القحطاني لتقنية المعلومات، جميع الحقوق محفوظة</small>
+      <span class="footer-spacer"></span>
+      <a href="/privacy">سياسة الخصوصية</a>
+      <a href="/terms">الشروط والأحكام</a>
+    </div>
   </div>
 </footer>
 

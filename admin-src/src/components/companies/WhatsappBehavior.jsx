@@ -15,6 +15,7 @@ import { cn } from '../../lib/utils';
 // Index 0 = Sunday, as the server counts.
 const DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
+
 // `showToggle`: false where the page has the reply switch elsewhere (the
 // platform's «واتساب» page). The switch is then neither shown nor sent, and a
 // save here leaves it as it is.
@@ -29,7 +30,6 @@ export function WhatsappBehavior({ companyId, showToggle = true }) {
     setForm({
       autoReply: !!r.autoReply,
       prompt: r.prompt || '',
-      knowledge: r.knowledge || '',
       scheduleOn: !!r.schedule?.enabled,
       days: (r.schedule?.days || []).map((d) => ({ ...d })),
     });
@@ -54,7 +54,9 @@ export function WhatsappBehavior({ companyId, showToggle = true }) {
         // not switch replies back to what this card read when it opened.
         ...(showToggle && form.autoReply !== !!data.autoReply ? { autoReply: form.autoReply } : {}),
         prompt: form.prompt,
-        knowledge: form.knowledge,
+        // The separate knowledge now lives inside the prompt; clear the old
+        // field so it is not appended twice.
+        knowledge: '',
         schedule: { enabled: form.scheduleOn, days: form.days },
       });
       apply(r);
@@ -132,27 +134,23 @@ export function WhatsappBehavior({ companyId, showToggle = true }) {
         )}
       </div>
 
-      {/* ─── instructions ─── */}
+      {/* ─── instructions (single box; the separate knowledge box was merged
+           into this one, so everything the WhatsApp assistant needs — tone,
+           rules, prices, FAQ — lives here) ─── */}
       <div>
         <Label>تعليمات المساعد على واتساب</Label>
-        <textarea value={form.prompt} onChange={(e) => set('prompt')(e.target.value)} rows={8} maxLength={data.limits.prompt}
-          placeholder="اتركه فارغاً لاستخدام تعليمات المكالمات الواردة من السيناريو المفعّل."
+        <textarea value={form.prompt} onChange={(e) => set('prompt')(e.target.value)} rows={18} maxLength={data.limits.prompt}
+          placeholder="اكتب هنا تعليمات المساعد على واتساب ومعرفته (أسلوب الرد، القواعد، الأسعار، الأسئلة المتكررة…). اتركه فارغاً لاستخدام تعليمات المكالمات الواردة من السيناريو المفعّل."
           className="w-full px-3 py-2.5 rounded-xl border border-ink-200 bg-white text-[13px] leading-relaxed focus-ring" />
         <p className="mt-1.5 text-[11.5px] text-ink-500 leading-relaxed">
           هذه التعليمات لواتساب فقط، ولا تغيّر المكالمات الصوتية. إن تُركت فارغة يرد المساعد بتعليمات المكالمات الواردة كما كان.
           يمكنك استخدام <span dir="ltr" className="font-mono">{'{{agent_name}}'}</span> و<span dir="ltr" className="font-mono">{'{{company_name}}'}</span>.
-        </p>
-      </div>
-
-      {/* ─── knowledge ─── */}
-      <div>
-        <Label>معرفة خاصة بواتساب</Label>
-        <textarea value={form.knowledge} onChange={(e) => set('knowledge')(e.target.value)} rows={8} maxLength={data.limits.knowledge}
-          placeholder="الصق هنا معلومات يحتاجها المساعد في واتساب: أسعار، عروض، أسئلة متكررة…"
-          className="w-full px-3 py-2.5 rounded-xl border border-ink-200 bg-white text-[13px] leading-relaxed focus-ring" />
-        <p className="mt-1.5 text-[11.5px] text-ink-500 leading-relaxed">
-          نص يُضاف إلى معرفة المساعد في واتساب فقط. قاعدة المعرفة العامة للشركة (الملفات) تبقى تعمل كما هي في كل القنوات.
-          {' '}{form.knowledge.length.toLocaleString('en-US')} / {data.limits.knowledge.toLocaleString('en-US')} حرف.
+          {' '}{form.prompt.length.toLocaleString('en-US')} / {data.limits.prompt.toLocaleString('en-US')} حرف.
+          {data.knowledge && data.knowledge.trim() ? (
+            <span className="block mt-1 text-amber-700">
+              لديك «معرفة واتساب» سابقة ما زالت تعمل. انقلها إلى هذا المربع يدوياً ثم اضغط «حفظ» — عند الحفظ تُزال النسخة المنفصلة تلقائياً لتجنّب التكرار.
+            </span>
+          ) : null}
         </p>
       </div>
 

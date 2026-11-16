@@ -19,10 +19,13 @@
   --violet:      #8439FF;
   --violet-700:  #6A1FE0;
   --violet-300:  #B48AFF;
-  --violet-100:  #F1E8FF;
+  --violet-100:  #F1E8FF;   /* violet tint (light theme) */
   --violet-050:  #FAF8FF;
 
-  /* ── Ink / neutrals ── */
+  /* ── Neutrals — LIGHT by default; the dark set is swapped in under
+     @media (prefers-color-scheme: dark) below, so the whole site follows
+     the device's light/dark mode. The hero and the sectors band stay dark
+     in both themes (they use the --dark* tokens, which never change). ── */
   --ink:         #101010;
   --ink-2:       #55565F;
   --ink-3:       #6B6C75;
@@ -31,6 +34,8 @@
   --surface-2:   #F4F5F8;
   --line:        #E3E4EA;
   --line-2:      #D6D7DE;
+  /* colour of an icon/tick/dot sitting on a --violet-100 tint */
+  --on-tint:     var(--violet);
 
   /* ── Dark (hero, footer-less dark sections, mock cards) ── */
   --dark:        #0B0B10;
@@ -65,6 +70,28 @@
 
 @media (min-width: 640px)  { :root { --gutter: 32px; --section-y: 96px;  } }
 @media (min-width: 1024px) { :root { --gutter: 48px; --section-y: 112px; } }
+
+/* ── Dark mode: follows the device setting. Only the neutral + tint tokens
+   change; every rule reads them, so the whole site re-themes from here. ── */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink:        #ECEDF1;
+    --ink-2:      #B4B5C0;
+    --ink-3:      #85868F;
+    --paper:      #0B0B10;
+    --surface:    #16161E;
+    --surface-2:  #1C1C26;
+    --line:       #26262F;
+    --line-2:     #34343F;
+    --violet-100: rgba(132, 57, 255, .16);
+    --violet-050: rgba(132, 57, 255, .08);
+    --on-tint:    var(--violet-300);
+  }
+  /* The status chips are the one place with fixed light fills; tune them so
+     they read on a dark form. */
+  .form-status[data-state="ok"]  { background: rgba(46, 107, 58, .18); border-color: rgba(46,107,58,.4); color: #8FE6A6; }
+  .form-status[data-state="err"] { background: rgba(176, 0, 32, .16);  border-color: rgba(176,0,32,.4);  color: #FF9DAA; }
+}
 
 /* ── Reset ─────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
@@ -158,10 +185,8 @@ p { margin: 0; }
 }
 .nav { display: flex; align-items: center; gap: var(--s-5); min-height: 70px; }
 .brand { display: inline-flex; align-items: center; gap: var(--s-2); color: #fff; flex: none; }
-/* Explicit width: the inline <svg><use> has no viewBox of its own, so
-   width:auto would fall back to the 300px default and blow out the nav.
-   94px keeps the mark's ~3.15:1 aspect at 30px tall. */
-.brand .brand-logo { height: 30px; width: 94px; display: block; color: var(--violet); }
+/* Official lock-up image (mark + MASAR). Height-constrained, width auto. */
+.brand .brand-logo { height: 34px; width: auto; display: block; }
 .brand .brand-word { font-family: var(--font-head); font-weight: 700; font-size: 20px; color: #fff; }
 .brand .brand-latin { font-family: var(--font-head); font-weight: 600; font-size: 13px; color: var(--violet-300); letter-spacing: .06em; }
 @media (max-width: 599px) { .brand .brand-latin { display: none; } }
@@ -239,12 +264,14 @@ p { margin: 0; }
 }
 .partners-row { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--s-5) var(--s-7); }
 .partners-row .label { font-size: 14px; color: var(--ink-3); font-weight: 600; }
+/* The partner marks are dark artwork, so each sits on a white tile to stay
+   legible on the dark strip. */
 .partner-logo {
-  display: inline-flex; align-items: center; gap: var(--s-2);
-  font-size: 15px; color: var(--ink-2); font-weight: 600;
-  padding: 10px 20px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #fff; border-radius: var(--radius-sm);
+  padding: 12px 22px; min-height: 72px; min-width: 150px;
 }
-.partner-logo img { max-height: 34px; width: auto; }
+.partner-logo img { height: 46px; width: auto; display: block; object-fit: contain; }
 
 /* ══ Generic grids ════════════════════════════════════════ */
 .grid { display: grid; gap: var(--s-4); }
@@ -264,7 +291,7 @@ p { margin: 0; }
 .feature-icon {
   width: 46px; height: 46px; border-radius: 12px; margin-bottom: var(--s-4);
   display: inline-flex; align-items: center; justify-content: center;
-  background: var(--violet-100); color: var(--violet);
+  background: var(--violet-100); color: var(--on-tint);
 }
 .feature-icon svg { width: 22px; height: 22px; }
 
@@ -352,8 +379,39 @@ p { margin: 0; }
 .step-card p { font-size: 15px; color: var(--ink-2); }
 .step-card.dark p { color: var(--on-dark-2); }
 
-/* ══ Enterprise tag block ═════════════════════════════════ */
+/* ══ Problem / pain points ════════════════════════════════ */
+.problem { background: var(--paper); }
+.problem-lede { text-align: center; color: var(--ink-2); max-width: 60ch; margin: 0 auto var(--s-7); }
+.pain-grid { display: grid; gap: var(--s-4); grid-template-columns: 1fr; }
+@media (min-width: 640px) { .pain-grid { grid-template-columns: repeat(2, 1fr); } }
+.pain-card {
+  position: relative;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: var(--s-6) var(--s-5);
+}
+.pain-card::before {
+  content: ''; position: absolute; top: var(--s-5); inset-inline-end: var(--s-5);
+  width: 10px; height: 10px; border-radius: 50%; background: var(--on-tint);
+  box-shadow: 0 0 0 4px var(--violet-100);
+}
+.pain-card h3 { font-size: 21px; margin-bottom: var(--s-2); }
+.pain-card p { font-size: 15px; color: var(--ink-2); }
+
+/* ══ Enterprise checklist ═════════════════════════════════ */
 .enterprise { background: var(--surface); }
+.checklist { list-style: none; margin: var(--s-6) auto 0; padding: 0; max-width: 520px; display: grid; gap: var(--s-3); }
+.checklist li {
+  display: flex; align-items: center; gap: var(--s-3);
+  font-size: 16px; color: var(--ink);
+  padding: var(--s-3) 0; border-bottom: 1px solid var(--line);
+}
+.checklist li:last-child { border-bottom: 0; }
+.checklist .tick {
+  flex: none; width: 26px; height: 26px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--violet-100); color: var(--on-tint);
+}
+.checklist .tick svg { width: 15px; height: 15px; }
 .tags { display: flex; flex-wrap: wrap; gap: var(--s-2); list-style: none; margin: var(--s-5) 0 0; padding: 0; justify-content: center; }
 .tags li {
   border: 1px solid var(--line-2); border-radius: var(--radius-pill);

@@ -184,7 +184,7 @@ app.use(cookieParser());
 // calls, webhooks, tool callbacks and assets are answered on whatever host
 // they arrive at, so nothing already configured with the old address — the
 // voice provider, LoopChat — stops working when the domain changes.
-const PAGE_PATHS = /^\/(?:$|login\/?$|reset-password\/?$|c\/|admin(?:\/|$)|contact\/?$|privacy\/?$|terms\/?$|join\/?$)/;
+const PAGE_PATHS = /^\/(?:$|login\/?$|reset-password\/?$|c\/|admin(?:\/|$)|contact\/?$|privacy\/?$|terms\/?$|join\/?$|blog\/?$)/;
 app.use((req, res, next) => {
   if (!CANONICAL_HOST || req.method !== 'GET' || !PAGE_PATHS.test(req.path)) return next();
   const host = String(req.hostname || '').toLowerCase();
@@ -762,6 +762,7 @@ app.get('/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'site', 'pr
 app.get('/terms', (_req, res) => res.sendFile(path.join(__dirname, 'site', 'terms.html')));
 app.get('/contact', (_req, res) => res.sendFile(path.join(__dirname, 'site', 'contact.html')));
 app.get('/join', (_req, res) => res.sendFile(path.join(__dirname, 'site', 'join.html')));
+app.get('/blog', (_req, res) => res.sendFile(path.join(__dirname, 'site', 'blog.html')));
 
 // Health check that actually checks. 503 only on hard DB failure (so a
 // platform health-gate restarts us); soft issues (webhook backlog) are

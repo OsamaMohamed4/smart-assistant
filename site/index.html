@@ -27,16 +27,15 @@
   <div class="container nav">
     <input type="checkbox" id="navToggle" class="nav-toggle" aria-hidden="true">
     <a class="brand" href="/" aria-label="مسار — الصفحة الرئيسية">
-      <svg class="brand-logo" aria-hidden="true"><use href="#m-mark"></use></svg>
-      <span class="brand-word">مسار</span>
-      <span class="brand-latin">MASAR</span>
+      <img class="brand-logo" src="/site/assets/masar-logo.png" width="488" height="217" alt="مسار">
     </a>
     <ul class="nav-links">
-      <li><a href="#why">لماذا مسار</a></li>
-      <li><a href="#uses">الاستخدامات</a></li>
+      <li><a href="#problem">المشكلة</a></li>
+      <li><a href="#why">ما الذي يفعله مسار</a></li>
+      <li><a href="#uses">أين يُنشر</a></li>
       <li><a href="#sectors">القطاعات</a></li>
-      <li><a href="#security">الأمان</a></li>
       <li><a href="#faq">الأسئلة الشائعة</a></li>
+      <li><a href="/blog">المدونة</a></li>
       <li><a href="/join">انضم إلينا</a></li>
     </ul>
     <span class="nav-spacer"></span>
@@ -46,11 +45,13 @@
     <label class="nav-burger" for="navToggle" aria-label="القائمة"><span></span><span></span><span></span></label>
     <nav class="nav-drawer" aria-label="القائمة">
       <ul>
-        <li><a href="#why">لماذا مسار</a></li>
-        <li><a href="#uses">الاستخدامات</a></li>
+        <li><a href="#problem">المشكلة</a></li>
+        <li><a href="#why">ما الذي يفعله مسار</a></li>
+        <li><a href="#uses">أين يُنشر</a></li>
         <li><a href="#sectors">القطاعات</a></li>
         <li><a href="#security">الأمان</a></li>
         <li><a href="#faq">الأسئلة الشائعة</a></li>
+        <li><a href="/blog">المدونة</a></li>
         <li><a href="/join">انضم إلينا</a></li>
         <li><a href="/login">لوحة التحكم</a></li>
       </ul>
@@ -78,16 +79,45 @@
 <div class="partners-strip">
   <div class="container partners-row">
     <span class="label">شركاؤنا</span>
-    <span class="partner-logo">مهير العقارية</span>
-    <span class="partner-logo">وكن للتطوير والاستثمار العقاري</span>
+    <span class="partner-logo"><img src="/site/assets/partner-maheer.png" width="1719" height="565" alt="مهير العقارية" loading="lazy"></span>
+    <span class="partner-logo"><img src="/site/assets/partner-wakn.png" width="1969" height="1969" alt="وكن للتطوير والاستثمار العقاري" loading="lazy"></span>
   </div>
 </div>
+
+<!-- ═══ Problem ═══ -->
+<section class="section problem" id="problem">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">المشكلة</p>
+      <h2 class="spaced">خدمة العملاء تستنزف وقتك</h2>
+    </div>
+    <p class="problem-lede">التواصل اليدوي لا يتوسّع بسهولة، وكل نمو يعني تكلفة أعلى ووقتًا أطول.</p>
+    <div class="pain-grid">
+      <article class="pain-card">
+        <h3>مكالمات تضيع</h3>
+        <p>خارج أوقات الدوام وفي أوقات الذروة.</p>
+      </article>
+      <article class="pain-card">
+        <h3>انتظار طويل</h3>
+        <p>طوابير وردود متأخرة تُفقد العميل.</p>
+      </article>
+      <article class="pain-card">
+        <h3>متابعات تتأخر</h3>
+        <p>مستحقات وطلبات تُنسى.</p>
+      </article>
+      <article class="pain-card">
+        <h3>حلول لا تفهم اللهجة</h3>
+        <p>ردود آلية بعيدة عن عميلك.</p>
+      </article>
+    </div>
+  </div>
+</section>
 
 <!-- ═══ Why ═══ -->
 <section class="section why" id="why">
   <div class="container">
     <div class="section-head">
-      <p class="eyebrow">لماذا مسار</p>
+      <p class="eyebrow">ما الذي يفعله مسار</p>
       <h2 class="spaced">ذكاء لا يكتفي بالرد</h2>
     </div>
     <div class="grid grid-3">
@@ -136,7 +166,7 @@
 <section class="section worker" id="uses">
   <div class="container">
     <div class="section-head">
-      <p class="eyebrow">الاستخدامات</p>
+      <p class="eyebrow">أين يُنشر</p>
       <h2 class="spaced">مساعد يعمل على مدار الساعة</h2>
     </div>
 
@@ -257,12 +287,12 @@
       <h2 class="spaced">مصمَّم للمؤسسات</h2>
       <p>بياناتك مستضافة داخل المملكة.</p>
     </div>
-    <ul class="tags">
-      <li>عزل كامل بين الشركات</li>
-      <li>تحقق موقَّع من الطلبات</li>
-      <li>صلاحيات حسب الدور</li>
-      <li>سجل عمليات</li>
-      <li>تحكم في القدرات</li>
+    <ul class="checklist">
+      <li><span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 6"/></svg></span> عزل كامل بين الشركات</li>
+      <li><span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 6"/></svg></span> تحقق موقَّع من الطلبات</li>
+      <li><span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 6"/></svg></span> صلاحيات حسب الدور</li>
+      <li><span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 6"/></svg></span> سجل عمليات</li>
+      <li><span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 6"/></svg></span> تحكم في القدرات</li>
     </ul>
   </div>
 </section>
@@ -400,9 +430,7 @@
     <div class="footer-main">
       <div class="footer-brand">
         <a class="brand" href="/" aria-label="مسار">
-          <svg class="brand-logo" aria-hidden="true"><use href="#m-mark"></use></svg>
-          <span class="brand-word">مسار</span>
-          <span class="brand-latin">MASAR</span>
+          <img class="brand-logo" src="/site/assets/masar-logo.png" width="488" height="217" alt="مسار">
         </a>
         <p class="footer-tagline">ذكاء اصطناعي يعمل داخل أعمالك.</p>
         <ul class="footer-social">
@@ -415,10 +443,10 @@
         <h4>روابط هامة</h4>
         <ul>
           <li><a href="/">الرئيسية</a></li>
-          <li><a href="#why">لماذا مسار</a></li>
-          <li><a href="#uses">الاستخدامات</a></li>
+          <li><a href="#problem">المشكلة</a></li>
+          <li><a href="#why">ما الذي يفعله مسار</a></li>
           <li><a href="#sectors">القطاعات</a></li>
-          <li><a href="#security">الأمان</a></li>
+          <li><a href="/blog">المدونة</a></li>
           <li><a href="/join">انضم إلينا</a></li>
           <li><a href="#faq">الأسئلة الشائعة</a></li>
         </ul>

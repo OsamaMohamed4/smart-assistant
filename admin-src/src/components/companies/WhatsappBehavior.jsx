@@ -139,13 +139,13 @@ export function WhatsappBehavior({ companyId, showToggle = true }) {
            rules, prices, FAQ — lives here) ─── */}
       <div>
         <Label>تعليمات المساعد على واتساب</Label>
-        <textarea value={form.prompt} onChange={(e) => set('prompt')(e.target.value)} rows={18} maxLength={data.limits.prompt}
+        <textarea value={form.prompt} onChange={(e) => set('prompt')(e.target.value)} rows={18}
           placeholder="اكتب هنا تعليمات المساعد على واتساب ومعرفته (أسلوب الرد، القواعد، الأسعار، الأسئلة المتكررة…). اتركه فارغاً لاستخدام تعليمات المكالمات الواردة من السيناريو المفعّل."
           className="w-full px-3 py-2.5 rounded-xl border border-ink-200 bg-white text-[13px] leading-relaxed focus-ring" />
         <p className="mt-1.5 text-[11.5px] text-ink-500 leading-relaxed">
           هذه التعليمات لواتساب فقط، ولا تغيّر المكالمات الصوتية. إن تُركت فارغة يرد المساعد بتعليمات المكالمات الواردة كما كان.
           يمكنك استخدام <span dir="ltr" className="font-mono">{'{{agent_name}}'}</span> و<span dir="ltr" className="font-mono">{'{{company_name}}'}</span>.
-          {' '}{form.prompt.length.toLocaleString('en-US')} / {data.limits.prompt.toLocaleString('en-US')} حرف.
+          {' '}عدد الأحرف: {form.prompt.length.toLocaleString('en-US')} (بدون حد).
           {data.knowledge && data.knowledge.trim() ? (
             <span className="block mt-1 text-amber-700">
               لديك «معرفة واتساب» سابقة ما زالت تعمل. انقلها إلى هذا المربع يدوياً ثم اضغط «حفظ» — عند الحفظ تُزال النسخة المنفصلة تلقائياً لتجنّب التكرار.

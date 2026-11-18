@@ -66,9 +66,8 @@ function validateControls(body) {
   const out = {};
 
   if (b.prompt !== undefined) {
-    const p = String(b.prompt || '').trim();
-    if (p.length > PROMPT_MAX) return { error: `تعليمات واتساب أطول من ${PROMPT_MAX} حرف` };
-    out.whatsappPrompt = p;
+    // No length cap on the WhatsApp prompt — it can be as long as needed.
+    out.whatsappPrompt = String(b.prompt || '').trim();
   }
   if (b.knowledge !== undefined) {
     const k = String(b.knowledge || '').trim();

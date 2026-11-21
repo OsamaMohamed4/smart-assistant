@@ -395,9 +395,27 @@ function HeaderCheckbox({ checked, indeterminate, onChange, title }) {
   );
 }
 
+// Real size: bytes / KB / MB so small files don't all read as "0.0 MB".
+function fmtSize(bytes) {
+  const b = Number(bytes) || 0;
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+}
+// Date + time: DD/MM/YYYY HH:MM (24h).
+function fmtDateTime(v) {
+  if (!v) return '—';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('en-GB', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+}
+
 function DocRow({ doc, selected, onToggle, onDelete, onReplace, onDownload }) {
-  const sizeMB = (doc.size_bytes / (1024 * 1024)).toFixed(1);
-  const uploadDate = new Date(doc.created_at).toLocaleDateString('en-GB'); // DD/MM/YYYY
+  const sizeLabel = fmtSize(doc.size_bytes);
+  const uploadDate = fmtDateTime(doc.created_at);   // DD/MM/YYYY HH:MM
   const modifiedDate = uploadDate; // DB only tracks created_at for kb_documents right now
 
   return (
@@ -435,7 +453,7 @@ function DocRow({ doc, selected, onToggle, onDelete, onReplace, onDownload }) {
         {modifiedDate}
       </td>
       <td className="py-3 px-4 text-[13px] text-ink-600 font-mono whitespace-nowrap">
-        {sizeMB} MB
+        {sizeLabel}
       </td>
       <td className="py-3 px-4 text-left whitespace-nowrap">
         <div className="flex items-center justify-end gap-2 text-[12.5px] text-ink-500">

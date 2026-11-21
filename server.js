@@ -2355,23 +2355,37 @@ async function runSiteImport(company, job) {
     if (!pages.length) throw new Error('لم نجد في الموقع صفحات فيها نص يمكن قراءته. تأكد من الرابط وأنه يفتح بدون تسجيل دخول.');
 
     job.state = 'saving';
-    job.total = pages.length;
+    // Consolidate the crawled pages into just TWO knowledge-base documents —
+    // one for rental ("التأجير") and one for sales + everything else
+    // ("المبيعات") — instead of a document per page. Category is decided from
+    // the page's url / title / text.
+    const prefixName = siteCrawler.docPrefix(job.url);
+    const RENT_RE = /rent|rent-units|housingunitsrent|إيجار|ايجار|تأجير|تاجير|للإيجار|للايجار/i;
+    const isRental = (p) => RENT_RE.test(`${p.url} ${p.title || ''} ${String(p.text || '').slice(0, 600)}`);
+    const groups = [
+      { label: `${prefixName}التأجير`,  pages: pages.filter(isRental) },
+      { label: `${prefixName}المبيعات`, pages: pages.filter((p) => !isRental(p)) },
+    ].filter((g) => g.pages.length);
+
+    job.total = groups.length;
     const keep = new Set();
-    for (const page of pages) {
+    for (const g of groups) {
       try {
-        const buffer = Buffer.from(siteCrawler.pageDocument(page), 'utf8');
-        // The company's own site is for both of its agents: each page goes
-        // into both halves of the knowledge base (lib/kb-audience.js).
+        const body = g.pages.map((p) => siteCrawler.pageDocument(p)).join('\n\n---\n\n');
+        const buffer = Buffer.from(body, 'utf8');
+        // The company's own site feeds both agents (inbound + outbound). A
+        // higher chunk ceiling is allowed here because this is one consolidated
+        // document of the company's OWN site, not a user upload.
         for (const audience of ['inbound', 'outbound']) {
           const r = await ingestDocument({
-            companyId: company.id, filename: siteCrawler.docName(job.url, page), mime: 'text/plain', buffer, audience,
+            companyId: company.id, filename: g.label.slice(0, 160), mime: 'text/plain', buffer, audience, maxChunks: 8000,
           });
           keep.add(r.documentId);
         }
-        job.added += 1;
+        job.added += g.pages.length;
       } catch (e) {
-        job.failed += 1;
-        logger.warn('site import: page not stored', { companyId: company.id, url: page.url, err: e.message });
+        job.failed += g.pages.length;
+        logger.warn('site import: group not stored', { companyId: company.id, label: g.label, err: e.message });
       }
     }
     if (!job.added) throw new Error('تعذّر حفظ صفحات الموقع في قاعدة المعرفة الآن. حاول مرة أخرى بعد قليل.');

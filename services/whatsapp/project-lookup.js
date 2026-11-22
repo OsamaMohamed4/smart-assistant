@@ -94,6 +94,17 @@ function formatUnits(units) {
   return lines;
 }
 
+// The project's three real links, built from the site's own data — never
+// composed from a pattern (which is how the model used to invent dead links).
+function buildLinks(origin, slug, re) {
+  const out = [`رابط صفحة المشروع: ${origin}/real-estates/${slug}`];
+  const b = String(re?.brochure || '').trim();
+  if (b) out.push(`رابط البروشور: ${/^https?:\/\//i.test(b) ? b : origin + (b.startsWith('/') ? '' : '/') + b}`);
+  const lat = re?.latitude, lng = re?.longitude;
+  if (lat != null && lng != null && lat !== '' && lng !== '') out.push(`رابط قوقل ماب: https://www.google.com/maps?q=${lat},${lng}`);
+  return out.join('\n');
+}
+
 const FALLBACK = 'تعذّر جلب الأسعار آلياً الآن. لا تذكر أي سعر من عندك؛ أرسل رابط المشروع إن توفّر واعرض رفع طلب اهتمام ليزوّد الفريق العميل بالتفاصيل الدقيقة.';
 
 async function runTool(name, argsJson, { company }, deps) {
@@ -114,13 +125,15 @@ async function runTool(name, argsJson, { company }, deps) {
     const u = props?.data?.units;
     const list = Array.isArray(u) ? u : (u?.data || []);
     const lines = formatUnits(list);
+    const links = buildLinks(origin, card.slug, props?.data?.realEstate);
+    const name = `مشروع ${card.code}${card.region ? ` — ${card.region}` : ''}`;
     if (!lines.length) {
       const base = card.price ? `يبدأ من ${card.price} ريال. ` : '';
-      return { result: `مشروع ${card.code}${card.region ? ` — ${card.region}` : ''}${card.status ? ` (${card.status})` : ''}. ${base}تفاصيل كل وحدة في صفحة المشروع: ${pageUrl}\nأرسل هذا للعميل كما هو، ولا تذكر سعر وحدة محددة من عندك.` };
+      return { result: `${name}${card.status ? ` (${card.status})` : ''}. ${base}\n\nالروابط (أرسلها كما هي حرفياً، وممنوع تأليف أي رابط):\n${links}\nأرسل هذا للعميل كما هو، ولا تذكر سعر وحدة محددة من عندك.` };
     }
-    const header = `أسعار وحدات مشروع ${card.code}${card.region ? ` — ${card.region}` : ''} (محدّثة الآن من موقع الشركة):`;
+    const header = `أسعار وحدات ${name} (محدّثة الآن من موقع الشركة):`;
     return {
-      result: `${header}\n${lines.join('\n')}\nرابط المشروع: ${pageUrl}\n\n⚠️ أرسل هذه الأسعار للعميل كما هي حرفياً دون تغيير أي رقم أو خلط بين الوحدات. إن سأل العميل عن وحدة بعينها، انسخ سطرها من القائمة أعلاه بالضبط.`,
+      result: `${header}\n${lines.join('\n')}\n\nالروابط (أرسلها كما هي حرفياً، وممنوع تأليف أي رابط):\n${links}\n\n⚠️ أرسل الأسعار والروابط للعميل كما هي حرفياً دون تغيير أي رقم أو رابط أو خلط بين الوحدات. إن سأل عن وحدة بعينها، انسخ سطرها بالضبط.`,
     };
   } catch (e) {
     deps?.logger?.warn?.('project_units lookup failed', { err: e.message, companyId: company?.id });

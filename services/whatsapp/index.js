@@ -1,6 +1,7 @@
 // WhatsApp for a company, through the client's provider (LoopChat).
 const loopchat = require('./loopchat');
 const requestTool = require('./requests');
+const projectLookup = require('./project-lookup');
 const { connectedCall } = require('../../lib/call-status');
 const { REQUEST_TYPES } = require('../../lib/request-types');
 const schedule = require('./schedule');
@@ -327,13 +328,21 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
     const history = await deps.loadSessionHistory(company.id, sessionId);
     const vars = { customer_phone: `+${phone}` };
     if (contact?.name) vars.customer_name = String(contact.name).slice(0, 80);
-    const tools = await requestTool.toolsFor(company, deps);
+    // The request tool (file a lead) plus the deterministic project-prices
+    // lookup (exact unit prices read live from the company's site, so the model
+    // never guesses a near-identical unit's price).
+    const reqTools = await requestTool.toolsFor(company, deps);
+    const tools = [...(reqTools || []), ...projectLookup.toolsFor()];
     const runTool = async (name, args) => {
+      if (name === projectLookup.TOOL_NAME) {
+        const r = await projectLookup.runTool(name, args, { company, channelId, phone }, deps);
+        return r.result;
+      }
       const r = await requestTool.runTool(name, args, { company, channelId, phone }, deps);
       if (r.requestId) filed.add(r.requestId);
       return r.result;
     };
-    answer = String((await deps.askReply(company, text, history, vars, tools ? { tools, runTool } : {})).reply || '').trim();
+    answer = String((await deps.askReply(company, text, history, vars, tools.length ? { tools, runTool } : {})).reply || '').trim();
   } catch (e) {
     logger.error('whatsapp: reply failed', { err: e.message, companyId: company.id });
     const noScenario = e.code === 'NO_ACTIVE_SCENARIO';

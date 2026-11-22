@@ -325,7 +325,15 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
   // Requests the customer confirmed in this message (services/whatsapp/requests.js).
   const filed = new Set();
   try {
-    const history = await deps.loadSessionHistory(company.id, sessionId);
+    // Past ASSISTANT turns may carry prices or links the model later learned
+    // were wrong — e.g. invented before the project_units tool existed. Left in
+    // the history, the model parrots them instead of calling the tool. Strip
+    // URLs and price-shaped numbers from past assistant turns so there is
+    // nothing stale to copy; prices/links must come fresh from project_units.
+    const history = (await deps.loadSessionHistory(company.id, sessionId)).map((m) =>
+      m.role === 'assistant'
+        ? { ...m, content: String(m.content || '').replace(/https?:\/\/\S+/g, '[رابط]').replace(/\d{1,3}(?:,\d{3})+/g, '[سعر]') }
+        : m);
     const vars = { customer_phone: `+${phone}` };
     if (contact?.name) vars.customer_name = String(contact.name).slice(0, 80);
     // The request tool (file a lead) plus the deterministic project-prices

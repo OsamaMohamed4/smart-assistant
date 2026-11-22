@@ -2397,15 +2397,15 @@ async function runSiteImport(company, job) {
     for (const g of groups) {
       try {
         const buffer = Buffer.from(g.body, 'utf8');
-        // The company's own site feeds both agents (inbound + outbound). A
-        // higher chunk ceiling is allowed here because this is one consolidated
-        // document of the company's OWN site, not a user upload.
-        for (const audience of ['inbound', 'outbound']) {
-          const r = await ingestDocument({
-            companyId: company.id, filename: g.label.slice(0, 160), mime: 'text/plain', buffer, audience, maxChunks: 8000,
-          });
-          keep.add(r.documentId);
-        }
+        // The company's own site is shared knowledge: ingest ONCE into the
+        // 'general' (shared) base, which EVERY channel reads on top of its own —
+        // the inbound and outbound call agents AND the WhatsApp agent (see
+        // lib/kb-audience.js inReadAudience). A higher chunk ceiling is allowed
+        // because this is one consolidated document of the company's OWN site.
+        const r = await ingestDocument({
+          companyId: company.id, filename: g.label.slice(0, 160), mime: 'text/plain', buffer, audience: 'general', maxChunks: 8000,
+        });
+        keep.add(r.documentId);
         job.added += g.count;
       } catch (e) {
         job.failed += g.count;
@@ -2460,6 +2460,55 @@ app.get('/api/companies/:id/documents/from-site', requireCompanyAccess, async (r
   const job = siteJobs.get(c.id) || null;
   res.json({ site: c.settings?.kbSite || null, job });
 });
+
+// ─── Automatic site import ───────────────────────────────────────
+// Re-reads each company's OWN website on a schedule, so the knowledge
+// base follows price/availability changes without anyone pressing
+// "أعد السحب الآن". A company is pulled only when it already has a saved
+// site URL (settings.kbSite.url) — Maheer and Wakan do; a company that
+// never configured one is skipped. Runs sequentially (one site at a
+// time) so two large crawls don't hit OpenAI embeddings at once.
+//   SITE_IMPORT_INTERVAL_HOURS  how often (default 24); set to 0 to disable.
+const SITE_IMPORT_INTERVAL_HOURS = Number(process.env.SITE_IMPORT_INTERVAL_HOURS ?? 24);
+// Don't re-pull a site that was pulled less than (interval − 10 min) ago,
+// so a recent manual pull or a previous tick isn't repeated needlessly.
+const SITE_IMPORT_MIN_GAP_MS = Math.max(0, SITE_IMPORT_INTERVAL_HOURS * 3600 * 1000 - 10 * 60 * 1000);
+
+async function autoSiteImportTick() {
+  let companies = [];
+  try { companies = await listCompaniesFull(); }
+  catch (e) { logger.error('auto site import: list failed', { err: e.message }); return; }
+  for (const c of companies) {
+    const url = c.settings?.kbSite?.url;
+    if (!url || !isSafeUrl(url).ok) continue;
+    const running = siteJobs.get(c.id);
+    if (running && (running.state === 'reading' || running.state === 'saving')) continue;
+    const last = Date.parse(c.settings?.kbSite?.lastReadAt || '');
+    if (Number.isFinite(last) && Date.now() - last < SITE_IMPORT_MIN_GAP_MS) continue;
+    const job = {
+      state: 'reading', url, found: 0, queued: 0, skipped: 0, total: 0, added: 0, failed: 0, replaced: 0,
+      startedAt: Date.now(), finishedAt: null, error: null, auto: true,
+    };
+    siteJobs.set(c.id, job);
+    logger.info('auto site import: started', { companyId: c.id, url });
+    try { await runSiteImport(c, job); }
+    catch (e) { logger.error('auto site import crashed', { companyId: c.id, err: e.message }); }
+  }
+}
+
+function startSiteImportScheduler() {
+  if (!(SITE_IMPORT_INTERVAL_HOURS > 0)) {
+    logger.info('auto site import disabled (SITE_IMPORT_INTERVAL_HOURS=0)');
+    return;
+  }
+  const tick = () => runWithContext({ bypass: true, companyId: null }, autoSiteImportTick)
+    .catch((e) => logger.error('auto site import tick failed', { err: e.message }));
+  setInterval(tick, SITE_IMPORT_INTERVAL_HOURS * 3600 * 1000).unref();
+  // First run shortly after boot so a fresh deploy pulls without waiting a day.
+  setTimeout(tick, 90 * 1000).unref();
+  logger.info('auto site import scheduler on', { everyHours: SITE_IMPORT_INTERVAL_HOURS });
+}
+startSiteImportScheduler();
 
 // Download the original document if available, otherwise fallback to extracted text.
 app.get('/api/companies/:id/documents/:docId/download', requireCompanyAccess, async (req, res) => {

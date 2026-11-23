@@ -159,6 +159,23 @@ function toolFor() {
   };
 }
 
-const toolsFor = () => [toolFor()];
+// Only sites this tool can actually read (Laravel + Inertia, as maheer.sa is)
+// get the tool. Other sites — e.g. wakan.sa, which is server-rendered with no
+// embedded JSON — would only ever get the "not found" fallback, so the tool is
+// not offered there and those companies answer prices from their knowledge
+// base. Extend via PROJECT_UNITS_HOSTS (comma-separated) as more sites qualify.
+const SUPPORTED_HOSTS = String(process.env.PROJECT_UNITS_HOSTS || 'maheer.sa')
+  .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 
-module.exports = { TOOL_NAME, toolsFor, toolFor, runTool };
+function supportsSite(company) {
+  const o = siteOrigin(company);
+  if (!o) return false;
+  try {
+    const host = new URL(o).hostname.replace(/^www\./, '').toLowerCase();
+    return SUPPORTED_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+  } catch { return false; }
+}
+
+const toolsFor = (company) => (supportsSite(company) ? [toolFor()] : []);
+
+module.exports = { TOOL_NAME, toolsFor, toolFor, runTool, supportsSite };

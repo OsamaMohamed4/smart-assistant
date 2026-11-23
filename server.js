@@ -636,12 +636,18 @@ async function askGPT(company, message, history, vars, { inbound = false, channe
   // Same model the live voice agent runs on — see resolveAgentModel() — unless
   // that is a provider-hosted Gemini model, which OpenAI cannot serve.
   const m = resolveAgentModel(company);
-  const params = { model: textChannelModel(m.model), messages, max_tokens: m.maxTokens, temperature: m.temperature };
+  // maxTokens is the VOICE agent's limit (about one short sentence). A WhatsApp
+  // reply -- prices, links, a list of units -- needs far more room, and Arabic
+  // costs many tokens per word, so at the voice limit the reply was cut off
+  // mid-sentence. For WhatsApp it is a ceiling, not a length: how long the
+  // reply is stays with the prompt.
+  const replyCap = channel === 'whatsapp' ? Math.max(m.maxTokens, 800) : m.maxTokens;
+  const params = { model: textChannelModel(m.model), messages, max_tokens: replyCap, temperature: m.temperature };
   const withTools = !!(tools?.length && runTool);
   // A request's arguments in Arabic can outrun a voice-sized reply limit, and a
   // call cut short is not valid JSON; the limit is a ceiling, not a length.
   let completion = await openai.chat.completions.create(withTools
-    ? { ...params, tools, max_tokens: Math.max(m.maxTokens, 400) }
+    ? { ...params, tools, max_tokens: Math.max(replyCap, 400) }
     : params);
   const calls = completion.choices[0].message.tool_calls;
   if (withTools && calls?.length) {

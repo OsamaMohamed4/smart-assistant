@@ -136,7 +136,10 @@ const FEATURES = [
     endpoint: 'request',
     toolName: 'submit_customer_request',
     toolDescriptionAr: requestToolDescription('المكالمة'),
-    responseTimeoutSecs: 10,
+    // Higher than the KB tool: this endpoint now pushes the lead to Estate
+    // synchronously (so the agent confirms only a real acceptance), which adds an
+    // Estate round-trip — for maintenance, a form-data read plus the store call.
+    responseTimeoutSecs: 20,
     bodyProperties: requestBodyProperties(),
     // The same for every company: the project is named as the customer said
     // it, and its Estate code made from it when the request is sent.

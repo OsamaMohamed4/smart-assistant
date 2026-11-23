@@ -684,6 +684,13 @@ function providerFilledIds() {
   return {
     agent_id       : { type: 'string', dynamic_variable: 'system__agent_id' },
     conversation_id: { type: 'string', dynamic_variable: 'system__conversation_id' },
+    // The caller's number, bound to the provider's own system variable so the
+    // request tool can push a lead to Estate synchronously DURING the call (like
+    // WhatsApp) instead of only after it — letting the agent confirm a real
+    // Estate acceptance before telling the customer the request was raised. The
+    // model can neither see nor set it. Until the telephony passes the real CLI,
+    // this carries whatever caller id the trunk sends (the company's own number).
+    caller_number  : { type: 'string', dynamic_variable: 'system__caller_id' },
   };
 }
 

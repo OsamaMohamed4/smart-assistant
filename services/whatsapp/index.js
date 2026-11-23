@@ -2,6 +2,7 @@
 const loopchat = require('./loopchat');
 const requestTool = require('./requests');
 const projectLookup = require('./project-lookup');
+const wakanLookup = require('./wakan-lookup');
 const { connectedCall } = require('../../lib/call-status');
 const { REQUEST_TYPES } = require('../../lib/request-types');
 const schedule = require('./schedule');
@@ -356,10 +357,15 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
     // lookup (exact unit prices read live from the company's site, so the model
     // never guesses a near-identical unit's price).
     const reqTools = await requestTool.toolsFor(company, deps);
-    const tools = [...(reqTools || []), ...projectLookup.toolsFor(company)];
+    // The deterministic project-prices lookup: maheer.sa (Inertia JSON) and
+    // wakan.sa (server-rendered HTML) use different readers but expose the same
+    // tool name; a company matches at most one, so merging never duplicates it.
+    const priceLookup = projectLookup.supportsSite(company) ? projectLookup
+      : (wakanLookup.supportsSite(company) ? wakanLookup : null);
+    const tools = [...(reqTools || []), ...(priceLookup ? priceLookup.toolsFor(company) : [])];
     const runTool = async (name, args) => {
-      if (name === projectLookup.TOOL_NAME) {
-        const r = await projectLookup.runTool(name, args, { company, channelId, phone }, deps);
+      if (priceLookup && name === priceLookup.TOOL_NAME) {
+        const r = await priceLookup.runTool(name, args, { company, channelId, phone }, deps);
         return r.result;
       }
       const r = await requestTool.runTool(name, args, { company, channelId, phone }, deps);

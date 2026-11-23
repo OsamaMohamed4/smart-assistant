@@ -62,13 +62,40 @@ async function runTool(name, argsJson, { company, channelId, phone }, deps) {
     deps.logger.warn('whatsapp: request tool daily cap reached', { companyId: company.id, cap });
     return { result: 'تعذّر تسجيل الطلب حالياً. أخبر العميل أن فريق المبيعات سيتواصل معه.' };
   }
-  return fileRequest({
+  const filed = await fileRequest({
     companyId: company.id,
     conversationId: conversationKey(channelId, phone),
     body,
     channel: 'whatsapp',
     contactPhone: deps.encryptField(`+${phone}`),
   }, deps);
+  // No requestId = not confirmed/filed yet (data still incomplete): return the
+  // tool's own guidance unchanged.
+  if (!filed.requestId) return filed;
+  // Confirmed and filed. Send to Estate NOW — before the agent replies — and
+  // report the REAL outcome, so the agent confirms "تم رفع الطلب" only when
+  // Estate actually accepted it, and otherwise names the field to correct
+  // (never a false confirmation). Estate push is idempotent, so filing once and
+  // pushing here is safe.
+  const es = await toEstate(company, filed.requestId, deps);
+  if (es && es.sent) {
+    return { requestId: filed.requestId, estate: es, result: 'تم تسجيل الطلب وإرساله إلى Estate بنجاح. بلّغ العميل أن طلبه رُفع للقسم المختص.' };
+  }
+  if (es && es.failed) {
+    return {
+      requestId: filed.requestId, estate: es,
+      result: `لم يُقبل الطلب في Estate. السبب: ${es.failed}\nحدّد للعميل الخانة المعنية بهذا السبب (مثل رقم المبنى أو الوحدة أو نوع المشكلة) واطلب منه تصحيحها أو تأكيدها فقط — لا تعد طلب كل البيانات. ولا تقل إن الطلب رُفع. بعد أن يصحّح العميل، استدعِ الأداة من جديد.`,
+    };
+  }
+  if (es && es.skipped && es.skipped !== 'not configured') {
+    return {
+      requestId: filed.requestId, estate: es,
+      result: `تعذّر إرسال الطلب إلى Estate (${es.skipped}). اطلب من العميل إكمال البيانات الناقصة ثم أعد المحاولة، ولا تقل إن الطلب رُفع بعد.`,
+    };
+  }
+  // Estate not configured for this company (or unavailable): the request is
+  // filed on the platform; confirm as usual with the tool's own message.
+  return { requestId: filed.requestId, estate: es || null, result: filed.result };
 }
 
 // On to Estate. `retry`: a correction to a request Estate refused, or one

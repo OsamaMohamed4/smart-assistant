@@ -222,7 +222,17 @@ async function understandMedia(msg, company, deps) {
     const token = await tokenOf(company, deps);
     const { buffer, mime } = await loopchat.fetchMedia({ url: info.url, token });
     const u = await media.understand({ buffer, mime: mime || info.mime, hint: info.hint });
+    const kind = u.kind || media.mediaKind(mime || info.mime, info.hint);
     if (u.error || !u.text) {
+      // A video or image with no readable content is still a valid attachment:
+      // a maintenance clip is often filmed silently (empty transcription), and
+      // a large video exceeds the transcription limit. Dropping the message
+      // meant the request never got filed. Keep it as an attachment so the
+      // agent continues the flow (the prompt treats media as an attachment).
+      if (kind === 'video' || kind === 'image') {
+        logger.info('whatsapp: media kept as attachment (no readable content)', { companyId: company.id, kind, err: u.error });
+        return { ok: true, text: kind === 'video' ? '[أرسل العميل مقطع فيديو كمرفق]' : '[أرسل العميل صورة كمرفق]', kind };
+      }
       logger.warn('whatsapp: media not understood', { companyId: company.id, kind: u.kind, err: u.error });
       return { ok: false, reason: 'media: not understood' };
     }
@@ -230,6 +240,10 @@ async function understandMedia(msg, company, deps) {
     return { ok: true, text: u.text, kind: u.kind };
   } catch (e) {
     logger.error('whatsapp: media handling failed', { companyId: company.id, err: e.message });
+    const kind = media.mediaKind(info.mime, info.hint);
+    if (kind === 'video' || kind === 'image') {
+      return { ok: true, text: kind === 'video' ? '[أرسل العميل مقطع فيديو كمرفق]' : '[أرسل العميل صورة كمرفق]', kind };
+    }
     return { ok: false, reason: 'media: fetch/understand failed' };
   }
 }
@@ -322,8 +336,10 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
   const sessionId = `wa-${phone}`;
   const t0 = Date.now();
   let answer = '';
-  // Requests the customer confirmed in this message (services/whatsapp/requests.js).
+  // Requests the customer confirmed in this message (services/whatsapp/requests.js),
+  // and what Estate made of each (the request tool now pushes to Estate inline).
   const filed = new Set();
+  const estateResults = [];
   try {
     // Past ASSISTANT turns may carry prices or links the model later learned
     // were wrong — e.g. invented before the project_units tool existed. Left in
@@ -340,14 +356,14 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
     // lookup (exact unit prices read live from the company's site, so the model
     // never guesses a near-identical unit's price).
     const reqTools = await requestTool.toolsFor(company, deps);
-    const tools = [...(reqTools || []), ...projectLookup.toolsFor()];
+    const tools = [...(reqTools || []), ...projectLookup.toolsFor(company)];
     const runTool = async (name, args) => {
       if (name === projectLookup.TOOL_NAME) {
         const r = await projectLookup.runTool(name, args, { company, channelId, phone }, deps);
         return r.result;
       }
       const r = await requestTool.runTool(name, args, { company, channelId, phone }, deps);
-      if (r.requestId) filed.add(r.requestId);
+      if (r.requestId) { filed.add(r.requestId); if (r.estate) estateResults.push(r.estate); }
       return r.result;
     };
     answer = String((await deps.askReply(company, text, history, vars, tools.length ? { tools, runTool } : {})).reply || '').trim();
@@ -377,10 +393,9 @@ async function reply({ company, channelId, phone, text, contact }, deps) {
     });
   } catch (e) { logger.error('whatsapp: chat insert failed', { err: e.message }); }
 
-  // Filed whether or not the reply reached the customer: they confirmed it.
-  const estate = [];
-  for (const id of filed) estate.push(await requestTool.toEstate(company, id, deps));
-  const extra = filed.size ? { requests: [...filed], estate } : {};
+  // Estate was handled inline by the request tool (so the agent could confirm
+  // only on success); reuse those outcomes for the admin view.
+  const extra = filed.size ? { requests: [...filed], estate: estateResults } : {};
   return sent.ok ? { sent: true, ...extra } : { failed: reason, ...extra };
 }
 

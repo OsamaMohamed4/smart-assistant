@@ -544,7 +544,7 @@ async function readiness(company, deps) {
 // choices or the project, only if Estate refuses the one before (422). The
 // keys ride in headers, never in here. Maintenance reads Estate's form data
 // to find the unit, so this may call Estate (a GET) and may throw.
-async function planRequest(cfg, company, request, deps) {
+async function planRequest(cfg, company, request, deps, opts = {}) {
   const scope = SCOPE_OF[request.request_type];
   if (!scope) return { skip: 'لا يُرسل: ليس لهذا النوع من الطلبات واجهة في Estate' };
   if (!cfg.scopes[scope]) return { skip: `لا يُرسل: إرسال ${SCOPE_LABEL[scope]} إلى Estate غير مفعّل لهذه الشركة` };
@@ -553,7 +553,12 @@ async function planRequest(cfg, company, request, deps) {
   const name = String(request.customer_name || fields.customer_name || '').trim();
   // Estate's maintenance form takes a request without a name; the others do not.
   if (!name && scope !== 'maintenance') return { skip: 'لا يُرسل: الطلب بلا اسم عميل، وEstate يشترط الاسم' };
-  const phone = estatePhone(deps.decryptField(request.caller_number));
+  // On an inbound voice call the customer's number is attached from the call
+  // record only after the call ends. `ignorePhone` lets previewForAgent validate
+  // the OTHER fields (the project/building/unit lookup, the choices) mid-call
+  // with a placeholder, so the agent can correct them live; nothing is sent in
+  // that mode, so the placeholder never reaches Estate.
+  const phone = estatePhone(deps.decryptField(request.caller_number)) || (opts.ignorePhone ? '000000000' : null);
   if (!phone) return { skip: 'لا يُرسل بعد: رقم العميل يُضاف من سجل المكالمة عند انتهائها' };
 
   const ctx = { request, fields, name, phone, cfg, company, keys: { key: cfg.systemKey, secret: cfg.secret }, deps };
@@ -563,6 +568,41 @@ async function planRequest(cfg, company, request, deps) {
   const built = scope === 'rental' ? { form: rentalForm(ctx) } : await maintenanceForm(ctx);
   if (built.error) return { skip: built.error };
   return { scope, attempts: [{ url: `${cfg.url}${SYSTEM[scope]}`, as: 'multipart', form: built.form }] };
+}
+
+// In-call validation for the voice agent, mirroring the WhatsApp flow which
+// pushes to Estate synchronously. On an inbound call the customer's number is
+// not on the request yet (it is joined from the call record after the call), so
+// a real push cannot run mid-call — but everything that does NOT depend on the
+// phone CAN be checked now: for maintenance, that the project / building / unit
+// resolve in Estate and the problem type is one Estate knows. This surfaces that
+// as a field the agent asks the customer to correct, so the agent never claims a
+// request was raised when Estate would reject it. The real send still happens
+// after the call (afterCall). Returns { ok } or { fieldError }. Never throws.
+//
+// Only the customer-correctable problems are returned as fieldError; a
+// configuration problem (scope off, secret missing, form data unreadable) is not
+// the customer's to fix, so the request is left to file normally and go post-call.
+const CUSTOMER_FIXABLE = /المشروع|المبنى|الوحدة|نوع المشكلة|اسم العميل|بلا اسم/;
+const CONFIG_ISSUE = /غير مفعّل|المفتاح السري|واجهة في Estate|بيانات الصيانة من Estate|قائمة المشاريع في بيانات/;
+async function previewForAgent(company, request, deps) {
+  try {
+    const cfg = await readiness(company, deps);
+    if (!cfg.ready) return { ok: true };                       // not configured: file normally
+    const plan = await planRequest(cfg, company, request, deps, { ignorePhone: true });
+    if (plan.skip) {
+      if (CONFIG_ISSUE.test(plan.skip)) return { ok: true, config: plan.skip };
+      if (CUSTOMER_FIXABLE.test(plan.skip)) return { fieldError: plan.skip.replace(/^لا يُرسل:?\s*/, '') };
+      return { ok: true };
+    }
+    return { ok: true };
+  } catch (e) {
+    // The maintenance form-data read refused: a project/building check the agent
+    // should hear about. Anything else is a transient outage — never block a call.
+    if (/^تعذّر جلب بيانات الصيانة/.test(e.message)) return { fieldError: e.message };
+    deps?.logger?.warn?.('estate: preview failed', { companyId: company?.id, err: e.message });
+    return { ok: true };
+  }
 }
 
 // Estate's answer as kept in the trace: its JSON, cut short past a few KB.
@@ -742,7 +782,7 @@ function validateSettings(body, { hasToken, hasSecret = false }) {
 }
 
 module.exports = {
-  afterCall, pushRequest, requestTrace, check, validateSettings, settingsOf, readiness,
+  afterCall, pushRequest, previewForAgent, requestTrace, check, validateSettings, settingsOf, readiness,
   estateOrigin, estatePhone, buildNote, buildForm, estateReason, estateHeaders, systemHeaders, cleanKey, keyHint, projectCode,
   interestForms, rentalForm, rentalSizeId, interestReasonIds, locateUnit, listsIn, buildingKey,
   PATH, SYSTEM, PLATFORM_DEFAULT,

@@ -375,33 +375,52 @@ router.post('/elevenlabs/tools/request', async (req, res) => {
   }
 
   const b = req.body || {};
-  // Provider-filled, never model-authored. Null in a browser test, where no
-  // conversation id is substituted — such requests are simply not deduplicated.
-  // The customer's number is joined from the call record, not stored here.
+  // conversation_id and caller_number are PROVIDER-filled (system variables),
+  // never model-authored. Null in a browser test, where nothing is substituted.
+  // The caller number (the trunk's CLI — the company's own number until the
+  // telephony passes the real one) is stored on the request so Estate can be
+  // pushed synchronously below, exactly as the WhatsApp number is.
+  const callerNumber = filled(b.caller_number);
   const { result, requestId } = await fileRequest(
-    { companyId, conversationId: filled(b.conversation_id), body: b },
+    {
+      companyId,
+      conversationId: filled(b.conversation_id),
+      body: b,
+      contactPhone: callerNumber ? encryptField(`${callerNumber}`) : null,
+    },
     { sql, logger: req.log },
   );
   if (!requestId) return res.json({ result });
 
-  // In-call Estate validation, mirroring the WhatsApp flow: before the agent
-  // tells the caller the request was raised, check the fields Estate will reject
-  // (for maintenance: the project/building/unit must resolve there). The number
-  // is NOT validated here — it is attached from the call record after the call,
-  // and the real push runs then (estate.afterCall). On a field problem we return
-  // the field to correct so the agent fixes it live and does not claim success.
+  // Push to Estate NOW — before the agent replies — and report the REAL outcome,
+  // so the agent confirms "تم رفع الطلب" only when Estate actually accepted it,
+  // and otherwise names the field to correct (never a false confirmation). This
+  // mirrors services/whatsapp/requests.js. The push is idempotent (claimed once),
+  // so the post-call estate.afterCall becomes a no-op for a request sent here.
   let finalResult = result;
   try {
-    const row = await sql.getRequestForEstate.get(requestId, companyId);
-    if (company && row) {
-      const preview = await estate.previewForAgent(company, row, { sql, logger: req.log, decryptField, encryptField });
-      if (preview.fieldError) {
-        finalResult = `لم تكتمل بيانات الطلب لرفعه إلى Estate. السبب: ${preview.fieldError}\n`
+    const deps = { sql, logger: req.log, decryptField, encryptField };
+    const row = company ? await sql.getRequestForEstate.get(requestId, companyId) : null;
+    if (row) {
+      const es = await estate.pushRequest(company, row, deps, { retry: true });
+      if (es && es.failed) {
+        finalResult = `لم يُقبل الطلب في Estate. السبب: ${es.failed}\n`
           + 'حدّد للعميل الخانة المعنية بهذا السبب (مثل المشروع أو المبنى أو الوحدة أو نوع المشكلة) واطلب منه تصحيحها أو تأكيدها فقط — لا تطلب إعادة كل البيانات، ولا تقل إن الطلب رُفع. بعد أن يصحّح العميل استدعِ الأداة من جديد.';
+      } else if (es && es.sent) {
+        finalResult = 'تم تسجيل الطلب وإرساله إلى Estate بنجاح. بلّغ العميل أن طلبه رُفع للقسم المختص.';
+      } else if (es && es.skipped && es.skipped !== 'not configured') {
+        // No number yet, or scope off: still validate the customer's fields
+        // (project/building/unit) so the agent can correct them live.
+        const preview = await estate.previewForAgent(company, row, deps);
+        if (preview.fieldError) {
+          finalResult = `لم تكتمل بيانات الطلب لرفعه إلى Estate. السبب: ${preview.fieldError}\n`
+            + 'حدّد للعميل الخانة المعنية (مثل المشروع أو المبنى أو الوحدة أو نوع المشكلة) واطلب تصحيحها فقط، ولا تقل إن الطلب رُفع. بعد التصحيح استدعِ الأداة من جديد.';
+        }
       }
+      // Estate not configured, or sent: keep the tool's own confirmation message.
     }
   } catch (e) {
-    req.log.warn('request tool: estate preview failed', { err: e.message, companyId });
+    req.log.warn('request tool: estate push failed', { err: e.message, companyId });
   }
   return res.json({ result: finalResult });
 });

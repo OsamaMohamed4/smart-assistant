@@ -349,6 +349,8 @@ router.post('/elevenlabs/tools/kb', async (req, res) => {
 // ask for the confirmation it skipped, or pick a real request type. The filing
 // itself is services/requests.js, shared with WhatsApp.
 const { fileRequest } = require('../services/requests');
+const estate = require('../services/estate');
+const { decryptField, encryptField } = require('../lib/pii');
 
 /** A provider placeholder that was never filled is not a value. */
 const filled = (v) => {
@@ -376,11 +378,32 @@ router.post('/elevenlabs/tools/request', async (req, res) => {
   // Provider-filled, never model-authored. Null in a browser test, where no
   // conversation id is substituted — such requests are simply not deduplicated.
   // The customer's number is joined from the call record, not stored here.
-  const { result } = await fileRequest(
+  const { result, requestId } = await fileRequest(
     { companyId, conversationId: filled(b.conversation_id), body: b },
     { sql, logger: req.log },
   );
-  return res.json({ result });
+  if (!requestId) return res.json({ result });
+
+  // In-call Estate validation, mirroring the WhatsApp flow: before the agent
+  // tells the caller the request was raised, check the fields Estate will reject
+  // (for maintenance: the project/building/unit must resolve there). The number
+  // is NOT validated here — it is attached from the call record after the call,
+  // and the real push runs then (estate.afterCall). On a field problem we return
+  // the field to correct so the agent fixes it live and does not claim success.
+  let finalResult = result;
+  try {
+    const row = await sql.getRequestForEstate.get(requestId, companyId);
+    if (company && row) {
+      const preview = await estate.previewForAgent(company, row, { sql, logger: req.log, decryptField, encryptField });
+      if (preview.fieldError) {
+        finalResult = `لم تكتمل بيانات الطلب لرفعه إلى Estate. السبب: ${preview.fieldError}\n`
+          + 'حدّد للعميل الخانة المعنية بهذا السبب (مثل المشروع أو المبنى أو الوحدة أو نوع المشكلة) واطلب منه تصحيحها أو تأكيدها فقط — لا تطلب إعادة كل البيانات، ولا تقل إن الطلب رُفع. بعد أن يصحّح العميل استدعِ الأداة من جديد.';
+      }
+    }
+  } catch (e) {
+    req.log.warn('request tool: estate preview failed', { err: e.message, companyId });
+  }
+  return res.json({ result: finalResult });
 });
 
 module.exports = {

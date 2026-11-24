@@ -56,8 +56,8 @@ const EO = require('../lib/estate-options');
 
 const PATH = '/api/v1/make/attention-request/attention-request-store';
 const SYSTEM = {
-  rental        : '/api/v1/system/rental-attention-requests/store',
-  maintenance   : '/api/v1/system/maintenance-requests/store',
+  rental         : '/api/v1/system/rental-attention-requests/store',
+  maintenance    : '/api/v1/system/maintenance-requests/store',
   maintenanceForm: '/api/v1/system/maintenance-requests/get-form-data',
 };
 const TIMEOUT_MS = 15_000;
@@ -194,7 +194,8 @@ function interestChoices(fields) {
 // choice's name -- without them, everything in the note. A lead is never lost
 // to a name Estate spells differently.
 function interestForms({ request, fields, name, phone, cfg, company }) {
-  const code = projectCode(fields.project, cfg.letter);
+  const rawProj = fields.project || fields.residence_project || fields.project_code || fields.project_name || '';
+  const code = projectCode(rawProj, cfg.letter);
   const base = (withCode) => {
     const form = new URLSearchParams();
     form.set('name', name);
@@ -320,6 +321,23 @@ async function maintenanceFormData(cfg, keys, query, deps) {
   return r.data;
 }
 
+// Extracts the project string from whichever field the model or tool stored it in.
+function extractMaintenanceProject(fields, request = {}) {
+  const candidates = [
+    fields?.residence_project,
+    fields?.project,
+    fields?.project_code,
+    fields?.project_name,
+    request?.project,
+    request?.project_code,
+    request?.project_name,
+  ];
+  for (const c of candidates) {
+    const val = String(c || '').trim();
+    if (val) return val;
+  }
+  return '';
+}
 
 /**
  * Estate's ids for the unit the customer named: { projectId, buildingId,
@@ -328,19 +346,28 @@ async function maintenanceFormData(cfg, keys, query, deps) {
  * to Estate (a villa has none), so an unmatched unit is left out and its
  * number stays in the description.
  */
-async function locateUnit({ cfg, keys, fields, deps }) {
-  const said = String(fields.residence_project || '').trim();
+async function locateUnit({ cfg, keys, fields, request, deps }) {
+  const said = extractMaintenanceProject(fields, request);
   if (!said) return { error: 'لا يُرسل: لم يذكر العميل المشروع' };
   const projects = recordsUnder(listsIn(await maintenanceFormData(cfg, keys, null, deps)), /project/i);
   if (!projects.length) return { error: 'لا يُرسل: لم نجد قائمة المشاريع في بيانات الصيانة من Estate' };
+
   const { letter } = cfg;
-  const nums = numbersIn(said);
+  const normalizedCode = projectCode(said, letter); // e.g., "وكن 48" -> "W-48", "المغرزات 10" -> "M-10"
+  const nums = normalizedCode ? numbersIn(normalizedCode) : numbersIn(said);
   const plainSaid = estateName(said);
+
   const matches = projects.filter((p) => labelsOf(p).some((l) => {
-    const code = /^([A-Z]+)-0*(\d+)$/i.exec(l);
-    if (code) return nums.includes(Number(code[2])) && (!letter || code[1].toUpperCase() === letter);
-    return estateName(l) === plainSaid;
+    const code = /^([A-Z]{1,4})\s*-\s*0*(\d+)$/i.exec(l);
+    if (code) {
+      const targetNum = Number(code[2]);
+      const targetLetter = code[1].toUpperCase();
+      if (normalizedCode) return `${targetLetter}-${targetNum}` === normalizedCode;
+      return nums.includes(targetNum) && (!letter || targetLetter === letter);
+    }
+    return estateName(l) === plainSaid || (normalizedCode && estateName(l).includes(normalizedCode.toLowerCase()));
   }));
+
   if (matches.length !== 1) {
     return { error: matches.length
       ? `لا يُرسل: «${said}» يطابق أكثر من مشروع في Estate (${matches.slice(0, 4).map((p) => labelsOf(p)[0]).join('، ')})`
@@ -377,6 +404,7 @@ async function locateUnit({ cfg, keys, fields, deps }) {
   }
   return { projectId: project.id, buildingId: building.id, unitId };
 }
+
 // For comparing names: Arabic folded, no kashida or diacritics, one space.
 function estateName(s) {
   return toLatinDigits(s).normalize('NFKC').replace(/[ً-ٰٟـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه')
@@ -386,7 +414,7 @@ function estateName(s) {
 async function maintenanceForm({ request, fields, name, phone, cfg, keys, company, deps }) {
   const issue = EO.MAINTENANCE_BY_NAME.get(fields.maintenance_issue);
   if (!issue) return { error: 'لا يُرسل: نوع المشكلة ليس من قائمة الصيانة في Estate' };
-  const where = await locateUnit({ cfg, keys, fields, deps });
+  const where = await locateUnit({ cfg, keys, fields, request, deps });
   if (where.error) return where;
   const form = new URLSearchParams();
   form.set('project_id', String(where.projectId));
@@ -435,7 +463,7 @@ const accepted = (r) => r.status >= 200 && r.status < 300 && r.data?.status !== 
 // U+2066-9), zero-width characters, a BOM, non-breaking spaces, a line break,
 // quotes around it -- and sometimes the word "Bearer". Any of them makes
 // Estate answer "header api-key is missing or not correct". A key has none.
-const HIDDEN = /[​-‏‪-‮⁠-⁩﻿ ]/g;
+const HIDDEN = /[​-‏‪-‮⁠-﻿ ]/g;
 function cleanKey(token) {
   const QUOTES = /^["'`«»\s]+|["'`«»\s]+$/g;
   return String(token || '').replace(HIDDEN, '').replace(QUOTES, '')

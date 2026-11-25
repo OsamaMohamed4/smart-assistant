@@ -40,6 +40,14 @@ function previousSaudiMonth(now = new Date()) {
 
 const EMAIL_RE = /^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}$/;
 
+// An invoice is for the whole contract ('full') or for the WhatsApp package
+// alone ('whatsapp'): calls and the monthly fee left out. A company has one of
+// each per month, so the WhatsApp-only one is stored under its own key
+// ('2026-11-wa') in the invoices table's month column, whose uniqueness is per
+// (company, month). The snapshot keeps the plain month.
+const scopeOf = (v) => (v === 'whatsapp' ? 'whatsapp' : 'full');
+const monthKey = (month, scope) => (scopeOf(scope) === 'whatsapp' ? `${month}-wa` : month);
+
 /** The company's contract with the defaults from the contract filled in. */
 function contractOf(company) {
   const raw = company?.settings?.contract;
@@ -116,7 +124,8 @@ function validateProfile(b) {
 }
 
 // ─── Building one month ────────────────────────────────────────────
-async function buildInvoice(company, month, deps) {
+async function buildInvoice(company, month, deps, { scope = 'full' } = {}) {
+  const waOnly = scopeOf(scope) === 'whatsapp';
   const c = contractOf(company);
   const period = contractPeriod(c.startDate, c.months);
   if (!period) return { error: 'حدّد تاريخ بداية العقد أولاً' };
@@ -128,27 +137,30 @@ async function buildInvoice(company, month, deps) {
   const to = range.to < endUtc ? range.to : endUtc;
   if (from >= to) return { error: 'هذا الشهر خارج مدة العقد' };
 
-  const before = startUtc < from ? await deps.sql.listOutboundDurations.all(company.id, startUtc, from) : [];
+  // A WhatsApp-only invoice has no use for the calls, so none are read.
+  const before = !waOnly && startUtc < from ? await deps.sql.listOutboundDurations.all(company.id, startUtc, from) : [];
   const unitsBefore = unitsFor(before.map((r) => r.duration_sec), c);
-  const month_ = await deps.sql.listOutboundDurations.all(company.id, from, to);
-  const inbound = (await deps.sql.inboundTotals.get(company.id, from, to)) || { calls: 0, seconds: 0 };
+  const month_ = waOnly ? [] : await deps.sql.listOutboundDurations.all(company.id, from, to);
+  const inbound = (!waOnly && (await deps.sql.inboundTotals.get(company.id, from, to))) || { calls: 0, seconds: 0 };
   // WhatsApp, when the contract names a package: its messages over the same
   // period, priced per message by the package. The conversation grouping still
   // decides which messages count and in which month (lib/whatsapp-billing.js).
   const waTerms = waBilling.termsOf(c);
+  if (waOnly && !waTerms) return { error: 'لا توجد باقة واتساب في عقد هذه الشركة' };
   const whatsapp = waTerms
     ? waBilling.compute(waTerms, waBilling.countConversations(
       await deps.sql.listWhatsappForBilling.all({ company_id: company.id, from, to }), from, to))
     : null;
   const computed = computeInvoice({
-    contract: c, unitsBefore,
+    // The monthly fee belongs to the contract as a whole, so it is not on the WhatsApp-only invoice.
+    contract: waOnly ? { ...c, monthlyFee: 0 } : c, unitsBefore,
     monthDurations: month_.map((r) => r.duration_sec),
     inbound: { calls: Number(inbound.calls) || 0, seconds: Number(inbound.seconds) || 0 },
     whatsapp,
   });
   return {
     invoice: {
-      month, monthLabel: monthLabel(month),
+      month, monthLabel: monthLabel(month), scope: scopeOf(scope),
       period: { from: saudiDate(from), to: saudiDate(stamp(fromStamp(to) - 1000)) },
       company: { id: company.id, name: company.name },
       contract: {
@@ -171,22 +183,23 @@ async function nextNumber(deps, now = new Date()) {
 }
 
 /** Issue a month's invoice (once), returning the stored row. */
-async function issueInvoice(company, month, deps, { actor = null } = {}) {
-  const existing = await deps.sql.getInvoiceForMonth.get(company.id, month);
+async function issueInvoice(company, month, deps, { actor = null, scope = 'full' } = {}) {
+  const key = monthKey(month, scope);
+  const existing = await deps.sql.getInvoiceForMonth.get(company.id, key);
   if (existing) return { invoice: existing, existed: true };
-  const built = await buildInvoice(company, month, deps);
+  const built = await buildInvoice(company, month, deps, { scope });
   if (built.error) return built;
   const seller = await billingProfile(deps);
   for (let attempt = 0; attempt < 3; attempt++) {
     const number = await nextNumber(deps);
     const snapshot = { ...built.invoice, number, issueDate: saudiToday(), seller };
     const r = await deps.sql.insertInvoice.run({
-      company_id: company.id, number, month,
+      company_id: company.id, number, month: key,
       subtotal: snapshot.computed.subtotal, vat: snapshot.computed.vat, total: snapshot.computed.total,
       data: JSON.stringify(snapshot), status: 'issued', created_by: actor,
     });
     if (r.changes) return { invoice: await deps.sql.getInvoice.get(r.lastInsertRowid) };
-    const raced = await deps.sql.getInvoiceForMonth.get(company.id, month);
+    const raced = await deps.sql.getInvoiceForMonth.get(company.id, key);
     if (raced) return { invoice: raced, existed: true };
   }
   return { error: 'تعذّر ترقيم الفاتورة، حاول مرة أخرى' };
@@ -205,7 +218,7 @@ async function sendInvoice(row, company, deps, { siteUrl = null } = {}) {
   const snap = JSON.parse(row.data);
   const res = await mailer.sendMail({
     to,
-    subject: `فاتورة ${snap.seller?.brand || 'مسار'} — ${snap.monthLabel} — ${snap.number}`,
+    subject: `فاتورة ${snap.scope === 'whatsapp' ? 'واتساب ' : ''}${snap.seller?.brand || 'مسار'} — ${snap.monthLabel} — ${snap.number}`,
     html: renderInvoiceHtml(snap, { siteUrl }),
     text: renderInvoiceText(snap),
   });
@@ -221,12 +234,13 @@ const minutes = (sec) => Math.round((Number(sec) || 0) / 60).toLocaleString('en-
 function invoiceRows(s) {
   const c = s.computed;
   const rows = [];
-  rows.push(['المكالمات الواردة', `${num(c.inbound.calls)} مكالمة (${minutes(c.inbound.seconds)} دقيقة)`, '—', 'غير محدودة']);
-  rows.push(['المكالمات الصادرة من الباقة', `${num(c.outbound.includedUsed)} مكالمة`, '—', sar(0)]);
-  for (const l of c.lines) {
+  const waOnly = s.scope === 'whatsapp';
+  if (!waOnly) rows.push(['المكالمات الواردة', `${num(c.inbound.calls)} مكالمة (${minutes(c.inbound.seconds)} دقيقة)`, '—', 'غير محدودة']);
+  if (!waOnly) rows.push(['المكالمات الصادرة من الباقة', `${num(c.outbound.includedUsed)} مكالمة`, '—', sar(0)]);
+  for (const l of waOnly ? [] : c.lines) {
     rows.push([`مكالمات صادرة إضافية (${num(l.from)}–${num(l.to)})`, `${num(l.units)} مكالمة`, sar(l.unitPrice), sar(l.amount)]);
   }
-  if (c.outbound.beyondTiers > 0) {
+  if (!waOnly && c.outbound.beyondTiers > 0) {
     rows.push([`مكالمات صادرة إضافية فوق ${num(s.contract.tiers.at(-1)?.upTo || 0)}`, `${num(c.outbound.beyondTiers)} مكالمة`, '—', 'حسب عرض السعر الخاص']);
   }
   if (c.monthlyFee > 0) rows.push(['الرسوم الشهرية', '1', sar(c.monthlyFee), sar(c.monthlyFee)]);
@@ -283,7 +297,7 @@ function renderInvoiceHtml(s, { siteUrl = null } = {}) {
         ${sellerLines.map((l) => `<div style="font-size:12.5px;color:#3F3D4A;line-height:1.8;">${esc(l)}</div>`).join('')}
       </td>
       <td style="vertical-align:top;text-align:left;">
-        <div style="font-size:20px;font-weight:700;color:#1A150E;">${s.number ? 'فاتورة' : 'معاينة فاتورة'}</div>
+        <div style="font-size:20px;font-weight:700;color:#1A150E;">${s.number ? 'فاتورة' : 'معاينة فاتورة'}${s.scope === 'whatsapp' ? ' واتساب' : ''}</div>
         <div style="font-size:13px;color:#7A7166;margin-top:4px;">${esc(s.monthLabel)}</div>
       </td>
     </tr></table>
@@ -303,12 +317,12 @@ function renderInvoiceHtml(s, { siteUrl = null } = {}) {
     </table>
   </td></tr>
   <tr><td style="padding:12px 28px 4px;font-size:12.5px;color:#3F3D4A;line-height:1.9;">
-    <div>المكالمات الصادرة هذا الشهر: ${num(c.outbound.calls)}، تم الرد على ${num(c.outbound.answered)}، واحتُسب منها ${num(c.outbound.units)} مكالمة.</div>
+    ${s.scope === 'whatsapp' ? '' : `<div>المكالمات الصادرة هذا الشهر: ${num(c.outbound.calls)}، تم الرد على ${num(c.outbound.answered)}، واحتُسب منها ${num(c.outbound.units)} مكالمة.</div>
     <div>الباقة: ${num(s.contract.includedOutboundCalls)} مكالمة صادرة ضمن العقد — المتبقي بعد هذا الشهر: ${num(c.outbound.includedLeft)}.</div>
-    <div>طريقة الاحتساب: المكالمة من دقيقة إلى ${Math.round(s.contract.unitSeconds / 60)} دقائق تُحتسب مكالمة واحدة، وكل ${Math.round(s.contract.unitSeconds / 60)} دقائق إضافية مكالمة، والمكالمة الأقل من دقيقة لا تُحتسب. المكالمات الواردة غير محدودة.</div>
+    <div>طريقة الاحتساب: المكالمة من دقيقة إلى ${Math.round(s.contract.unitSeconds / 60)} دقائق تُحتسب مكالمة واحدة، وكل ${Math.round(s.contract.unitSeconds / 60)} دقائق إضافية مكالمة، والمكالمة الأقل من دقيقة لا تُحتسب. المكالمات الواردة غير محدودة.</div>`}
     ${whatsappNotes(c.whatsapp).map((l) => `<div>${esc(l)}</div>`).join('')}
     <div>مدة العقد: من ${esc(arDate(s.contract.startDate))} إلى ${esc(arDate(s.contract.endDate))}.</div>
-    ${c.needsQuote ? '<div style="color:#9B3B2B;">تجاوز عدد المكالمات الإضافية آخر شريحة، ويُسعَّر الزائد بموجب عرض سعر خاص.</div>' : ''}
+    ${s.scope !== 'whatsapp' && c.needsQuote ? '<div style="color:#9B3B2B;">تجاوز عدد المكالمات الإضافية آخر شريحة، ويُسعَّر الزائد بموجب عرض سعر خاص.</div>' : ''}
   </td></tr>
   ${siteUrl ? `<tr><td style="padding:8px 28px 4px;font-size:12.5px;color:#3F3D4A;">يمكنكم الاطلاع على فواتيركم في لوحة التحكم: <a href="${esc(siteUrl)}/login" style="color:#6E59A6;">${esc(siteUrl.replace(/^https?:\/\//, ''))}/login</a></td></tr>` : ''}
   <tr><td style="padding:16px 28px 24px;"></td></tr>
@@ -320,7 +334,7 @@ function renderInvoiceHtml(s, { siteUrl = null } = {}) {
 function renderInvoiceText(s) {
   const c = s.computed;
   const lines = [
-    `${s.seller?.brand || 'مسار'} — ${s.number ? 'فاتورة' : 'معاينة فاتورة'} ${s.monthLabel}`,
+    `${s.seller?.brand || 'مسار'} — ${s.number ? 'فاتورة' : 'معاينة فاتورة'}${s.scope === 'whatsapp' ? ' واتساب' : ''} ${s.monthLabel}`,
     s.number ? `رقم الفاتورة: ${s.number}` : null,
     `العميل: ${s.company.name}`,
     `الفترة: ${arDate(s.period.from)} إلى ${arDate(s.period.to)}`,
@@ -362,6 +376,6 @@ async function monthlyRun(deps, now = new Date(), { siteUrl = null } = {}) {
 }
 
 module.exports = {
-  contractOf, validateContract, billingProfile, validateProfile, buildInvoice, issueInvoice, sendInvoice,
+  scopeOf, monthKey, contractOf, validateContract, billingProfile, validateProfile, buildInvoice, issueInvoice, sendInvoice,
   renderInvoiceHtml, renderInvoiceText, monthlyRun, previousSaudiMonth, saudiDayStart, monthLabel, nextNumber, arDate,
 };

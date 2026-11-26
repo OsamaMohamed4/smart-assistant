@@ -118,6 +118,7 @@ db.exec(`
     mime_type    TEXT,
     size_bytes   INTEGER,
     raw_text     TEXT,
+    metadata     TEXT,
     created_at   TEXT DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS idx_kbdocs_company ON kb_documents(company_id);
@@ -906,6 +907,13 @@ if (!hasColumn('customer_requests', 'estate_trace')) {
   runMigration(53, 'customer_requests_add_estate_trace', 'ALTER TABLE customer_requests ADD COLUMN estate_trace TEXT');
 }
 
+// Migration 54: knowledge-management metadata (category, tags, region, ...) as a
+// JSON string on each document. One extensible column so new descriptive fields
+// need no further migration. Postgres: lib/migrations-pg.js.
+if (!hasColumn('kb_documents', 'metadata')) {
+  runMigration(54, 'kb_documents_add_metadata', 'ALTER TABLE kb_documents ADD COLUMN metadata TEXT');
+}
+
 // Migration 48: the LoopChat conversation a WhatsApp pause belongs to, so a
 // new message in that same conversation keeps the assistant out while one in
 // a new conversation (the old one closed) brings it back. Postgres:
@@ -1486,15 +1494,15 @@ const sql = {
 
   // ─── RAG: KB documents + chunks ──────────────────────────
   insertDocument     : db.prepare(`
-    INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience)
-    VALUES (@company_id, @filename, @mime_type, @size_bytes, @raw_text, @raw_data, @audience)
+    INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience, metadata)
+    VALUES (@company_id, @filename, @mime_type, @size_bytes, @raw_text, @raw_data, @audience, @metadata)
   `),
   insertChunk        : db.prepare(`
     INSERT INTO kb_chunks (company_id, document_id, chunk_index, text, embedding, token_count)
     VALUES (@company_id, @document_id, @chunk_index, @text, @embedding, @token_count)
   `),
   listDocuments      : db.prepare(`
-    SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at, d.audience,
+    SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at, d.audience, d.metadata,
            (SELECT COUNT(*) FROM kb_chunks WHERE document_id = d.id) AS chunk_count
     FROM kb_documents d
     WHERE d.company_id = ? AND d.deleted_at IS NULL

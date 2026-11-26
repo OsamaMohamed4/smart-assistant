@@ -218,6 +218,18 @@ export function DocumentsManager({ companyId, companyName, audience }) {
     }
   };
 
+  // Optional approval: move a document between 'published' (searchable) and
+  // 'draft' (held out of search for review).
+  const onSetStatus = async (doc, status) => {
+    try {
+      await api.setDocumentStatus(companyId, doc.id, status);
+      push(status === 'draft'
+        ? `${doc.filename}: حُوّل إلى مسودّة — خارج البحث حتى الاعتماد`
+        : `${doc.filename}: اعتُمد ونُشر — أصبح داخل البحث`, 'success');
+      load();
+    } catch (e) { push(e.message, 'error'); }
+  };
+
   const onDrop = (e) => {
     e.preventDefault();
     setDragOver(false);
@@ -404,6 +416,7 @@ export function DocumentsManager({ companyId, companyName, audience }) {
                   onDownload={() => onDownload(d)}
                   onNewVersion={() => onNewVersion(d)}
                   onVersions={() => setVersionsFor(d)}
+                  onSetStatus={(status) => onSetStatus(d, status)}
                 />
               ))}
             </tbody>
@@ -540,25 +553,19 @@ function fmtSize(bytes) {
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
   return `${(b / (1024 * 1024)).toFixed(1)} MB`;
 }
-// Date + time: DD/MM/YYYY HH:MM (24h), always shown in Riyadh time.
-// The DB stores UTC timestamps without a zone ("2026-11-26 22:57:00"), which
-// the browser would read as local time, so mark zone-less values as UTC first.
+// Date + time: DD/MM/YYYY HH:MM (24h).
 function fmtDateTime(v) {
   if (!v) return '—';
-  let s = v;
-  if (typeof s === 'string' && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) {
-    s = s.trim().replace(' ', 'T') + 'Z';
-  }
-  const d = new Date(s);
+  const d = new Date(v);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleString('en-GB', {
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit', hour12: false,
-    timeZone: 'Asia/Riyadh',
   });
 }
 
-function DocRow({ doc, selected, onToggle, onDelete, onReplace, onDownload, onNewVersion, onVersions }) {
+function DocRow({ doc, selected, onToggle, onDelete, onReplace, onDownload, onNewVersion, onVersions, onSetStatus }) {
+  const isDraft = doc.status === 'draft';
   const sizeLabel = fmtSize(doc.size_bytes);
   const uploadDate = fmtDateTime(doc.created_at);   // DD/MM/YYYY HH:MM
   const modifiedDate = uploadDate; // DB only tracks created_at for kb_documents right now
@@ -583,6 +590,11 @@ function DocRow({ doc, selected, onToggle, onDelete, onReplace, onDownload, onNe
           {doc.version > 1 && (
             <span className="text-[10.5px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-1.5 py-0.5 shrink-0">
               الإصدار {doc.version}
+            </span>
+          )}
+          {isDraft && (
+            <span className="text-[10.5px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 shrink-0">
+              مسودّة — خارج البحث
             </span>
           )}
         </div>
@@ -621,6 +633,10 @@ function DocRow({ doc, selected, onToggle, onDelete, onReplace, onDownload, onNe
       </td>
       <td className="py-3 px-4 text-left whitespace-nowrap">
         <div className="flex items-center justify-end gap-2 text-[12.5px] text-ink-500">
+          {isDraft
+            ? <button onClick={() => onSetStatus('published')} className="font-semibold text-emerald-600 hover:text-emerald-700 transition-colors">اعتماد ونشر</button>
+            : <button onClick={() => onSetStatus('draft')} className="hover:text-amber-700 transition-colors">تحويل لمسودّة</button>}
+          <span className="text-ink-200">-</span>
           <button onClick={onNewVersion} className="hover:text-brand-600 transition-colors">إصدار جديد</button>
           <span className="text-ink-200">-</span>
           <button onClick={onVersions} className="hover:text-brand-600 transition-colors">الإصدارات</button>

@@ -631,21 +631,21 @@ function DocRow({ doc, selected, onToggle, onDelete, onReplace, onDownload, onNe
       <td className="py-3 px-4 text-[13px] text-ink-600 font-mono whitespace-nowrap">
         {sizeLabel}
       </td>
-      <td className="py-3 px-4 text-left whitespace-nowrap">
-        <div className="flex items-center justify-end gap-2 text-[12.5px] text-ink-500">
+      <td className="py-3 px-4 text-left">
+        <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-[12.5px] text-ink-500">
           {isDraft
-            ? <button onClick={() => onSetStatus('published')} className="font-semibold text-emerald-600 hover:text-emerald-700 transition-colors">اعتماد ونشر</button>
-            : <button onClick={() => onSetStatus('draft')} className="hover:text-amber-700 transition-colors">تحويل لمسودّة</button>}
+            ? <button onClick={() => onSetStatus('published')} className="font-semibold text-emerald-600 hover:text-emerald-700 transition-colors whitespace-nowrap">اعتماد ونشر</button>
+            : <button onClick={() => onSetStatus('draft')} className="text-amber-700 hover:text-amber-800 transition-colors whitespace-nowrap">تحويل لمسودّة</button>}
           <span className="text-ink-200">-</span>
-          <button onClick={onNewVersion} className="hover:text-brand-600 transition-colors">إصدار جديد</button>
+          <button onClick={onNewVersion} className="hover:text-brand-600 transition-colors whitespace-nowrap">إصدار جديد</button>
           <span className="text-ink-200">-</span>
-          <button onClick={onVersions} className="hover:text-brand-600 transition-colors">الإصدارات</button>
+          <button onClick={onVersions} className="hover:text-brand-600 transition-colors whitespace-nowrap">الإصدارات</button>
           <span className="text-ink-200">-</span>
-          <button onClick={onDownload} className="hover:text-brand-600 transition-colors">تنزيل</button>
+          <button onClick={onDownload} className="hover:text-brand-600 transition-colors whitespace-nowrap">تنزيل</button>
           <span className="text-ink-200">-</span>
-          <button onClick={onReplace} className="hover:text-brand-600 transition-colors">استبدال</button>
+          <button onClick={onReplace} className="hover:text-brand-600 transition-colors whitespace-nowrap">استبدال</button>
           <span className="text-ink-200">-</span>
-          <button onClick={onDelete} className="hover:text-rose-600 transition-colors">حذف</button>
+          <button onClick={onDelete} className="hover:text-rose-600 transition-colors whitespace-nowrap">حذف</button>
         </div>
       </td>
     </tr>

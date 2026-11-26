@@ -524,9 +524,35 @@ const sql = {
 
   // ─── RAG: documents + chunks ─────────────────────────────
   insertDocument: stmt(
-    `INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience, metadata)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-    ['company_id', 'filename', 'mime_type', 'size_bytes', 'raw_text', 'raw_data', 'audience', 'metadata'],
+    `INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience, metadata, version_group, version, is_active)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+    ['company_id', 'filename', 'mime_type', 'size_bytes', 'raw_text', 'raw_data', 'audience', 'metadata', 'version_group', 'version', 'is_active'],
+  ),
+  // Versioning helpers: highest version in a group; retire every other version in
+  // a group once a new one is stored; list a group's versions; activate one
+  // version (and only one) for search.
+  maxVersionInGroup: stmt(
+    `SELECT COALESCE(MAX(version), 0) AS max_version FROM kb_documents
+      WHERE company_id = $1 AND version_group = $2 AND deleted_at IS NULL`,
+    ['company_id', 'version_group'],
+  ),
+  deactivateOtherVersions: stmt(
+    `UPDATE kb_documents SET is_active = 0
+      WHERE company_id = $1 AND version_group = $2 AND id <> $3 AND deleted_at IS NULL`,
+    ['company_id', 'version_group', 'keep_id'],
+  ),
+  listVersionsInGroup: stmt(
+    `SELECT id, filename, version, is_active, created_at, size_bytes,
+            (SELECT COUNT(*)::int FROM kb_chunks WHERE document_id = kb_documents.id) AS chunk_count
+       FROM kb_documents
+      WHERE company_id = $1 AND version_group = $2 AND deleted_at IS NULL
+      ORDER BY version DESC`,
+    ['company_id', 'version_group'],
+  ),
+  setVersionActive: stmt(
+    `UPDATE kb_documents SET is_active = $3
+      WHERE company_id = $1 AND id = $2 AND deleted_at IS NULL`,
+    ['company_id', 'id', 'is_active'],
   ),
   insertChunk: stmt(
     `INSERT INTO kb_chunks (company_id, document_id, chunk_index, text, embedding, token_count)
@@ -536,6 +562,7 @@ const sql = {
   ),
   listDocuments: stmt(`
     SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at, d.audience, d.metadata,
+           d.version_group, d.version, d.is_active,
            (SELECT COUNT(*)::int FROM kb_chunks WHERE document_id = d.id) AS chunk_count
       FROM kb_documents d
      WHERE d.company_id = $1 AND d.deleted_at IS NULL
@@ -551,7 +578,7 @@ const sql = {
     SELECT id, chunk_index, text, token_count
       FROM kb_chunks WHERE document_id = $1 ORDER BY chunk_index ASC`),
   listCompanyChunkTexts: stmt(`
-    SELECT c.id, c.document_id, c.text, d.audience
+    SELECT c.id, c.document_id, c.text, d.audience, d.is_active
       FROM kb_chunks c JOIN kb_documents d ON d.id = c.document_id
      WHERE c.company_id = $1`),
   updateChunkEmbedding: stmt(

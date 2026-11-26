@@ -1571,10 +1571,12 @@ const sql = {
     ORDER BY d.created_at DESC
   `),
   getDocument        : db.prepare('SELECT * FROM kb_documents WHERE id = ? AND deleted_at IS NULL'),
-  // Searchable documents' text, for the conflict scan (published + active only).
+  // Searchable documents' text, for the conflict scan. Matches retrieve's
+  // "searchable" definition: active (NULL legacy counts as active) AND published.
   listCompanyDocTexts: db.prepare(`
     SELECT id, filename, raw_text FROM kb_documents
-     WHERE company_id = ? AND deleted_at IS NULL AND is_active = 1
+     WHERE company_id = ? AND deleted_at IS NULL
+       AND (is_active = 1 OR is_active IS NULL)
        AND (status IS NULL OR status = 'published')
   `),
   // Soft-delete: mark + drop the searchable chunks so it won't be retrieved.

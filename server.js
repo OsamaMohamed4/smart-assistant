@@ -2276,6 +2276,15 @@ app.get('/api/companies/:id/documents', requireCompanyAccess, async (req, res) =
   })));
 });
 
+// Potential conflicts across the searchable knowledge base: the same unit/code
+// quoted at more than one price. Evidence for a human to review, not an action.
+app.get('/api/companies/:id/documents/conflicts', requireCompanyAccess, async (req, res) => {
+  const { findConflicts } = require('./lib/kb-conflicts');
+  const docs = (await sql.listCompanyDocTexts.all(req.params.id))
+    .map((d) => ({ id: d.id, filename: d.filename, text: String(d.raw_text || '').slice(0, 500000) }));
+  res.json({ conflicts: findConflicts(docs), scanned: docs.length });
+});
+
 // Version history of a document: every version in its group, newest first, with
 // which one is active (searched) now.
 app.get('/api/companies/:id/documents/:docId/versions', requireCompanyAccess, async (req, res) => {

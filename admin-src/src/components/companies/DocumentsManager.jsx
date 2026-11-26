@@ -26,6 +26,7 @@ export function DocumentsManager({ companyId, companyName, audience }) {
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver]   = useState(false);
   const [testOpen, setTestOpen]   = useState(false);
+  const [conflictsOpen, setConflictsOpen] = useState(false);
   // KB metadata applied to files uploaded now (step 1: categories/tags).
   const [category, setCategory]   = useState('');
   const [tags, setTags]           = useState('');
@@ -346,6 +347,10 @@ export function DocumentsManager({ companyId, companyName, audience }) {
               <Sparkles className="w-3 h-3" strokeWidth={2} />
               اختبار البحث
             </Button>
+            <Button variant="secondary" size="sm" onClick={() => setConflictsOpen(true)} className="gap-1.5">
+              <AlertTriangle className="w-3 h-3" strokeWidth={2} />
+              فحص التعارض
+            </Button>
             <Button variant="danger" size="sm" onClick={askDeleteAll} className="gap-1.5">
               <Trash2 className="w-3 h-3" strokeWidth={2} />
               حذف الكل
@@ -458,7 +463,74 @@ export function DocumentsManager({ companyId, companyName, audience }) {
         onClose={() => setVersionsFor(null)}
         onChanged={load}
       />
+
+      <ConflictsModal
+        open={conflictsOpen}
+        companyId={companyId}
+        onClose={() => setConflictsOpen(false)}
+      />
     </div>
+  );
+}
+
+// Potential price conflicts across the searchable documents: the same unit/code
+// quoted at more than one price. Shown for human review (codes can legitimately
+// repeat across projects), with the documents and prices involved.
+function ConflictsModal({ open, companyId, onClose }) {
+  const { push } = useToast();
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    if (!open) { setData(null); return; }
+    let alive = true;
+    (async () => {
+      try { const r = await api.getDocumentConflicts(companyId); if (alive) setData(r); }
+      catch (e) { if (alive) { push(e.message, 'error'); setData({ conflicts: [], scanned: 0 }); } }
+    })();
+    return () => { alive = false; };
+  }, [open, companyId]);
+
+  const conflicts = data?.conflicts || [];
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="lg"
+      title="فحص التعارض"
+      description="يبحث عن وحدة أو كود له أكثر من سعر مختلف في المستندات المنشورة. راجع النتائج يدوياً — قد تتشابه الأكواد بين مشاريع مختلفة."
+    >
+      {!data ? (
+        <div className="space-y-2">{[1, 2].map((i) => <div key={i} className="shimmer h-14 rounded-xl" />)}</div>
+      ) : conflicts.length === 0 ? (
+        <div className="text-center py-8 text-[13px] text-emerald-700 bg-emerald-50/60 rounded-xl">
+          لا توجد تعارضات محتملة — فُحص {fmtNumber(data.scanned || 0)} مستند.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="text-[12px] text-ink-500">تم العثور على {fmtNumber(conflicts.length)} تعارض محتمل ضمن {fmtNumber(data.scanned || 0)} مستند:</div>
+          {conflicts.map((c) => (
+            <div key={c.code} className="rounded-xl border border-amber-200 bg-amber-50/50 p-3.5">
+              <div className="flex items-center gap-2 mb-2">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                <span className="font-semibold text-ink-900 text-[13.5px]"><bdi>{c.code}</bdi></span>
+                <span className="text-[12px] text-amber-800">
+                  {fmtNumber(c.prices.length)} أسعار مختلفة{c.docCount > 1 ? ` · في ${fmtNumber(c.docCount)} مستند` : ''}
+                </span>
+              </div>
+              <div className="space-y-1">
+                {c.entries.map((e, i) => (
+                  <div key={i} className="flex items-center justify-between text-[12.5px] text-ink-700">
+                    <span className="font-mono tabular-nums">{fmtNumber(e.price)} ريال</span>
+                    <span className="text-ink-500 truncate max-w-[60%]"><bdi>{e.filename}</bdi></span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -568,7 +640,7 @@ function DocRow({ doc, selected, onToggle, onDelete, onReplace, onDownload, onNe
   const isDraft = doc.status === 'draft';
   const sizeLabel = fmtSize(doc.size_bytes);
   const uploadDate = fmtDateTime(doc.created_at);   // DD/MM/YYYY HH:MM
-  const modifiedDate = uploadDate; // DB only tracks created_at for kb_documents right now
+  const modifiedDate = fmtDateTime(doc.updated_at || doc.created_at); // bumped on status/version changes
 
   return (
     <tr className={cn(

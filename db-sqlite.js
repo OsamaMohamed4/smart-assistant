@@ -122,6 +122,7 @@ db.exec(`
     version_group TEXT,
     version      INTEGER,
     is_active    INTEGER,
+    status       TEXT,
     created_at   TEXT DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS idx_kbdocs_company ON kb_documents(company_id);
@@ -931,6 +932,16 @@ if (!hasColumn('kb_documents', 'is_active')) {
   `);
 }
 
+// Migration 56: review state (optional approval). 'published' is searchable,
+// 'draft' is held out for review. Existing documents are published. Postgres:
+// lib/migrations-pg.js.
+if (!hasColumn('kb_documents', 'status')) {
+  runMigration(56, 'kb_documents_add_status', `
+    ALTER TABLE kb_documents ADD COLUMN status TEXT;
+    UPDATE kb_documents SET status = 'published' WHERE status IS NULL;
+  `);
+}
+
 // Migration 48: the LoopChat conversation a WhatsApp pause belongs to, so a
 // new message in that same conversation keeps the assistant out while one in
 // a new conversation (the old one closed) brings it back. Postgres:
@@ -1511,8 +1522,11 @@ const sql = {
 
   // ─── RAG: KB documents + chunks ──────────────────────────
   insertDocument     : db.prepare(`
-    INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience, metadata, version_group, version, is_active)
-    VALUES (@company_id, @filename, @mime_type, @size_bytes, @raw_text, @raw_data, @audience, @metadata, @version_group, @version, @is_active)
+    INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience, metadata, version_group, version, is_active, status)
+    VALUES (@company_id, @filename, @mime_type, @size_bytes, @raw_text, @raw_data, @audience, @metadata, @version_group, @version, @is_active, @status)
+  `),
+  setDocStatus       : db.prepare(`
+    UPDATE kb_documents SET status = @status WHERE company_id = @company_id AND id = @id AND deleted_at IS NULL
   `),
   maxVersionInGroup  : db.prepare(`
     SELECT COALESCE(MAX(version), 0) AS max_version FROM kb_documents
@@ -1539,7 +1553,7 @@ const sql = {
   `),
   listDocuments      : db.prepare(`
     SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at, d.audience, d.metadata,
-           d.version_group, d.version, d.is_active,
+           d.version_group, d.version, d.is_active, d.status,
            (SELECT COUNT(*) FROM kb_chunks WHERE document_id = d.id) AS chunk_count
     FROM kb_documents d
     WHERE d.company_id = ? AND d.deleted_at IS NULL
@@ -1562,7 +1576,7 @@ const sql = {
   // Texts only (no embedding blobs) — keyword leg of the hybrid search — with
   // the audience of the document each belongs to (lib/kb-audience.js).
   listCompanyChunkTexts: db.prepare(`
-    SELECT c.id, c.document_id, c.text, d.audience, d.is_active
+    SELECT c.id, c.document_id, c.text, d.audience, d.is_active, d.status
       FROM kb_chunks c JOIN kb_documents d ON d.id = c.document_id
      WHERE c.company_id = ?
   `),

@@ -26,6 +26,9 @@ export function DocumentsManager({ companyId, companyName, audience }) {
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver]   = useState(false);
   const [testOpen, setTestOpen]   = useState(false);
+  // KB metadata applied to files uploaded now (step 1: categories/tags).
+  const [category, setCategory]   = useState('');
+  const [tags, setTags]           = useState('');
 
   // ── Bulk-selection state ──
   const [selected, setSelected]   = useState(() => new Set()); // doc ids
@@ -117,7 +120,7 @@ export function DocumentsManager({ companyId, companyName, audience }) {
       }
       setUploading(true);
       try {
-        const r = await api.uploadDocument(companyId, file, audience);
+        const r = await api.uploadDocument(companyId, file, audience, { category: category.trim(), tags: tags.trim() });
         if (r.quality && r.quality.level !== 'ok') {
           // Big/empty extraction — warn instead of a plain success toast.
           push(`${file.name}: ${r.quality.message}`, r.quality.level === 'empty' ? 'error' : 'warning');
@@ -164,7 +167,7 @@ export function DocumentsManager({ companyId, companyName, audience }) {
     setUploading(true);
     try {
       // Upload the new file first, into the same knowledge base
-      const r = await api.uploadDocument(companyId, file, audience);
+      const r = await api.uploadDocument(companyId, file, audience, { category: category.trim(), tags: tags.trim() });
       push(`تم استبدال ${oldDoc.filename} → ${file.name} (${fmtNumber(r.chunkCount)} مقطع)`, 'success');
       // Then delete the old one
       await api.deleteDocument(companyId, oldDoc.id).catch(() => {});
@@ -190,6 +193,23 @@ export function DocumentsManager({ companyId, companyName, audience }) {
 
   return (
     <div className="space-y-3">
+      {/* ─── KB metadata for the next upload (category + tags) ─── */}
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          placeholder="التصنيف (مثل: أسعار، مشاريع، سياسات)"
+          className="h-8 w-44 sm:w-56 px-3 bg-white border border-ink-200 rounded-xl text-[12.5px] placeholder:text-ink-400 focus-ring focus:border-ink-300 font-arabic"
+        />
+        <input
+          value={tags}
+          onChange={(e) => setTags(e.target.value)}
+          placeholder="وسوم مفصولة بفواصل (اختياري)"
+          className="h-8 w-44 sm:w-56 px-3 bg-white border border-ink-200 rounded-xl text-[12.5px] placeholder:text-ink-400 focus-ring focus:border-ink-300 font-arabic"
+        />
+        <span className="text-[11px] text-ink-400">تُطبَّق على الملفات التي ترفعها الآن</span>
+      </div>
+
       {/* ─── Upload zone ─── */}
       <div
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -436,6 +456,20 @@ function DocRow({ doc, selected, onToggle, onDelete, onReplace, onDownload }) {
         <div className="text-[13.5px] font-medium text-ink-900 truncate">
           <bdi>{doc.filename}</bdi>
         </div>
+        {doc.metadata && (doc.metadata.category || (doc.metadata.tags && doc.metadata.tags.length > 0)) && (
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            {doc.metadata.category && (
+              <span className="text-[10.5px] font-semibold text-brand-700 bg-brand-50 border border-brand-100 rounded px-1.5 py-0.5">
+                {doc.metadata.category}
+              </span>
+            )}
+            {(doc.metadata.tags || []).slice(0, 5).map((t, i) => (
+              <span key={i} className="text-[10.5px] text-ink-500 bg-ink-50 border border-ink-100 rounded px-1.5 py-0.5">
+                <bdi>{t}</bdi>
+              </span>
+            ))}
+          </div>
+        )}
         {doc.quality && doc.quality.level !== 'ok' && (
           <div className={cn(
             'mt-1 inline-flex items-center gap-1 text-[11px] font-medium rounded-md px-1.5 py-0.5',

@@ -119,6 +119,9 @@ db.exec(`
     size_bytes   INTEGER,
     raw_text     TEXT,
     metadata     TEXT,
+    version_group TEXT,
+    version      INTEGER,
+    is_active    INTEGER,
     created_at   TEXT DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS idx_kbdocs_company ON kb_documents(company_id);
@@ -914,6 +917,20 @@ if (!hasColumn('kb_documents', 'metadata')) {
   runMigration(54, 'kb_documents_add_metadata', 'ALTER TABLE kb_documents ADD COLUMN metadata TEXT');
 }
 
+// Migration 55: document versioning. Versions of one document share a
+// version_group; only is_active=1 is searched; the rest are history/revert.
+// Existing rows become version 1, active, each its own group. Postgres:
+// lib/migrations-pg.js (ADD_COLUMNS + BACKFILLS).
+if (!hasColumn('kb_documents', 'is_active')) {
+  runMigration(55, 'kb_documents_add_versioning', `
+    ALTER TABLE kb_documents ADD COLUMN version_group TEXT;
+    ALTER TABLE kb_documents ADD COLUMN version INTEGER;
+    ALTER TABLE kb_documents ADD COLUMN is_active INTEGER;
+    UPDATE kb_documents SET is_active = 1, version = 1,
+           version_group = CAST(id AS TEXT) WHERE is_active IS NULL;
+  `);
+}
+
 // Migration 48: the LoopChat conversation a WhatsApp pause belongs to, so a
 // new message in that same conversation keeps the assistant out while one in
 // a new conversation (the old one closed) brings it back. Postgres:
@@ -1494,8 +1511,27 @@ const sql = {
 
   // ─── RAG: KB documents + chunks ──────────────────────────
   insertDocument     : db.prepare(`
-    INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience, metadata)
-    VALUES (@company_id, @filename, @mime_type, @size_bytes, @raw_text, @raw_data, @audience, @metadata)
+    INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience, metadata, version_group, version, is_active)
+    VALUES (@company_id, @filename, @mime_type, @size_bytes, @raw_text, @raw_data, @audience, @metadata, @version_group, @version, @is_active)
+  `),
+  maxVersionInGroup  : db.prepare(`
+    SELECT COALESCE(MAX(version), 0) AS max_version FROM kb_documents
+     WHERE company_id = @company_id AND version_group = @version_group AND deleted_at IS NULL
+  `),
+  deactivateOtherVersions: db.prepare(`
+    UPDATE kb_documents SET is_active = 0
+     WHERE company_id = @company_id AND version_group = @version_group AND id <> @keep_id AND deleted_at IS NULL
+  `),
+  listVersionsInGroup: db.prepare(`
+    SELECT id, filename, version, is_active, created_at, size_bytes,
+           (SELECT COUNT(*) FROM kb_chunks WHERE document_id = kb_documents.id) AS chunk_count
+      FROM kb_documents
+     WHERE company_id = @company_id AND version_group = @version_group AND deleted_at IS NULL
+     ORDER BY version DESC
+  `),
+  setVersionActive   : db.prepare(`
+    UPDATE kb_documents SET is_active = @is_active
+     WHERE company_id = @company_id AND id = @id AND deleted_at IS NULL
   `),
   insertChunk        : db.prepare(`
     INSERT INTO kb_chunks (company_id, document_id, chunk_index, text, embedding, token_count)
@@ -1503,6 +1539,7 @@ const sql = {
   `),
   listDocuments      : db.prepare(`
     SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at, d.audience, d.metadata,
+           d.version_group, d.version, d.is_active,
            (SELECT COUNT(*) FROM kb_chunks WHERE document_id = d.id) AS chunk_count
     FROM kb_documents d
     WHERE d.company_id = ? AND d.deleted_at IS NULL
@@ -1525,7 +1562,7 @@ const sql = {
   // Texts only (no embedding blobs) — keyword leg of the hybrid search — with
   // the audience of the document each belongs to (lib/kb-audience.js).
   listCompanyChunkTexts: db.prepare(`
-    SELECT c.id, c.document_id, c.text, d.audience
+    SELECT c.id, c.document_id, c.text, d.audience, d.is_active
       FROM kb_chunks c JOIN kb_documents d ON d.id = c.document_id
      WHERE c.company_id = ?
   `),

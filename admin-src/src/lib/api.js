@@ -271,6 +271,8 @@ export const api = {
   activateDocumentVersion: (companyId, docId) => request(`/api/companies/${companyId}/documents/${docId}/activate`, { method: 'PATCH' }),
   // Review state: 'published' (searchable) ↔ 'draft' (held out for review).
   setDocumentStatus      : (companyId, docId, status) => request(`/api/companies/${companyId}/documents/${docId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  // Potential conflicts: the same unit/code priced differently across documents.
+  getDocumentConflicts   : (companyId) => request(`/api/companies/${companyId}/documents/conflicts`),
   // Bulk delete: `ids` for the selected files, or deleteAllDocuments for the
   // whole section. `audience` scopes it to one of the two knowledge bases.
   bulkDeleteDocuments: (companyId, ids, audience) => request(`/api/companies/${companyId}/documents/bulk-delete`, {

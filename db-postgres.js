@@ -524,13 +524,13 @@ const sql = {
 
   // ─── RAG: documents + chunks ─────────────────────────────
   insertDocument: stmt(
-    `INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience, metadata, version_group, version, is_active, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+    `INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience, metadata, version_group, version, is_active, status, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, ${NOW}) RETURNING id`,
     ['company_id', 'filename', 'mime_type', 'size_bytes', 'raw_text', 'raw_data', 'audience', 'metadata', 'version_group', 'version', 'is_active', 'status'],
   ),
   // Review state: move a document between 'published' (searchable) and 'draft'.
   setDocStatus: stmt(
-    `UPDATE kb_documents SET status = $3 WHERE company_id = $1 AND id = $2 AND deleted_at IS NULL`,
+    `UPDATE kb_documents SET status = $3, updated_at = ${NOW} WHERE company_id = $1 AND id = $2 AND deleted_at IS NULL`,
     ['company_id', 'id', 'status'],
   ),
   // Versioning helpers: highest version in a group; retire every other version in
@@ -542,7 +542,7 @@ const sql = {
     ['company_id', 'version_group'],
   ),
   deactivateOtherVersions: stmt(
-    `UPDATE kb_documents SET is_active = 0
+    `UPDATE kb_documents SET is_active = 0, updated_at = ${NOW}
       WHERE company_id = $1 AND version_group = $2 AND id <> $3 AND deleted_at IS NULL`,
     ['company_id', 'version_group', 'keep_id'],
   ),
@@ -555,7 +555,7 @@ const sql = {
     ['company_id', 'version_group'],
   ),
   setVersionActive: stmt(
-    `UPDATE kb_documents SET is_active = $3
+    `UPDATE kb_documents SET is_active = $3, updated_at = ${NOW}
       WHERE company_id = $1 AND id = $2 AND deleted_at IS NULL`,
     ['company_id', 'id', 'is_active'],
   ),
@@ -566,13 +566,18 @@ const sql = {
     { embedding: bufferToVecLiteral },
   ),
   listDocuments: stmt(`
-    SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at, d.audience, d.metadata,
+    SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at, d.updated_at, d.audience, d.metadata,
            d.version_group, d.version, d.is_active, d.status,
            (SELECT COUNT(*)::int FROM kb_chunks WHERE document_id = d.id) AS chunk_count
       FROM kb_documents d
      WHERE d.company_id = $1 AND d.deleted_at IS NULL
      ORDER BY d.created_at DESC`),
   getDocument: stmt(`SELECT * FROM kb_documents WHERE id = $1 AND deleted_at IS NULL`),
+  // Searchable documents' text, for the conflict scan (published + active only).
+  listCompanyDocTexts: stmt(`
+    SELECT id, filename, raw_text FROM kb_documents
+     WHERE company_id = $1 AND deleted_at IS NULL AND is_active = 1
+       AND (status IS NULL OR status = 'published')`),
   deleteDocument: stmt(`UPDATE kb_documents SET deleted_at = ${NOW} WHERE id = $1 AND deleted_at IS NULL`),
   purgeDocumentChunks: stmt(`DELETE FROM kb_chunks WHERE document_id = $1`),
   countCompanyChunks: stmt(`SELECT COUNT(*)::int AS n FROM kb_chunks WHERE company_id = $1`),

@@ -524,9 +524,14 @@ const sql = {
 
   // ─── RAG: documents + chunks ─────────────────────────────
   insertDocument: stmt(
-    `INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience, metadata, version_group, version, is_active)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
-    ['company_id', 'filename', 'mime_type', 'size_bytes', 'raw_text', 'raw_data', 'audience', 'metadata', 'version_group', 'version', 'is_active'],
+    `INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience, metadata, version_group, version, is_active, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+    ['company_id', 'filename', 'mime_type', 'size_bytes', 'raw_text', 'raw_data', 'audience', 'metadata', 'version_group', 'version', 'is_active', 'status'],
+  ),
+  // Review state: move a document between 'published' (searchable) and 'draft'.
+  setDocStatus: stmt(
+    `UPDATE kb_documents SET status = $3 WHERE company_id = $1 AND id = $2 AND deleted_at IS NULL`,
+    ['company_id', 'id', 'status'],
   ),
   // Versioning helpers: highest version in a group; retire every other version in
   // a group once a new one is stored; list a group's versions; activate one
@@ -562,7 +567,7 @@ const sql = {
   ),
   listDocuments: stmt(`
     SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at, d.audience, d.metadata,
-           d.version_group, d.version, d.is_active,
+           d.version_group, d.version, d.is_active, d.status,
            (SELECT COUNT(*)::int FROM kb_chunks WHERE document_id = d.id) AS chunk_count
       FROM kb_documents d
      WHERE d.company_id = $1 AND d.deleted_at IS NULL
@@ -578,7 +583,7 @@ const sql = {
     SELECT id, chunk_index, text, token_count
       FROM kb_chunks WHERE document_id = $1 ORDER BY chunk_index ASC`),
   listCompanyChunkTexts: stmt(`
-    SELECT c.id, c.document_id, c.text, d.audience, d.is_active
+    SELECT c.id, c.document_id, c.text, d.audience, d.is_active, d.status
       FROM kb_chunks c JOIN kb_documents d ON d.id = c.document_id
      WHERE c.company_id = $1`),
   updateChunkEmbedding: stmt(

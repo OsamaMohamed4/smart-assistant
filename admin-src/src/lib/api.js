@@ -240,10 +240,15 @@ export const api = {
   // RAG: documents. `audience` picks one of the company's two knowledge
   // bases: 'inbound' (inbound calls and WhatsApp) or 'outbound'.
   listDocuments     : (companyId, audience) => request(`/api/companies/${companyId}/documents${audience ? `?audience=${audience}` : ''}`),
-  uploadDocument    : async (companyId, file, audience) => {
+  uploadDocument    : async (companyId, file, audience, meta = null) => {
     const form = new FormData();
     form.append('audience', audience);
     form.append('file', file);
+    // Knowledge-management metadata (optional): category, comma-separated tags,
+    // region. The server stores them as JSON on the document.
+    if (meta?.category) form.append('category', meta.category);
+    if (meta?.tags) form.append('tags', meta.tags);
+    if (meta?.region) form.append('region', meta.region);
     const res = await fetch(`/api/companies/${companyId}/documents`, {
       method: 'POST',
       credentials: 'include',

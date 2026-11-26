@@ -540,14 +540,21 @@ function fmtSize(bytes) {
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
   return `${(b / (1024 * 1024)).toFixed(1)} MB`;
 }
-// Date + time: DD/MM/YYYY HH:MM (24h).
+// Date + time: DD/MM/YYYY HH:MM (24h), always shown in Riyadh time.
+// The DB stores UTC timestamps without a zone ("2026-11-26 22:57:00"), which
+// the browser would read as local time, so mark zone-less values as UTC first.
 function fmtDateTime(v) {
   if (!v) return '—';
-  const d = new Date(v);
+  let s = v;
+  if (typeof s === 'string' && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) {
+    s = s.trim().replace(' ', 'T') + 'Z';
+  }
+  const d = new Date(s);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleString('en-GB', {
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit', hour12: false,
+    timeZone: 'Asia/Riyadh',
   });
 }
 

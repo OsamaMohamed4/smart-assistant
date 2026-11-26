@@ -2201,11 +2201,16 @@ app.post('/api/companies/:id/documents', requireCompanyAccess, uploadDocument, a
       buffer   : req.file.buffer,
       audience,
       metadata : docMetadataFrom(req.body),
+      // When present, this upload is a NEW VERSION of an existing document: it
+      // joins that document's version group and retires the previous version
+      // from search (lib/rag.js). Scoped to the company inside ingestDocument.
+      versionOf: req.body?.versionOf ? Number(req.body.versionOf) : null,
     });
     res.status(201).json({
       documentId  : result.documentId,
       audience,
       filename,
+      version     : result.version,
       chunkCount  : result.chunkCount,
       textLength  : result.textLength,
       sizeBytes   : req.file.size,
@@ -2269,6 +2274,32 @@ app.get('/api/companies/:id/documents', requireCompanyAccess, async (req, res) =
     metadata: docMetadataParse(d.metadata),
     quality: extractionQuality(d.chunk_count, (d.chunk_count || 0) * 200, d.size_bytes),
   })));
+});
+
+// Version history of a document: every version in its group, newest first, with
+// which one is active (searched) now.
+app.get('/api/companies/:id/documents/:docId/versions', requireCompanyAccess, async (req, res) => {
+  const companyId = req.params.id;
+  const doc = await sql.getDocument.get(Number(req.params.docId));
+  if (!doc || String(doc.company_id) !== String(companyId)) return res.status(404).json({ error: 'document not found' });
+  const versionGroup = doc.version_group || String(doc.id);
+  res.json(await sql.listVersionsInGroup.all({ company_id: companyId, version_group: versionGroup }));
+});
+
+// Revert / publish: make THIS version the active (searched) one and retire the
+// rest of its group. The others are kept for history.
+app.patch('/api/companies/:id/documents/:docId/activate', requireCompanyAccess, async (req, res) => {
+  const companyId = req.params.id;
+  const docId = Number(req.params.docId);
+  const doc = await sql.getDocument.get(docId);
+  if (!doc || String(doc.company_id) !== String(companyId)) return res.status(404).json({ error: 'document not found' });
+  const versionGroup = doc.version_group || String(doc.id);
+  await withTransaction(async () => {
+    await sql.setVersionActive.run({ company_id: companyId, id: docId, is_active: 1 });
+    await sql.deactivateOtherVersions.run({ company_id: companyId, version_group: versionGroup, keep_id: docId });
+  });
+  invalidateChunkCache(companyId);   // the searchable corpus changed
+  res.json({ ok: true, activatedId: docId });
 });
 
 app.delete('/api/companies/:id/documents/:docId', requireCompanyAccess, async (req, res) => {

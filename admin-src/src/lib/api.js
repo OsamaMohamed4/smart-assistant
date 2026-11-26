@@ -249,6 +249,8 @@ export const api = {
     if (meta?.category) form.append('category', meta.category);
     if (meta?.tags) form.append('tags', meta.tags);
     if (meta?.region) form.append('region', meta.region);
+    // When present, upload as a NEW VERSION of this document id (retires the old).
+    if (meta?.versionOf) form.append('versionOf', meta.versionOf);
     const res = await fetch(`/api/companies/${companyId}/documents`, {
       method: 'POST',
       credentials: 'include',
@@ -263,6 +265,10 @@ export const api = {
     return res.json();
   },
   deleteDocument    : (companyId, docId) => request(`/api/companies/${companyId}/documents/${docId}`, { method: 'DELETE' }),
+  // Document versioning: list a document's versions, and make one of them the
+  // active (searched) version — the rest stay as history.
+  getDocumentVersions    : (companyId, docId) => request(`/api/companies/${companyId}/documents/${docId}/versions`),
+  activateDocumentVersion: (companyId, docId) => request(`/api/companies/${companyId}/documents/${docId}/activate`, { method: 'PATCH' }),
   // Bulk delete: `ids` for the selected files, or deleteAllDocuments for the
   // whole section. `audience` scopes it to one of the two knowledge bases.
   bulkDeleteDocuments: (companyId, ids, audience) => request(`/api/companies/${companyId}/documents/bulk-delete`, {

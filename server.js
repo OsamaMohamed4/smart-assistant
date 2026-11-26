@@ -2302,6 +2302,19 @@ app.patch('/api/companies/:id/documents/:docId/activate', requireCompanyAccess, 
   res.json({ ok: true, activatedId: docId });
 });
 
+// Review state (optional approval): move a document between 'published'
+// (searchable) and 'draft' (held out of search for review).
+app.patch('/api/companies/:id/documents/:docId/status', requireCompanyAccess, async (req, res) => {
+  const companyId = req.params.id;
+  const docId = Number(req.params.docId);
+  const status = req.body?.status === 'draft' ? 'draft' : 'published';
+  const doc = await sql.getDocument.get(docId);
+  if (!doc || String(doc.company_id) !== String(companyId)) return res.status(404).json({ error: 'document not found' });
+  await sql.setDocStatus.run({ company_id: companyId, id: docId, status });
+  invalidateChunkCache(companyId);   // a draft leaves the searchable corpus
+  res.json({ ok: true, id: docId, status });
+});
+
 app.delete('/api/companies/:id/documents/:docId', requireCompanyAccess, async (req, res) => {
   const doc = await sql.getDocument.get(req.params.docId);
   if (!doc || doc.company_id !== req.params.id) {

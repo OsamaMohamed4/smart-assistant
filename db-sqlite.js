@@ -123,6 +123,7 @@ db.exec(`
     version      INTEGER,
     is_active    INTEGER,
     status       TEXT,
+    updated_at   TEXT,
     created_at   TEXT DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS idx_kbdocs_company ON kb_documents(company_id);
@@ -942,6 +943,16 @@ if (!hasColumn('kb_documents', 'status')) {
   `);
 }
 
+// Migration 57: last-modified time, shown as "آخر تعديل" and bumped on every
+// status/version change. Existing rows start equal to created_at. Postgres:
+// lib/migrations-pg.js.
+if (!hasColumn('kb_documents', 'updated_at')) {
+  runMigration(57, 'kb_documents_add_updated_at', `
+    ALTER TABLE kb_documents ADD COLUMN updated_at TEXT;
+    UPDATE kb_documents SET updated_at = created_at WHERE updated_at IS NULL;
+  `);
+}
+
 // Migration 48: the LoopChat conversation a WhatsApp pause belongs to, so a
 // new message in that same conversation keeps the assistant out while one in
 // a new conversation (the old one closed) brings it back. Postgres:
@@ -1522,18 +1533,18 @@ const sql = {
 
   // ─── RAG: KB documents + chunks ──────────────────────────
   insertDocument     : db.prepare(`
-    INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience, metadata, version_group, version, is_active, status)
-    VALUES (@company_id, @filename, @mime_type, @size_bytes, @raw_text, @raw_data, @audience, @metadata, @version_group, @version, @is_active, @status)
+    INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience, metadata, version_group, version, is_active, status, updated_at)
+    VALUES (@company_id, @filename, @mime_type, @size_bytes, @raw_text, @raw_data, @audience, @metadata, @version_group, @version, @is_active, @status, datetime('now'))
   `),
   setDocStatus       : db.prepare(`
-    UPDATE kb_documents SET status = @status WHERE company_id = @company_id AND id = @id AND deleted_at IS NULL
+    UPDATE kb_documents SET status = @status, updated_at = datetime('now') WHERE company_id = @company_id AND id = @id AND deleted_at IS NULL
   `),
   maxVersionInGroup  : db.prepare(`
     SELECT COALESCE(MAX(version), 0) AS max_version FROM kb_documents
      WHERE company_id = @company_id AND version_group = @version_group AND deleted_at IS NULL
   `),
   deactivateOtherVersions: db.prepare(`
-    UPDATE kb_documents SET is_active = 0
+    UPDATE kb_documents SET is_active = 0, updated_at = datetime('now')
      WHERE company_id = @company_id AND version_group = @version_group AND id <> @keep_id AND deleted_at IS NULL
   `),
   listVersionsInGroup: db.prepare(`
@@ -1544,7 +1555,7 @@ const sql = {
      ORDER BY version DESC
   `),
   setVersionActive   : db.prepare(`
-    UPDATE kb_documents SET is_active = @is_active
+    UPDATE kb_documents SET is_active = @is_active, updated_at = datetime('now')
      WHERE company_id = @company_id AND id = @id AND deleted_at IS NULL
   `),
   insertChunk        : db.prepare(`
@@ -1552,7 +1563,7 @@ const sql = {
     VALUES (@company_id, @document_id, @chunk_index, @text, @embedding, @token_count)
   `),
   listDocuments      : db.prepare(`
-    SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at, d.audience, d.metadata,
+    SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at, d.updated_at, d.audience, d.metadata,
            d.version_group, d.version, d.is_active, d.status,
            (SELECT COUNT(*) FROM kb_chunks WHERE document_id = d.id) AS chunk_count
     FROM kb_documents d
@@ -1560,6 +1571,12 @@ const sql = {
     ORDER BY d.created_at DESC
   `),
   getDocument        : db.prepare('SELECT * FROM kb_documents WHERE id = ? AND deleted_at IS NULL'),
+  // Searchable documents' text, for the conflict scan (published + active only).
+  listCompanyDocTexts: db.prepare(`
+    SELECT id, filename, raw_text FROM kb_documents
+     WHERE company_id = ? AND deleted_at IS NULL AND is_active = 1
+       AND (status IS NULL OR status = 'published')
+  `),
   // Soft-delete: mark + drop the searchable chunks so it won't be retrieved.
   // Audit log captures the operation; restoration is a manual SQL update.
   deleteDocument     : db.prepare("UPDATE kb_documents SET deleted_at = datetime('now') WHERE id = ? AND deleted_at IS NULL"),

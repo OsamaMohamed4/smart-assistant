@@ -29,6 +29,8 @@ export function DocumentsManager({ companyId, companyName, audience }) {
   // KB metadata applied to files uploaded now (step 1: categories/tags).
   const [category, setCategory]   = useState('');
   const [tags, setTags]           = useState('');
+  // Versioning (step 2): which document's version history is open.
+  const [versionsFor, setVersionsFor] = useState(null);
 
   // ── Bulk-selection state ──
   const [selected, setSelected]   = useState(() => new Set()); // doc ids
@@ -39,6 +41,8 @@ export function DocumentsManager({ companyId, companyName, audience }) {
   const inputRef = useRef(null);
   const replaceInputRef = useRef(null);
   const replaceDocRef   = useRef(null);
+  const newVersionInputRef = useRef(null);
+  const newVersionDocRef   = useRef(null);
 
   const load = async () => {
     try { setDocs(await api.listDocuments(companyId, audience)); }
@@ -51,7 +55,10 @@ export function DocumentsManager({ companyId, companyName, audience }) {
 
   // ── Derived: filtered rows + selection summary ──
   const q = search.trim().toLowerCase();
-  const filtered = (docs || []).filter(
+  // Only the active version of each document is listed; retired versions live in
+  // the version-history modal. (is_active === 0 means retired; null = legacy = active.)
+  const activeDocs = (docs || []).filter((d) => d.is_active !== 0);
+  const filtered = activeDocs.filter(
     (d) => !q || String(d.filename || '').toLowerCase().includes(q),
   );
   const visibleIds = filtered.map((d) => d.id);
@@ -185,6 +192,32 @@ export function DocumentsManager({ companyId, companyName, audience }) {
     window.open(`/api/companies/${companyId}/documents/${doc.id}/download`, '_blank');
   };
 
+  // Upload a file as a NEW VERSION of an existing document: it joins that
+  // document's version group and becomes the active (searched) one; the previous
+  // version is retired but kept in the version history.
+  const onNewVersion = (doc) => {
+    newVersionDocRef.current = doc;
+    newVersionInputRef.current.value = '';
+    newVersionInputRef.current.click();
+  };
+  const handleNewVersionFile = async (e) => {
+    const file = e.target.files?.[0];
+    const baseDoc = newVersionDocRef.current;
+    if (!file || !baseDoc) return;
+    if (file.size > MAX_MB * 1024 * 1024) { push(`${file.name}: الحجم تجاوز ${MAX_MB}MB`, 'error'); return; }
+    setUploading(true);
+    try {
+      const r = await api.uploadDocument(companyId, file, audience, { category: category.trim(), tags: tags.trim(), versionOf: baseDoc.id });
+      push(`تم نشر إصدار جديد (v${fmtNumber(r.version || '')}) لـ${baseDoc.filename} — أصبح هو النشط`, 'success');
+      load();
+    } catch (err) {
+      push(`${file.name}: ${err.message}`, 'error');
+    } finally {
+      setUploading(false);
+      newVersionDocRef.current = null;
+    }
+  };
+
   const onDrop = (e) => {
     e.preventDefault();
     setDragOver(false);
@@ -261,11 +294,20 @@ export function DocumentsManager({ companyId, companyName, audience }) {
         onChange={handleReplaceFile}
       />
 
+      {/* Hidden input for "new version" flow */}
+      <input
+        ref={newVersionInputRef}
+        type="file"
+        accept={ACCEPT}
+        className="hidden"
+        onChange={handleNewVersionFile}
+      />
+
       {/* ─── Controls: stats · search · test · delete-all ─── */}
-      {docs && docs.length > 0 && (
+      {docs && activeDocs.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="text-[11px] text-ink-500 font-semibold uppercase tracking-wider">
-            {fmtNumber(docs.length)} مستند · {fmtNumber(docs.reduce((s, d) => s + d.chunk_count, 0))} مقطع
+            {fmtNumber(activeDocs.length)} مستند · {fmtNumber(activeDocs.reduce((s, d) => s + d.chunk_count, 0))} مقطع
             {q && <span className="normal-case tracking-normal font-medium text-ink-400"> · نتائج البحث: {fmtNumber(filtered.length)}</span>}
           </div>
           <div className="flex items-center gap-2">
@@ -322,7 +364,7 @@ export function DocumentsManager({ companyId, companyName, audience }) {
         <div className="space-y-2">
           {[1,2].map((i) => <div key={i} className="shimmer h-14 rounded-xl" />)}
         </div>
-      ) : docs.length === 0 ? (
+      ) : activeDocs.length === 0 ? (
         <div className="text-center py-4 text-[12.5px] text-ink-500">
           لا توجد مستندات. ارفع ملفاً ليبدأ المساعد بالاستفادة منه.
         </div>
@@ -360,6 +402,8 @@ export function DocumentsManager({ companyId, companyName, audience }) {
                   onDelete={() => onDelete(d)}
                   onReplace={() => onReplace(d)}
                   onDownload={() => onDownload(d)}
+                  onNewVersion={() => onNewVersion(d)}
+                  onVersions={() => setVersionsFor(d)}
                 />
               ))}
             </tbody>
@@ -394,7 +438,81 @@ export function DocumentsManager({ companyId, companyName, audience }) {
         companyName={companyName}
         audience={audience}
       />
+
+      <VersionsModal
+        doc={versionsFor}
+        companyId={companyId}
+        onClose={() => setVersionsFor(null)}
+        onChanged={load}
+      />
     </div>
+  );
+}
+
+// Version history of one document: every version, which is active (searched) now,
+// and a one-click revert to any earlier version.
+function VersionsModal({ doc, companyId, onClose, onChanged }) {
+  const { push } = useToast();
+  const [versions, setVersions] = useState(null);
+  const [busyId, setBusyId]     = useState(null);
+
+  useEffect(() => {
+    if (!doc) { setVersions(null); return; }
+    let alive = true;
+    (async () => {
+      try { const v = await api.getDocumentVersions(companyId, doc.id); if (alive) setVersions(v); }
+      catch (e) { if (alive) { push(e.message, 'error'); setVersions([]); } }
+    })();
+    return () => { alive = false; };
+  }, [doc, companyId]);
+
+  const activate = async (v) => {
+    setBusyId(v.id);
+    try {
+      await api.activateDocumentVersion(companyId, v.id);
+      push(`تم تفعيل الإصدار ${v.version} — أصبح هو النشط في البحث`, 'success');
+      setVersions(await api.getDocumentVersions(companyId, doc.id));
+      onChanged?.();
+    } catch (e) {
+      push(e.message, 'error');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <Modal open={!!doc} onClose={onClose} size="md" title="سجل الإصدارات" description={doc ? doc.filename : ''}>
+      {!versions ? (
+        <div className="space-y-2">{[1, 2].map((i) => <div key={i} className="shimmer h-12 rounded-xl" />)}</div>
+      ) : versions.length === 0 ? (
+        <div className="text-center py-6 text-[12.5px] text-ink-500">لا توجد إصدارات.</div>
+      ) : (
+        <div className="space-y-2">
+          {versions.map((v) => (
+            <div
+              key={v.id}
+              className={cn(
+                'flex items-center justify-between gap-2 rounded-xl border p-3',
+                v.is_active ? 'border-emerald-200 bg-emerald-50/60' : 'border-ink-100 bg-white',
+              )}
+            >
+              <div className="flex flex-wrap items-center gap-2 text-[13px]">
+                <span className="font-semibold text-ink-900">الإصدار {v.version}</span>
+                {v.is_active
+                  ? <Badge tone="success" dot>نشط (يُستخدم في البحث)</Badge>
+                  : <span className="text-[11px] text-ink-400">سابق</span>}
+                <span className="text-[11px] text-ink-400 font-mono">{fmtDateTime(v.created_at)} · {fmtNumber(v.chunk_count)} مقطع</span>
+              </div>
+              {!v.is_active && (
+                <Button variant="secondary" size="sm" loading={busyId === v.id} onClick={() => activate(v)}>
+                  استرجاع هذا الإصدار
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -433,7 +551,7 @@ function fmtDateTime(v) {
   });
 }
 
-function DocRow({ doc, selected, onToggle, onDelete, onReplace, onDownload }) {
+function DocRow({ doc, selected, onToggle, onDelete, onReplace, onDownload, onNewVersion, onVersions }) {
   const sizeLabel = fmtSize(doc.size_bytes);
   const uploadDate = fmtDateTime(doc.created_at);   // DD/MM/YYYY HH:MM
   const modifiedDate = uploadDate; // DB only tracks created_at for kb_documents right now
@@ -453,8 +571,13 @@ function DocRow({ doc, selected, onToggle, onDelete, onReplace, onDownload }) {
         />
       </td>
       <td className="py-3 px-4">
-        <div className="text-[13.5px] font-medium text-ink-900 truncate">
+        <div className="text-[13.5px] font-medium text-ink-900 truncate flex items-center gap-1.5">
           <bdi>{doc.filename}</bdi>
+          {doc.version > 1 && (
+            <span className="text-[10.5px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-1.5 py-0.5 shrink-0">
+              الإصدار {doc.version}
+            </span>
+          )}
         </div>
         {doc.metadata && (doc.metadata.category || (doc.metadata.tags && doc.metadata.tags.length > 0)) && (
           <div className="mt-1 flex flex-wrap items-center gap-1">
@@ -491,6 +614,10 @@ function DocRow({ doc, selected, onToggle, onDelete, onReplace, onDownload }) {
       </td>
       <td className="py-3 px-4 text-left whitespace-nowrap">
         <div className="flex items-center justify-end gap-2 text-[12.5px] text-ink-500">
+          <button onClick={onNewVersion} className="hover:text-brand-600 transition-colors">إصدار جديد</button>
+          <span className="text-ink-200">-</span>
+          <button onClick={onVersions} className="hover:text-brand-600 transition-colors">الإصدارات</button>
+          <span className="text-ink-200">-</span>
           <button onClick={onDownload} className="hover:text-brand-600 transition-colors">تنزيل</button>
           <span className="text-ink-200">-</span>
           <button onClick={onReplace} className="hover:text-brand-600 transition-colors">استبدال</button>

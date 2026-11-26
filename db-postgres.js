@@ -524,9 +524,9 @@ const sql = {
 
   // ─── RAG: documents + chunks ─────────────────────────────
   insertDocument: stmt(
-    `INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-    ['company_id', 'filename', 'mime_type', 'size_bytes', 'raw_text', 'raw_data', 'audience'],
+    `INSERT INTO kb_documents (company_id, filename, mime_type, size_bytes, raw_text, raw_data, audience, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+    ['company_id', 'filename', 'mime_type', 'size_bytes', 'raw_text', 'raw_data', 'audience', 'metadata'],
   ),
   insertChunk: stmt(
     `INSERT INTO kb_chunks (company_id, document_id, chunk_index, text, embedding, token_count)
@@ -535,7 +535,7 @@ const sql = {
     { embedding: bufferToVecLiteral },
   ),
   listDocuments: stmt(`
-    SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at, d.audience,
+    SELECT d.id, d.filename, d.mime_type, d.size_bytes, d.created_at, d.audience, d.metadata,
            (SELECT COUNT(*)::int FROM kb_chunks WHERE document_id = d.id) AS chunk_count
       FROM kb_documents d
      WHERE d.company_id = $1 AND d.deleted_at IS NULL

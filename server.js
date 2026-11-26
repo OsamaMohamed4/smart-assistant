@@ -636,18 +636,12 @@ async function askGPT(company, message, history, vars, { inbound = false, channe
   // Same model the live voice agent runs on — see resolveAgentModel() — unless
   // that is a provider-hosted Gemini model, which OpenAI cannot serve.
   const m = resolveAgentModel(company);
-  // maxTokens is the VOICE agent's limit (about one short sentence). A WhatsApp
-  // reply -- prices, links, a list of units -- needs far more room, and Arabic
-  // costs many tokens per word, so at the voice limit the reply was cut off
-  // mid-sentence. For WhatsApp it is a ceiling, not a length: how long the
-  // reply is stays with the prompt.
-  const replyCap = channel === 'whatsapp' ? Math.max(m.maxTokens, 800) : m.maxTokens;
-  const params = { model: textChannelModel(m.model), messages, max_tokens: replyCap, temperature: m.temperature };
+  const params = { model: textChannelModel(m.model), messages, max_tokens: m.maxTokens, temperature: m.temperature };
   const withTools = !!(tools?.length && runTool);
   // A request's arguments in Arabic can outrun a voice-sized reply limit, and a
   // call cut short is not valid JSON; the limit is a ceiling, not a length.
   let completion = await openai.chat.completions.create(withTools
-    ? { ...params, tools, max_tokens: Math.max(replyCap, 400) }
+    ? { ...params, tools, max_tokens: Math.max(m.maxTokens, 400) }
     : params);
   const calls = completion.choices[0].message.tool_calls;
   if (withTools && calls?.length) {
@@ -2206,6 +2200,7 @@ app.post('/api/companies/:id/documents', requireCompanyAccess, uploadDocument, a
       mime     : req.file.mimetype,
       buffer   : req.file.buffer,
       audience,
+      metadata : docMetadataFrom(req.body),
     });
     res.status(201).json({
       documentId  : result.documentId,
@@ -2229,6 +2224,29 @@ app.post('/api/companies/:id/documents', requireCompanyAccess, uploadDocument, a
   }
 });
 
+// Knowledge-management metadata from an upload/form body: a category, free tags,
+// and a region. Returns a clean object (or null) to store as JSON on the
+// document; everything is optional and bounded.
+function docMetadataFrom(body = {}) {
+  const meta = {};
+  if (body.category) meta.category = String(body.category).trim().slice(0, 80);
+  if (body.region) meta.region = String(body.region).trim().slice(0, 80);
+  if (body.tags) {
+    const tags = (Array.isArray(body.tags) ? body.tags : String(body.tags).split(','))
+      .map((t) => String(t).trim()).filter(Boolean).slice(0, 20);
+    if (tags.length) meta.tags = tags;
+  }
+  return Object.keys(meta).length ? meta : null;
+}
+
+// Parse the JSON metadata column back to an object for API responses; tolerant
+// of a null or a legacy non-JSON value.
+function docMetadataParse(v) {
+  if (!v) return null;
+  if (typeof v === 'object') return v;
+  try { const o = JSON.parse(v); return o && typeof o === 'object' ? o : null; } catch { return null; }
+}
+
 // Rate how well text was extracted from an uploaded file. A big file that
 // yields almost no chunks is almost always image-only (scanned brochure) —
 // the agent would then "know" nothing from it. Surfaced in the UI so a
@@ -2248,6 +2266,7 @@ app.get('/api/companies/:id/documents', requireCompanyAccess, async (req, res) =
   const audience = validAudience(req.query.audience);
   res.json((await sql.listDocuments.all(req.params.id)).filter((d) => inAudience(d, audience)).map((d) => ({
     ...d,
+    metadata: docMetadataParse(d.metadata),
     quality: extractionQuality(d.chunk_count, (d.chunk_count || 0) * 200, d.size_bytes),
   })));
 });
@@ -2394,8 +2413,8 @@ async function runSiteImport(company, job) {
     };
 
     const groups = [
-      { label: `${prefixName}التأجير`,  ...buildBody(pages.filter(isRental)) },
-      { label: `${prefixName}المبيعات`, ...buildBody(pages.filter((p) => !isRental(p))) },
+      { label: `${prefixName}التأجير`,  category: 'تأجير',  ...buildBody(pages.filter(isRental)) },
+      { label: `${prefixName}المبيعات`, category: 'مبيعات', ...buildBody(pages.filter((p) => !isRental(p))) },
     ].filter((g) => g.body.trim().length);
 
     job.total = groups.length;
@@ -2410,6 +2429,9 @@ async function runSiteImport(company, job) {
         // because this is one consolidated document of the company's OWN site.
         const r = await ingestDocument({
           companyId: company.id, filename: g.label.slice(0, 160), mime: 'text/plain', buffer, audience: 'general', maxChunks: 8000,
+          // Auto-classify what the daily pull brings in, so these documents carry
+          // a category and a source tag like any curated one (step 1 of KB mgmt).
+          metadata: { category: g.category, tags: ['مسحوب تلقائياً من الموقع'], source: 'site-import' },
         });
         keep.add(r.documentId);
         job.added += g.count;

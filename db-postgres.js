@@ -573,13 +573,10 @@ const sql = {
      WHERE d.company_id = $1 AND d.deleted_at IS NULL
      ORDER BY d.created_at DESC`),
   getDocument: stmt(`SELECT * FROM kb_documents WHERE id = $1 AND deleted_at IS NULL`),
-  // Searchable documents' text, for the conflict scan. Must match retrieve's
-  // "searchable" definition exactly: active (is_active <> 0, so NULL legacy rows
-  // count as active) AND published (status NULL/legacy counts as published).
+  // Searchable documents' text, for the conflict scan (published + active only).
   listCompanyDocTexts: stmt(`
     SELECT id, filename, raw_text FROM kb_documents
-     WHERE company_id = $1 AND deleted_at IS NULL
-       AND (is_active = 1 OR is_active IS NULL)
+     WHERE company_id = $1 AND deleted_at IS NULL AND is_active = 1
        AND (status IS NULL OR status = 'published')`),
   deleteDocument: stmt(`UPDATE kb_documents SET deleted_at = ${NOW} WHERE id = $1 AND deleted_at IS NULL`),
   purgeDocumentChunks: stmt(`DELETE FROM kb_chunks WHERE document_id = $1`),
